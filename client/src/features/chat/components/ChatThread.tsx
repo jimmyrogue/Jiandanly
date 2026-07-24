@@ -104,7 +104,6 @@ export function ChatThread({
       }
     }
   }, [conversation])
-
   return (
     <section className="chat-surface">
       {conversation?.messages.length ? (

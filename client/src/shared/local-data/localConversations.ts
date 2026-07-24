@@ -72,8 +72,10 @@ export class LocalConversationStore {
     const store = await this.objectStoreFor(PENDING_LOCAL_RUN_COMMANDS_STORE_NAME, 'readonly')
     const commands = await requestToPromise<Array<PendingRuntimeCommand | Omit<PendingRunStartCommand, 'type'>>>(store.getAll())
     return commands
-      .map((command) => 'type' in command ? command : { ...command, type: 'run.start' as const })
-      .filter((command) => !command.settledAt)
+      .flatMap((command) => {
+        const normalized = 'type' in command ? command : { ...command, type: 'run.start' as const }
+        return normalized.settledAt ? [] : [normalized]
+      })
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   }
 

@@ -24,11 +24,17 @@ export function CodeBlock({ language, code }: { language?: string; code: string 
 
   useEffect(() => {
     let cancelled = false
-    void import('./syntaxHighlighter').then(({ highlightCode }) => {
-      if (!cancelled) {
-        setHighlighted({ code, language, ...highlightCode(code, language) })
+    async function loadSyntaxHighlighter() {
+      try {
+        const { highlightCode } = await import('./syntaxHighlighter')
+        if (!cancelled) {
+          setHighlighted({ code, language, ...highlightCode(code, language) })
+        }
+      } catch {
+        // The escaped plain-text fallback remains available.
       }
-    }).catch(() => undefined)
+    }
+    void loadSyntaxHighlighter()
     return () => {
       cancelled = true
     }

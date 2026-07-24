@@ -39,7 +39,7 @@ import {
   type RecoveryTarget,
 } from './features/chat/recovery'
 import { parseSkillDraft } from './features/chat/skillDraft'
-import { ConversationSidebar } from './features/chat/components/ConversationSidebar'
+import { ConversationSidebar, type ConversationSidebarHandle } from './features/chat/components/ConversationSidebar'
 import { PendingApprovalBar } from './features/chat/components/PendingApprovalBar'
 import { PendingPlanApprovalBar } from './features/chat/components/PendingPlanApprovalBar'
 import { PendingQuestionBar } from './features/chat/components/PendingQuestionBar'
@@ -52,7 +52,8 @@ import {
   findConversationPendingQuestion,
 } from './features/chat/pendingQuestion'
 import type { AgentRunEvent } from '@shejane/runtime-sdk'
-import { I18nProvider, useI18n, type Translator } from './shared/i18n/i18n'
+import { I18nProvider } from './shared/i18n/I18nProvider'
+import { useI18n, type Translator } from './shared/i18n/i18n'
 import { createLocalID, LocalConversationStore } from './shared/local-data/localConversations'
 import type { AgentTimelineItem, ChatMessage, ChatMode, Conversation, ConversationProject, ConversationWorkspace, LocalAttachmentRef, LocalFileRef, OpenDocument } from './shared/local-data/types'
 import {
@@ -147,6 +148,28 @@ const SettingsView = lazy(() => import('./features/settings/SettingsView').then(
 const SkillsView = lazy(() => import('./features/skills/SkillsView').then((module) => ({ default: module.SkillsView })))
 
 const appNoticeToastID = 'shejane-app-notice'
+
+function runtimeCommandErrorMessage(error: unknown, t: Translator): string {
+  return error instanceof Error ? error.message : t('app.notice.sendFailed')
+}
+
+async function chooseWorkspaceDirectory(): Promise<string | undefined> {
+  const selectedPath = await window.shejaneClient?.selectWorkspaceDirectory?.()
+  return selectedPath || undefined
+}
+
+function setNotice(message: string, options: NoticeOptions = {}) {
+  if (!message.trim()) {
+    toast.dismiss(appNoticeToastID)
+    return
+  }
+  toast.dismiss(appNoticeToastID)
+  toast.message(message, {
+    duration: 3200,
+    ...options,
+    id: appNoticeToastID,
+  })
+}
 const sidebarWidthStorageKey = 'shejane.sidebar.width.v2'
 const sidebarCollapsedStorageKey = 'shejane.sidebar.collapsed.v1'
 const runtimeThreadIDsStorageKey = 'shejane.runtime-thread-ids.v1'
@@ -324,7 +347,7 @@ export function App() {
   )
 }
 
-function AppContent() {
+function useAppContentViewModel() {
   const { t, locale } = useI18n()
   const isDesktop = Boolean(window.shejaneClient)
   const localData = useMemo(() => new LocalConversationStore('shejane-local:runtime:local-owner'), [])
@@ -333,7 +356,11 @@ function AppContent() {
   const activeIDRef = useRef<string | undefined>()
   const navigationVersionRef = useRef(0)
   const conversationInitializationCompleteRef = useRef(false)
-  const recoveryStateRef = useRef(createRecoveryState())
+  const recoveryStateRef = useRef<ReturnType<typeof createRecoveryState> | null>(null)
+  if (recoveryStateRef.current === null) {
+    recoveryStateRef.current = createRecoveryState()
+  }
+  const recoveryState = recoveryStateRef.current
   const startupRecoveryNoticeShownRef = useRef(false)
   const sidebarResizeStateRef = useRef<{ startX: number, startWidth: number } | null>(null)
   const sidebarMotionTimerRef = useRef<number>()
@@ -344,6 +371,7 @@ function AppContent() {
   const planDecisionsInFlightRef = useRef(new Set<string>())
   const toolReconciliationsInFlightRef = useRef(new Set<string>())
   const sendingOperationRef = useRef(0)
+  const conversationSidebarRef = useRef<ConversationSidebarHandle>(null)
 
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [submittedPermissionRequestIDs, setSubmittedPermissionRequestIDs] = useState<ReadonlySet<string>>(
@@ -356,8 +384,8 @@ function AppContent() {
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('auto')
   function changeMode(next: ChatMode): void {
     setMode(next)
-    writeChatMode(next)
   }
+  useEffect(() => writeChatMode(mode), [mode])
   const [isSending, setIsSending] = useState(false)
   const [pendingDeleteMessageID, setPendingDeleteMessageID] = useState<string>()
   const [pendingDiagnosticsRunID, setPendingDiagnosticsRunID] = useState<string>()
@@ -369,7 +397,6 @@ function AppContent() {
   const [mainView, setMainView] = useState<'chat' | 'plugins' | 'settings'>('chat')
   const [pluginsTab, setPluginsTab] = useState<PluginsHubTab>('plugins')
   const [isResizingSidebar, setIsResizingSidebar] = useState(false)
-  const [sidebarSearchRequestVersion, setSidebarSearchRequestVersion] = useState(0)
   const [keyboardHelpOpen, setKeyboardHelpOpen] = useState(false)
   // Runtime model catalog feeding the composer picker.
   const [models, setModels] = useState<ModelOption[]>([])
@@ -406,7 +433,10 @@ function AppContent() {
   const [pendingCommandDeliveryVersion, setPendingCommandDeliveryVersion] = useState(0)
   const [pluginCatalogVersion, setPluginCatalogVersion] = useState(0)
   const scheduledNotificationIDs = useRef(new Set<string>())
-  const runtimeSettingsWriteRef = useRef<Promise<void>>(Promise.resolve())
+  const runtimeSettingsWriteRef = useRef<Promise<void> | null>(null)
+  if (runtimeSettingsWriteRef.current === null) {
+    runtimeSettingsWriteRef.current = Promise.resolve()
+  }
   const runtimeConnectionRef = useRef<RuntimeConnection | null>(null)
   const [artifactPreview, setArtifactPreview] = useState<LocalArtifact | null>(null)
   const [activeDocument, setActiveDocument] = useState<OpenDocument | null>(null)
@@ -495,19 +525,6 @@ function AppContent() {
     if (action === 'reveal') await revealLocalFile(ref)
   }
 
-  function setNotice(message: string, options: NoticeOptions = {}) {
-    if (!message.trim()) {
-      toast.dismiss(appNoticeToastID)
-      return
-    }
-    toast.dismiss(appNoticeToastID)
-    toast.message(message, {
-      duration: 3200,
-      ...options,
-      id: appNoticeToastID,
-    })
-  }
-
   function changeAgentSettings(next: Required<AgentSettings>) {
     const normalized = { ...next, skills: 'on' as const, mcp: 'on' as const }
     const runtimePatch = advancedSettingsPatchToRuntime(agentSettings.advanced, normalized.advanced)
@@ -517,7 +534,7 @@ function AppContent() {
     if (!runtimeConnection || !runtimeSettingsReady || Object.keys(runtimePatch).length === 0) return
 
     const config = runtimeConnection
-    runtimeSettingsWriteRef.current = runtimeSettingsWriteRef.current
+    runtimeSettingsWriteRef.current = runtimeSettingsWriteRef.current!
       .catch(() => undefined)
       .then(async () => {
         const settings = await updateRuntimeSettings(
@@ -578,9 +595,7 @@ function AppContent() {
         setModels(catalog)
         setMode((current) => {
           if (catalog.some((m) => m.id === current)) return current
-          const next: ChatMode = catalog[0]?.id ?? ''
-          writeChatMode(next)
-          return next
+          return catalog[0]?.id ?? ''
         })
       }).catch(() => setModels([]))
     return () => {
@@ -654,7 +669,7 @@ function AppContent() {
         event.preventDefault()
         expandSidebar()
         setMainView('chat')
-        setSidebarSearchRequestVersion((version) => version + 1)
+        conversationSidebarRef.current?.openSearch()
         return
       }
       if (!mod && !event.altKey && event.key === '?' && !isEditableKeyboardTarget(event.target)) {
@@ -727,6 +742,127 @@ function AppContent() {
     activeIDRef.current = activeID
   }, [activeID])
 
+  const syncRuntimeThreadCache = useCallback(async (config: RuntimeConnection): Promise<Conversation[]> => {
+    const { threads, cursor } = await listLocalThreads(config)
+    const nextThreadIDs = new Set(threads.map((thread) => thread.id))
+    const removedThreadIDs = [...loadRuntimeThreadIDs()].filter((id) => !nextThreadIDs.has(id))
+    await Promise.all(removedThreadIDs.map((id) => localData.delete(id)))
+    const existing = new Map((await localData.list()).map((item) => [item.id, item]))
+    const snapshots = await mapWithConcurrency(
+      threads,
+      4,
+      (thread) => getLocalThreadSnapshot(thread.id, config),
+    )
+    const projected = snapshots.map((snapshot) =>
+      projectRuntimeThread(snapshot, existing.get(snapshot.thread.id), t),
+    )
+    const saved = await Promise.all(
+      projected.map((conversation) => localData.saveRuntimeProjection(conversation)),
+    )
+    const visibleProjected = projected.filter((_conversation, index) => saved[index])
+    storeRuntimeThreadIDs(nextThreadIDs)
+    runtimeThreadIDsRef.current = nextThreadIDs
+    runtimeThreadCursorRef.current = Math.max(runtimeThreadCursorRef.current, cursor)
+    return visibleProjected
+  }, [localData, t])
+
+  const settleDeliveredLocalRunCommand = useCallback(async (
+    command: PendingRuntimeCommand,
+    result: RuntimeCommandResult,
+    config: RuntimeConnection,
+  ): Promise<boolean> => {
+    if (isPendingPluginCommand(command)) {
+      await localData.deletePendingRuntimeCommand(command.commandId)
+      setPluginCatalogVersion((version) => version + 1)
+      return true
+    }
+    if (
+      command.type === 'question.answer' ||
+      command.type === 'permission.resolve' ||
+      command.type === 'plan.resolve' ||
+      command.type === 'tool.reconcile' ||
+      command.type === 'run.cancel'
+    ) {
+      await localData.deletePendingRuntimeCommand(command.commandId)
+      const projected = await syncRuntimeThreadCache(config)
+      setConversations((items) =>
+        projected.reduce((next, conversation) => upsertConversation(next, conversation), items),
+      )
+      return true
+    }
+    const run = result as LocalHarnessRun
+    const threadID = command.input.threadId
+    if (threadID) {
+      const nextRuntimeThreadIDs = new Set(runtimeThreadIDsRef.current).add(threadID)
+      storeRuntimeThreadIDs(nextRuntimeThreadIDs)
+      runtimeThreadIDsRef.current = nextRuntimeThreadIDs
+    }
+    const [pending, conversation] = await Promise.all([
+      localData.getPendingRuntimeCommand(command.commandId),
+      threadID ? localData.get(threadID) : Promise.resolve(undefined),
+    ])
+    if (pending?.canceledAt || (threadID && !conversation)) {
+      if (threadID) {
+        await cancelLocalRunCommand(`cancel_${run.id}`, run.id, config)
+        await streamLocalRun(run.id, config, { onDelta: () => undefined, onEvent: () => undefined })
+        await deleteLocalThread(threadID, config)
+        const nextRuntimeThreadIDs = new Set(runtimeThreadIDsRef.current)
+        nextRuntimeThreadIDs.delete(threadID)
+        storeRuntimeThreadIDs(nextRuntimeThreadIDs)
+        runtimeThreadIDsRef.current = nextRuntimeThreadIDs
+      }
+      if (threadID) {
+        await localData.settleCanceledLocalRunCommand(threadID, command.commandId)
+      } else {
+        await localData.deletePendingRuntimeCommand(command.commandId)
+      }
+      return false
+    }
+    await localData.deletePendingRuntimeCommand(command.commandId)
+    return true
+  }, [localData, syncRuntimeThreadCache])
+
+  const settleRejectedPendingRuntimeCommand = useCallback(async (
+    failure: PendingRuntimeCommandFailure,
+    config: RuntimeConnection,
+  ): Promise<void> => {
+    const { command } = failure
+    if (isPendingPluginCommand(command)) {
+      await localData.deletePendingRuntimeCommand(command.commandId)
+      setPluginCatalogVersion((version) => version + 1)
+      return
+    }
+    if (command.type !== 'run.start' && command.type !== 'run.fork') {
+      const existing = await localData.get(command.input.threadId)
+      let projected: Conversation | undefined
+      try {
+        const snapshot = await getLocalThreadSnapshot(command.input.threadId, config)
+        projected = projectRuntimeThread(snapshot, existing, t)
+      } catch {
+        // A rejected command may refer to a thread that no longer exists.
+      }
+      await localData.settleRejectedRuntimeCommand(command.commandId, projected)
+      if (projected) setConversations((items) => upsertConversation(items, projected))
+      return
+    }
+    const threadID = command.input.threadId
+    const conversation = threadID ? await localData.get(threadID) : undefined
+    const assistantID = command.input.assistantMessageId
+    const message = conversation?.messages.find((item) => item.id === assistantID)
+    if (conversation && message) {
+      message.status = 'error'
+      message.agentEvents = [
+        ...(message.agentEvents ?? []),
+        { type: 'ui.command_rejected', label: runtimeCommandErrorMessage(failure.error, t) },
+      ]
+      conversation.updatedAt = new Date().toISOString()
+    }
+    await localData.settleRejectedRuntimeCommand(command.commandId, conversation)
+    if (conversation) {
+      setConversations((items) => upsertConversation(items, conversation))
+    }
+  }, [localData, t])
+
   useEffect(() => {
     let disposed = false
     const navigationVersion = navigationVersionRef.current
@@ -775,7 +911,7 @@ function AppContent() {
     return () => {
       disposed = true
     }
-  }, [localData, t])
+  }, [isDesktop, localData, t])
 
   useEffect(() => {
     const clientBridge = window.shejaneClient
@@ -849,12 +985,16 @@ function AppContent() {
           config,
           (command, run) => settleDeliveredLocalRunCommand(command, run, config).then(() => undefined),
         )
-        for (const failure of report.failures.filter((item) => !item.retryable)) {
-          await settleRejectedPendingRuntimeCommand(failure, config)
+        const rejectedSettlements: Promise<void>[] = []
+        for (const failure of report.failures) {
+          if (!failure.retryable) {
+            rejectedSettlements.push(settleRejectedPendingRuntimeCommand(failure, config))
+          }
         }
+        await Promise.all(rejectedSettlements)
         const blocked = report.failures.find((item) => !item.retryable)
         if (!disposed && blocked) {
-          setNotice(runtimeCommandErrorMessage(blocked.error))
+          setNotice(runtimeCommandErrorMessage(blocked.error, t))
         }
         if (!disposed && report.failures.some((item) => item.retryable)) {
           retryTimer = window.setTimeout(() => void deliver(), pendingCommandRetryMs)
@@ -870,7 +1010,16 @@ function AppContent() {
       disposed = true
       if (retryTimer !== undefined) window.clearTimeout(retryTimer)
     }
-  }, [isDesktop, localData, runtime?.online, runtimeConnection, pendingCommandDeliveryVersion])
+  }, [
+    isDesktop,
+    localData,
+    pendingCommandDeliveryVersion,
+    runtime?.online,
+    runtimeConnection,
+    settleDeliveredLocalRunCommand,
+    settleRejectedPendingRuntimeCommand,
+    t,
+  ])
 
   useEffect(() => {
     if (!isDesktop || !runtime?.online || !hasRuntimeAuthorization(runtimeConnection)) {
@@ -882,9 +1031,10 @@ function AppContent() {
     const applyProjected = (projected: Conversation[], deleted = new Set<string>()) => {
       if (disposed || (projected.length === 0 && deleted.size === 0)) return
       setConversations((current) => {
-        const merged = new Map(
-          current.filter((item) => !deleted.has(item.id)).map((item) => [item.id, item]),
-        )
+        const merged = new Map<string, Conversation>()
+        for (const item of current) {
+          if (!deleted.has(item.id)) merged.set(item.id, item)
+        }
         for (const item of projected) merged.set(item.id, item)
         return sortConversationsForSidebar(Array.from(merged.values()))
       })
@@ -906,9 +1056,8 @@ function AppContent() {
         }
         const latest = new Map(result.changes.map((change) => [change.thread_id, change]))
         const deleted = new Set(
-          [...latest.values()]
-            .filter((change) => change.change_type === 'thread.deleted')
-            .map((change) => change.thread_id),
+          [...latest.values()].flatMap((change) =>
+            change.change_type === 'thread.deleted' ? [change.thread_id] : []),
         )
         await Promise.all([...deleted].map((threadID) => localData.delete(threadID)))
         const existing = new Map((await localData.list()).map((item) => [item.id, item]))
@@ -954,7 +1103,7 @@ function AppContent() {
       disposed = true
       if (interval !== undefined) window.clearInterval(interval)
     }
-  }, [isDesktop, runtime?.online, runtimeConnection])
+  }, [isDesktop, runtime?.online, runtimeConnection, syncRuntimeThreadCache, t])
 
   useEffect(() => {
     if (!runtime?.online || !hasRuntimeAuthorization(runtimeConnection)) {
@@ -968,14 +1117,16 @@ function AppContent() {
         if (disposed || schedules.length === 0) {
           return
         }
-        for (const schedule of schedules) {
-          if (scheduledNotificationIDs.current.has(schedule.id)) {
-            continue
-          }
+        const unnotified = schedules.filter(
+          (schedule) => !scheduledNotificationIDs.current.has(schedule.id),
+        )
+        for (const schedule of unnotified) {
           scheduledNotificationIDs.current.add(schedule.id)
           notifyScheduledRun(schedule, t)
-          await markLocalScheduleNotified(schedule.id, config)
         }
+        await Promise.all(
+          unnotified.map((schedule) => markLocalScheduleNotified(schedule.id, config)),
+        )
         const freshRuns = await listLocalRuns(config)
         if (!disposed) {
           setLocalRuns(freshRuns)
@@ -1026,30 +1177,6 @@ function AppContent() {
     setActiveConversationID(nextActiveID ?? (options.preserveEmptyActive ? undefined : items[0]?.id))
   }
 
-  async function syncRuntimeThreadCache(config: RuntimeConnection): Promise<Conversation[]> {
-    const { threads, cursor } = await listLocalThreads(config)
-    const nextThreadIDs = new Set(threads.map((thread) => thread.id))
-    const removedThreadIDs = [...loadRuntimeThreadIDs()].filter((id) => !nextThreadIDs.has(id))
-    await Promise.all(removedThreadIDs.map((id) => localData.delete(id)))
-    const existing = new Map((await localData.list()).map((item) => [item.id, item]))
-    const snapshots = await mapWithConcurrency(
-      threads,
-      4,
-      (thread) => getLocalThreadSnapshot(thread.id, config),
-    )
-    const projected = snapshots.map((snapshot) =>
-      projectRuntimeThread(snapshot, existing.get(snapshot.thread.id), t),
-    )
-    const saved = await Promise.all(
-      projected.map((conversation) => localData.saveRuntimeProjection(conversation)),
-    )
-    const visibleProjected = projected.filter((_conversation, index) => saved[index])
-    storeRuntimeThreadIDs(nextThreadIDs)
-    runtimeThreadIDsRef.current = nextThreadIDs
-    runtimeThreadCursorRef.current = Math.max(runtimeThreadCursorRef.current, cursor)
-    return visibleProjected
-  }
-
   async function submitPluginCommand(command: PendingPluginCommand): Promise<RuntimeCommandResult> {
     if (!hasRuntimeAuthorization(runtimeConnection)) {
       throw new Error(t('app.notice.runtimeDisconnected'))
@@ -1077,107 +1204,6 @@ function AppContent() {
     }
     if (!result) throw new Error('plugin command completed without a receipt')
     return result
-  }
-
-  async function settleDeliveredLocalRunCommand(
-    command: PendingRuntimeCommand,
-    result: RuntimeCommandResult,
-    config: RuntimeConnection,
-  ): Promise<boolean> {
-    if (isPendingPluginCommand(command)) {
-      await localData.deletePendingRuntimeCommand(command.commandId)
-      setPluginCatalogVersion((version) => version + 1)
-      return true
-    }
-    if (
-      command.type === 'question.answer' ||
-      command.type === 'permission.resolve' ||
-      command.type === 'plan.resolve' ||
-      command.type === 'tool.reconcile' ||
-      command.type === 'run.cancel'
-    ) {
-      await localData.deletePendingRuntimeCommand(command.commandId)
-      const projected = await syncRuntimeThreadCache(config)
-      setConversations((items) =>
-        projected.reduce((next, conversation) => upsertConversation(next, conversation), items),
-      )
-      return true
-    }
-    const run = result as LocalHarnessRun
-    const threadID = command.input.threadId
-    if (threadID) {
-      const nextRuntimeThreadIDs = new Set(runtimeThreadIDsRef.current).add(threadID)
-      storeRuntimeThreadIDs(nextRuntimeThreadIDs)
-      runtimeThreadIDsRef.current = nextRuntimeThreadIDs
-    }
-    const [pending, conversation] = await Promise.all([
-      localData.getPendingRuntimeCommand(command.commandId),
-      threadID ? localData.get(threadID) : Promise.resolve(undefined),
-    ])
-    if (pending?.canceledAt || (threadID && !conversation)) {
-      if (threadID) {
-        await cancelLocalRunCommand(`cancel_${run.id}`, run.id, config)
-        await streamLocalRun(run.id, config, { onDelta: () => undefined, onEvent: () => undefined })
-        await deleteLocalThread(threadID, config)
-        const nextRuntimeThreadIDs = new Set(runtimeThreadIDsRef.current)
-        nextRuntimeThreadIDs.delete(threadID)
-        storeRuntimeThreadIDs(nextRuntimeThreadIDs)
-        runtimeThreadIDsRef.current = nextRuntimeThreadIDs
-      }
-      if (threadID) {
-        await localData.settleCanceledLocalRunCommand(threadID, command.commandId)
-      } else {
-        await localData.deletePendingRuntimeCommand(command.commandId)
-      }
-      return false
-    }
-    await localData.deletePendingRuntimeCommand(command.commandId)
-    return true
-  }
-
-  function runtimeCommandErrorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : t('app.notice.sendFailed')
-  }
-
-  async function settleRejectedPendingRuntimeCommand(
-    failure: PendingRuntimeCommandFailure,
-    config: RuntimeConnection,
-  ): Promise<void> {
-    const { command } = failure
-    if (isPendingPluginCommand(command)) {
-      await localData.deletePendingRuntimeCommand(command.commandId)
-      setPluginCatalogVersion((version) => version + 1)
-      return
-    }
-    if (command.type !== 'run.start' && command.type !== 'run.fork') {
-      const existing = await localData.get(command.input.threadId)
-      let projected: Conversation | undefined
-      try {
-        const snapshot = await getLocalThreadSnapshot(command.input.threadId, config)
-        projected = projectRuntimeThread(snapshot, existing, t)
-      } catch {
-        // A rejected command may refer to a thread that no longer exists.
-      }
-      await localData.settleRejectedRuntimeCommand(command.commandId, projected)
-      if (projected) setConversations((items) => upsertConversation(items, projected))
-      return
-    }
-    const threadID = command.input.threadId
-    const conversation = threadID ? await localData.get(threadID) : undefined
-    const assistantID = command.input.assistantMessageId
-    const message = conversation?.messages.find((item) => item.id === assistantID)
-    if (conversation && message) {
-      message.status = 'error'
-      message.agentEvents = [
-        ...(message.agentEvents ?? []),
-        { type: 'ui.command_rejected', label: runtimeCommandErrorMessage(failure.error) },
-      ]
-      conversation.updatedAt = new Date().toISOString()
-    }
-    await localData.settleRejectedRuntimeCommand(command.commandId, conversation)
-    if (conversation) {
-      setConversations((items) => upsertConversation(items, conversation))
-    }
   }
 
   function startNewConversation() {
@@ -1376,14 +1402,14 @@ function AppContent() {
   }
 
   async function retryRecoveryTarget(target: RecoveryTarget) {
-    if (!beginRecoveryAction(recoveryStateRef.current, 'retry', target)) {
+    if (!beginRecoveryAction(recoveryState, 'retry', target)) {
       setNotice(t('app.notice.recoveryRetryAlreadyRunning'))
       return
     }
     try {
       await regenerateMessageInConversation(target.conversationID, target.assistantMessageID)
     } finally {
-      endRecoveryAction(recoveryStateRef.current, 'retry', target)
+      endRecoveryAction(recoveryState, 'retry', target)
     }
   }
 
@@ -1459,7 +1485,7 @@ function AppContent() {
   }
 
   async function repairRecoveryTarget(target: RecoveryTarget) {
-    if (!beginRecoveryAction(recoveryStateRef.current, 'repair', target)) {
+    if (!beginRecoveryAction(recoveryState, 'repair', target)) {
       setNotice(t('app.notice.recoveryRetryAlreadyRunning'))
       return
     }
@@ -1517,7 +1543,7 @@ function AppContent() {
         true,
       )
     } finally {
-      endRecoveryAction(recoveryStateRef.current, 'repair', target)
+      endRecoveryAction(recoveryState, 'repair', target)
     }
   }
 
@@ -1847,7 +1873,7 @@ function AppContent() {
   /** Stop whatever cancelable run is currently active for the active
    *  conversation. Local runtime runs emit `run.canceled` on their SSE
    *  channel. */
-  async function cancelActiveRun() {
+  const cancelActiveRun = useCallback(async () => {
     if (!activeConversation) {
       return
     }
@@ -1889,7 +1915,7 @@ function AppContent() {
     } catch (error) {
       setNotice(error instanceof Error ? error.message : t('app.notice.sendFailed'))
     }
-  }
+  }, [activeConversation, localData, runtimeConnection, settleDeliveredLocalRunCommand, t])
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -1908,7 +1934,7 @@ function AppContent() {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [keyboardHelpOpen, isSending, hasActiveRun])
+  }, [cancelActiveRun, keyboardHelpOpen, isSending, hasActiveRun])
 
   async function appendInstructionToActiveRun() {
     const content = draft.trim()
@@ -2469,14 +2495,6 @@ function AppContent() {
     }
   }
 
-  async function chooseWorkspaceDirectory(): Promise<string | undefined> {
-    const selectedPath = await window.shejaneClient?.selectWorkspaceDirectory?.()
-    if (!selectedPath) {
-      return undefined
-    }
-    return selectedPath
-  }
-
   /** Composer's project-picker handler — opens the OS directory picker
    *  and binds the chosen workspace as this chat's project. Two paths:
    *
@@ -2844,6 +2862,149 @@ function AppContent() {
     sidebarMotionTimerRef.current = window.setTimeout(() => setSidebarMotion('idle'), sidebarMotionMs)
   }
 
+  return {
+    activeConversation,
+    activeDocument,
+    activeID,
+    activeWorkspace,
+    agentSettings,
+    appShellStyle,
+    appendInstructionToActiveRun,
+    artifactPreview,
+    beginSidebarResize,
+    cancelActiveRun,
+    changeAgentSettings,
+    changeMode,
+    collapseSidebar,
+    conversations,
+    conversationSidebarRef,
+    deleteConversationData,
+    docPreviewRefreshKey,
+    draft,
+    dropAttachments,
+    expandSidebar,
+    exportConversationData,
+    exportLocalData,
+    exportLocalRunDiagnostics,
+    handleAgentFailureAction,
+    handleDeleteMessage,
+    handleEditResendMessage,
+    handlePermissionDecision,
+    handlePlanApprovalDecision,
+    handleQuestionAnswer,
+    handleRegenerateMessage,
+    handleSidebarResizeKeyDown,
+    handleToolReconciliation,
+    hasActiveRun,
+    importLocalData,
+    isDesktop,
+    isResizingSidebar,
+    isSending,
+    keyboardHelpOpen,
+    listInstalledSkillsForView,
+    listMcpServersForView,
+    listPluginsForView,
+    mainView,
+    mode,
+    models,
+    openLocalArtifact,
+    openLocalDocument,
+    pendingApproval,
+    pendingAttachments,
+    pendingDeleteMessageID,
+    pendingDiagnosticsRunID,
+    pendingPlanApproval,
+    pendingProject,
+    pendingQuestion,
+    permissionMode,
+    pluginCatalogVersion,
+    pluginsTab,
+    removeAttachment,
+    removeProjectFromActiveConversation,
+    renameConversation,
+    runtime,
+    runtimeConnection,
+    runtimeSettingsConfig,
+    selectAttachments,
+    selectConversation,
+    selectProjectForActiveConversation,
+    sendMessage,
+    setActiveDocument,
+    setAgentSettings,
+    setArtifactPreview,
+    setDraft,
+    setKeyboardHelpOpen,
+    setMainView,
+    setModelCatalogVersion,
+    setPendingDeleteMessageID,
+    setPendingDiagnosticsRunID,
+    setPermissionMode,
+    setPluginsTab,
+    shellClassName,
+    shortcutRows,
+    showLocalFileContextMenu,
+    sidebarCollapsed,
+    sidebarMotion,
+    sidebarWidth,
+    startNewConversation,
+    submitPluginCommand,
+    t,
+    togglePinConversation,
+  }
+}
+
+type AppContentViewModel = ReturnType<typeof useAppContentViewModel>
+
+function AppContent() {
+  return <AppContentView view={useAppContentViewModel()} />
+}
+
+function AppContentView({ view }: { view: AppContentViewModel }) {
+  const {
+    activeID,
+    agentSettings,
+    appShellStyle,
+    beginSidebarResize,
+    changeAgentSettings,
+    collapseSidebar,
+    conversations,
+    conversationSidebarRef,
+    deleteConversationData,
+    expandSidebar,
+    exportConversationData,
+    exportLocalData,
+    handleSidebarResizeKeyDown,
+    importLocalData,
+    isDesktop,
+    isResizingSidebar,
+    keyboardHelpOpen,
+    listInstalledSkillsForView,
+    listMcpServersForView,
+    listPluginsForView,
+    mainView,
+    pluginCatalogVersion,
+    pluginsTab,
+    renameConversation,
+    runtime,
+    runtimeConnection,
+    runtimeSettingsConfig,
+    selectConversation,
+    setAgentSettings,
+    setKeyboardHelpOpen,
+    setMainView,
+    setModelCatalogVersion,
+    setPluginsTab,
+    shellClassName,
+    shortcutRows,
+    sidebarCollapsed,
+    sidebarMotion,
+    sidebarWidth,
+    startNewConversation,
+    submitPluginCommand,
+    t,
+    togglePinConversation,
+  } = view
+
   return (
     <TooltipProvider>
       <main className={shellClassName}>
@@ -2855,6 +3016,7 @@ function AppContent() {
           data-sidebar-motion={sidebarMotion === 'idle' ? undefined : sidebarMotion}
         >
           <ConversationSidebar
+            ref={conversationSidebarRef}
             conversations={conversations}
             activeID={activeID}
             onNewConversation={startNewConversation}
@@ -2869,7 +3031,6 @@ function AppContent() {
             onOpenPlugins={() => setMainView('plugins')}
             onOpenSettings={() => setMainView('settings')}
             activeView={mainView}
-            searchRequestVersion={sidebarSearchRequestVersion}
             resizeHandle={(
               <div
                 className="sidebar-resize-handle"
@@ -3045,211 +3206,7 @@ function AppContent() {
               }
             />
           ) : (
-          <section className="workspace">
-            <header className="topbar">
-              <div className="chat-toolbar-title">
-                <span>{activeConversation?.title ?? t('app.newChat')}</span>
-              </div>
-              {/* Runtime connection status. */}
-              {isDesktop ? (
-                <div className="topbar-status">
-                  <span
-                    className={`topbar-runtime-dot${runtime?.online ? ' is-online' : ' is-offline'}`}
-                    title={runtimeStatusLabel(runtime, runtimeConnection, t)}
-                    aria-label={runtimeStatusLabel(runtime, runtimeConnection, t)}
-                  />
-                </div>
-              ) : null}
-            </header>
-            {/* Runtime failure is explicit; Client never falls back to another execution service. */}
-            {isDesktop && !runtime?.online ? (
-              <div className="status-banner status-banner-warning" role="status">
-                <span className="status-banner-text">{t('topbar.bannerRuntimeOffline')}</span>
-              </div>
-            ) : null}
-
-            <ChatThread
-              conversation={activeConversation}
-              workspaceRoot={activeWorkspace?.path}
-              onOpenArtifact={(artifactID) => void openLocalArtifact(artifactID)}
-              onOpenDiagnostics={setPendingDiagnosticsRunID}
-              onPreviewLocalFile={openLocalDocument}
-              onLocalFileContextMenu={(ref) => void showLocalFileContextMenu(ref)}
-              onPickSuggestion={setDraft}
-              onRegenerateMessage={handleRegenerateMessage}
-              onEditResendMessage={handleEditResendMessage}
-              onDeleteMessage={setPendingDeleteMessageID}
-              onFailureAction={handleAgentFailureAction}
-            />
-
-            {artifactPreview && runtimeConnection ? (
-              <Suspense fallback={null}>
-                <ArtifactPanel
-                  artifact={artifactPreview}
-                  onClose={() => setArtifactPreview(null)}
-                  onLoadContent={(artifactID) => getLocalArtifactContent(artifactID, runtimeConnection)}
-                />
-              </Suspense>
-            ) : null}
-            {activeDocument ? (
-              <Suspense fallback={null}>
-                <DocPreviewPanel
-                  doc={activeDocument}
-                  refreshKey={docPreviewRefreshKey}
-                  onClose={() => setActiveDocument(null)}
-                />
-              </Suspense>
-            ) : null}
-            <AlertDialog
-              open={Boolean(pendingDiagnosticsRunID)}
-              onOpenChange={(open) => !open && setPendingDiagnosticsRunID(undefined)}
-            >
-              <AlertDialogContent className="conversation-delete-dialog">
-                <AlertDialogHeader className="conversation-delete-header">
-                  <AlertDialogMedia className="conversation-delete-media">
-                    <IconDownload aria-hidden="true" />
-                  </AlertDialogMedia>
-                  <AlertDialogTitle>{t('diagnostics.downloadConfirmTitle')}</AlertDialogTitle>
-                  <AlertDialogDescription>{t('diagnostics.downloadConfirmBody')}</AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter className="conversation-delete-footer">
-                  <AlertDialogCancel variant="outline" autoFocus>
-                    <span className="conversation-delete-button-label">{t('sidebar.dialog.cancel')}</span>
-                  </AlertDialogCancel>
-                  <AlertDialogAction
-                    onClick={() => {
-                      if (pendingDiagnosticsRunID) {
-                        void exportLocalRunDiagnostics(pendingDiagnosticsRunID)
-                        setPendingDiagnosticsRunID(undefined)
-                      }
-                    }}
-                  >
-                    <span className="conversation-delete-button-label">{t('diagnostics.downloadConfirm')}</span>
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-
-            <AlertDialog
-              open={Boolean(pendingDeleteMessageID)}
-              onOpenChange={(open) => !open && setPendingDeleteMessageID(undefined)}
-            >
-              <AlertDialogContent className="conversation-delete-dialog">
-                <AlertDialogHeader className="conversation-delete-header">
-                  <AlertDialogMedia className="conversation-delete-media">
-                    <IconTrash aria-hidden="true" />
-                  </AlertDialogMedia>
-                  <AlertDialogTitle>{t('message.deleteConfirmTitle')}</AlertDialogTitle>
-                  <AlertDialogDescription>{t('message.deleteConfirmBody')}</AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter className="conversation-delete-footer">
-                  <AlertDialogCancel variant="outline" autoFocus onClick={() => setPendingDeleteMessageID(undefined)}>
-                    <span className="conversation-delete-button-label">{t('sidebar.dialog.cancel')}</span>
-                  </AlertDialogCancel>
-                  <AlertDialogAction
-                    variant="destructive"
-                    onClick={() => {
-                      if (pendingDeleteMessageID) {
-                        void handleDeleteMessage(pendingDeleteMessageID)
-                        setPendingDeleteMessageID(undefined)
-                      }
-                    }}
-                  >
-                    <span className="conversation-delete-button-label">{t('message.delete')}</span>
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-
-            <div className="composer-dock">
-              <PendingApprovalBar
-                approval={pendingApproval}
-                onDecision={handlePermissionDecision}
-                onReconcile={(messageID, requestID, decision) => void handleToolReconciliation(messageID, requestID, decision)}
-              />
-
-              <PendingPlanApprovalBar
-                key={pendingPlanApproval?.requestID ?? 'no-plan-approval'}
-                plan={pendingPlanApproval}
-                onDecision={(messageID, requestID, decision, instructions) => void handlePlanApprovalDecision(messageID, requestID, decision, instructions)}
-              />
-
-              <PendingQuestionBar
-                key={pendingQuestion?.requestID ?? 'no-question'}
-                question={pendingQuestion}
-                onAnswer={(messageID, requestID, answers) => void handleQuestionAnswer(messageID, requestID, answers)}
-                onSkip={(messageID, requestID) => {
-                  // Skip = answer the runtime with empty answer lists for each
-                  // question. user.ask falls through its parse logic and
-                  // returns "" to the agent, which then has to decide
-                  // whether to make a reasonable assumption or re-ask.
-                  if (!pendingQuestion) return
-                  const skipAnswers: Record<string, string[]> = {}
-                  for (const item of pendingQuestion.questions) {
-                    skipAnswers[item.question] = []
-                  }
-                  void handleQuestionAnswer(messageID, requestID, skipAnswers)
-                }}
-                onCancel={() => void cancelActiveRun()}
-              />
-
-              <Composer
-              draft={draft}
-              onDraftChange={setDraft}
-              isSending={isSending}
-              hasActiveRun={hasActiveRun}
-              onSend={() => void sendMessage()}
-              onAppendInstruction={hasActiveRun ? () => void appendInstructionToActiveRun() : undefined}
-              onStop={() => void cancelActiveRun()}
-              listSkills={async () => {
-                if (!runtimeConnection) return []
-                const catalog = await listInstalledSkills(runtimeConnection)
-                return catalog.skills
-              }}
-              listMcpServers={
-                runtimeConnection
-                  ? async () => {
-                      const catalog = await listMcpServers(runtimeConnection)
-                      return catalog.servers
-                    }
-                  : undefined
-              }
-              listPlugins={
-                runtimeConnection
-                  ? async () => {
-                      const plugins = await listLocalPlugins(runtimeConnection)
-                      return Promise.all(
-                        plugins
-                          .filter(
-                            (plugin) =>
-                              plugin.enabled &&
-                              !plugin.retired &&
-                              plugin.compatibility === 'compatible',
-                          )
-                          .map((plugin) => getLocalPlugin(plugin.id, runtimeConnection)),
-                      )
-                    }
-                  : undefined
-              }
-              mode={mode}
-              models={models}
-              onModeChange={changeMode}
-              permissionMode={permissionMode}
-              onPermissionModeChange={setPermissionMode}
-              onConfigureModels={() => setMainView('settings')}
-              projectName={activeConversation?.project?.name ?? pendingProject?.name}
-              onSelectProject={() => void selectProjectForActiveConversation()}
-              onRemoveProject={() => void removeProjectFromActiveConversation()}
-              attachments={pendingAttachments}
-              onSelectAttachments={() => void selectAttachments()}
-              onDropAttachments={dropAttachments}
-              onRemoveAttachment={removeAttachment}
-              isDesktop={isDesktop}
-              slashCommandsEnabled={isDesktop}
-              />
-              <p className="composer-disclaimer">{t('composer.disclaimer')}</p>
-            </div>
-          </section>
+            <AppChatWorkspace view={view} />
           )}
           </Suspense>
           </div>
@@ -3276,6 +3233,259 @@ function AppContent() {
         </div>
       </main>
     </TooltipProvider>
+  )
+}
+
+function AppChatWorkspace({ view }: { view: AppContentViewModel }) {
+  const {
+    activeConversation,
+    activeDocument,
+    activeWorkspace,
+    appendInstructionToActiveRun,
+    artifactPreview,
+    cancelActiveRun,
+    changeMode,
+    docPreviewRefreshKey,
+    draft,
+    dropAttachments,
+    exportLocalRunDiagnostics,
+    handleAgentFailureAction,
+    handleDeleteMessage,
+    handleEditResendMessage,
+    handlePermissionDecision,
+    handlePlanApprovalDecision,
+    handleQuestionAnswer,
+    handleRegenerateMessage,
+    handleToolReconciliation,
+    hasActiveRun,
+    isDesktop,
+    isSending,
+    mode,
+    models,
+    openLocalArtifact,
+    openLocalDocument,
+    pendingApproval,
+    pendingAttachments,
+    pendingDeleteMessageID,
+    pendingDiagnosticsRunID,
+    pendingPlanApproval,
+    pendingProject,
+    pendingQuestion,
+    permissionMode,
+    removeAttachment,
+    removeProjectFromActiveConversation,
+    runtime,
+    runtimeConnection,
+    selectAttachments,
+    selectProjectForActiveConversation,
+    sendMessage,
+    setActiveDocument,
+    setArtifactPreview,
+    setDraft,
+    setMainView,
+    setPendingDeleteMessageID,
+    setPendingDiagnosticsRunID,
+    setPermissionMode,
+    showLocalFileContextMenu,
+    t,
+  } = view
+
+  return (
+    <section className="workspace">
+      <header className="topbar">
+        <div className="chat-toolbar-title">
+          <span>{activeConversation?.title ?? t('app.newChat')}</span>
+        </div>
+        {isDesktop ? (
+          <div className="topbar-status">
+            <span
+              className={`topbar-runtime-dot${runtime?.online ? ' is-online' : ' is-offline'}`}
+              title={runtimeStatusLabel(runtime, runtimeConnection, t)}
+              aria-label={runtimeStatusLabel(runtime, runtimeConnection, t)}
+            />
+          </div>
+        ) : null}
+      </header>
+      {isDesktop && !runtime?.online ? (
+        <div className="status-banner status-banner-warning" role="status">
+          <span className="status-banner-text">{t('topbar.bannerRuntimeOffline')}</span>
+        </div>
+      ) : null}
+
+      <ChatThread
+        conversation={activeConversation}
+        workspaceRoot={activeWorkspace?.path}
+        onOpenArtifact={(artifactID) => void openLocalArtifact(artifactID)}
+        onOpenDiagnostics={setPendingDiagnosticsRunID}
+        onPreviewLocalFile={openLocalDocument}
+        onLocalFileContextMenu={(ref) => void showLocalFileContextMenu(ref)}
+        onPickSuggestion={setDraft}
+        onRegenerateMessage={handleRegenerateMessage}
+        onEditResendMessage={handleEditResendMessage}
+        onDeleteMessage={setPendingDeleteMessageID}
+        onFailureAction={handleAgentFailureAction}
+      />
+
+      {artifactPreview && runtimeConnection ? (
+        <Suspense fallback={null}>
+          <ArtifactPanel
+            artifact={artifactPreview}
+            onClose={() => setArtifactPreview(null)}
+            onLoadContent={(artifactID) => getLocalArtifactContent(artifactID, runtimeConnection)}
+          />
+        </Suspense>
+      ) : null}
+      {activeDocument ? (
+        <Suspense fallback={null}>
+          <DocPreviewPanel
+            doc={activeDocument}
+            refreshKey={docPreviewRefreshKey}
+            onClose={() => setActiveDocument(null)}
+          />
+        </Suspense>
+      ) : null}
+      <AlertDialog
+        open={Boolean(pendingDiagnosticsRunID)}
+        onOpenChange={(open) => !open && setPendingDiagnosticsRunID(undefined)}
+      >
+        <AlertDialogContent className="conversation-delete-dialog">
+          <AlertDialogHeader className="conversation-delete-header">
+            <AlertDialogMedia className="conversation-delete-media">
+              <IconDownload aria-hidden="true" />
+            </AlertDialogMedia>
+            <AlertDialogTitle>{t('diagnostics.downloadConfirmTitle')}</AlertDialogTitle>
+            <AlertDialogDescription>{t('diagnostics.downloadConfirmBody')}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="conversation-delete-footer">
+            <AlertDialogCancel variant="outline" autoFocus>
+              <span className="conversation-delete-button-label">{t('sidebar.dialog.cancel')}</span>
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (pendingDiagnosticsRunID) {
+                  void exportLocalRunDiagnostics(pendingDiagnosticsRunID)
+                  setPendingDiagnosticsRunID(undefined)
+                }
+              }}
+            >
+              <span className="conversation-delete-button-label">{t('diagnostics.downloadConfirm')}</span>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={Boolean(pendingDeleteMessageID)}
+        onOpenChange={(open) => !open && setPendingDeleteMessageID(undefined)}
+      >
+        <AlertDialogContent className="conversation-delete-dialog">
+          <AlertDialogHeader className="conversation-delete-header">
+            <AlertDialogMedia className="conversation-delete-media">
+              <IconTrash aria-hidden="true" />
+            </AlertDialogMedia>
+            <AlertDialogTitle>{t('message.deleteConfirmTitle')}</AlertDialogTitle>
+            <AlertDialogDescription>{t('message.deleteConfirmBody')}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="conversation-delete-footer">
+            <AlertDialogCancel variant="outline" autoFocus onClick={() => setPendingDeleteMessageID(undefined)}>
+              <span className="conversation-delete-button-label">{t('sidebar.dialog.cancel')}</span>
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (pendingDeleteMessageID) {
+                  void handleDeleteMessage(pendingDeleteMessageID)
+                  setPendingDeleteMessageID(undefined)
+                }
+              }}
+            >
+              <span className="conversation-delete-button-label">{t('message.delete')}</span>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <div className="composer-dock">
+        <PendingApprovalBar
+          approval={pendingApproval}
+          onDecision={handlePermissionDecision}
+          onReconcile={(messageID, requestID, decision) => void handleToolReconciliation(messageID, requestID, decision)}
+        />
+
+        <PendingPlanApprovalBar
+          key={pendingPlanApproval?.requestID ?? 'no-plan-approval'}
+          plan={pendingPlanApproval}
+          onDecision={(messageID, requestID, decision, instructions) => void handlePlanApprovalDecision(messageID, requestID, decision, instructions)}
+        />
+
+        <PendingQuestionBar
+          key={pendingQuestion?.requestID ?? 'no-question'}
+          question={pendingQuestion}
+          onAnswer={(messageID, requestID, answers) => void handleQuestionAnswer(messageID, requestID, answers)}
+          onSkip={(messageID, requestID) => {
+            if (!pendingQuestion) return
+            const skipAnswers: Record<string, string[]> = {}
+            for (const item of pendingQuestion.questions) {
+              skipAnswers[item.question] = []
+            }
+            void handleQuestionAnswer(messageID, requestID, skipAnswers)
+          }}
+          onCancel={() => void cancelActiveRun()}
+        />
+
+        <Composer
+          draft={draft}
+          onDraftChange={setDraft}
+          isSending={isSending}
+          hasActiveRun={hasActiveRun}
+          onSend={() => void sendMessage()}
+          onAppendInstruction={hasActiveRun ? () => void appendInstructionToActiveRun() : undefined}
+          onStop={() => void cancelActiveRun()}
+          listSkills={async () => {
+            if (!runtimeConnection) return []
+            const catalog = await listInstalledSkills(runtimeConnection)
+            return catalog.skills
+          }}
+          listMcpServers={
+            runtimeConnection
+              ? async () => {
+                  const catalog = await listMcpServers(runtimeConnection)
+                  return catalog.servers
+                }
+              : undefined
+          }
+          listPlugins={
+            runtimeConnection
+              ? async () => {
+                  const plugins = await listLocalPlugins(runtimeConnection)
+                  return Promise.all(
+                    plugins.flatMap((plugin) =>
+                      plugin.enabled && !plugin.retired && plugin.compatibility === 'compatible'
+                        ? [getLocalPlugin(plugin.id, runtimeConnection)]
+                        : []),
+                  )
+                }
+              : undefined
+          }
+          mode={mode}
+          models={models}
+          onModeChange={changeMode}
+          permissionMode={permissionMode}
+          onPermissionModeChange={setPermissionMode}
+          onConfigureModels={() => setMainView('settings')}
+          projectName={activeConversation?.project?.name ?? pendingProject?.name}
+          onSelectProject={() => void selectProjectForActiveConversation()}
+          onRemoveProject={() => void removeProjectFromActiveConversation()}
+          attachments={pendingAttachments}
+          onSelectAttachments={() => void selectAttachments()}
+          onDropAttachments={dropAttachments}
+          onRemoveAttachment={removeAttachment}
+          isDesktop={isDesktop}
+          slashCommandsEnabled={isDesktop}
+        />
+        <p className="composer-disclaimer">{t('composer.disclaimer')}</p>
+      </div>
+    </section>
   )
 }
 
@@ -3527,7 +3737,7 @@ async function streamLocalMessage(
   onUpdate: () => void,
 ) {
   let seenEventIDs = new Set(
-    (message.agentEvents ?? []).map((event) => event.eventId).filter(Boolean) as string[],
+    (message.agentEvents ?? []).flatMap((event) => event.eventId ? [event.eventId] : []),
   )
   const toolArgsByCallId: ToolArgsByCallId = new Map()
   const subscribe = () => streamLocalRun(runID, config, {
@@ -3568,7 +3778,7 @@ async function streamLocalMessage(
         for (const key of Object.keys(conversation)) Reflect.deleteProperty(conversation, key)
         Object.assign(conversation, rebuilt)
         seenEventIDs = new Set(
-          (message.agentEvents ?? []).map((event) => event.eventId).filter(Boolean) as string[],
+          (message.agentEvents ?? []).flatMap((event) => event.eventId ? [event.eventId] : []),
         )
         toolArgsByCallId.clear()
         onUpdate()

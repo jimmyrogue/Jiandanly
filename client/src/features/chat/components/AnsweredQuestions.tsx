@@ -1,5 +1,6 @@
 import { useI18n } from '@/shared/i18n/i18n'
 import type { ChatMessage } from '@/shared/local-data/types'
+import { withStableTimelineKeys } from '../timelineKeys'
 
 export function AnsweredQuestions({ message }: { message: ChatMessage }) {
   const { t } = useI18n()
@@ -10,16 +11,16 @@ export function AnsweredQuestions({ message }: { message: ChatMessage }) {
     return null
   }
 
-  return answered.flatMap((event, index) =>
+  return withStableTimelineKeys(answered).flatMap(({ item: event, key }) =>
     Object.entries(event.questionAnswers ?? {}).flatMap(([question, picks]) => [
-      <article className="message assistant" key={`${event.eventId ?? index}-${question}-q`}>
+      <article className="message assistant" key={`${key}:${question}:question`}>
         <div className="message-bubble-inner">
           <div className="message-content">
             <p className="whitespace-pre-wrap break-words">{question}</p>
           </div>
         </div>
       </article>,
-      <article className="message user" key={`${event.eventId ?? index}-${question}-a`}>
+      <article className="message user" key={`${key}:${question}:answer`}>
         <div className="message-bubble-inner">
           <div className="message-content">
             <p className="whitespace-pre-wrap break-words">

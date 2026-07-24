@@ -26,6 +26,10 @@ import type {
 } from '@/runtime/client'
 import type { ChatMode, LocalAttachmentRef } from '@/shared/local-data/types'
 
+const EMPTY_MODELS: ModelOption[] = []
+const EMPTY_ATTACHMENTS: LocalAttachmentRef[] = []
+const PERMISSION_MODES: PermissionMode[] = ['ask', 'auto', 'full_access']
+
 export function Composer({
   draft,
   onDraftChange,
@@ -38,7 +42,7 @@ export function Composer({
   listMcpServers,
   listPlugins,
   mode,
-  models = [],
+  models = EMPTY_MODELS,
   onModeChange,
   permissionMode = 'auto',
   onPermissionModeChange,
@@ -46,7 +50,7 @@ export function Composer({
   projectName,
   onSelectProject,
   onRemoveProject,
-  attachments = [],
+  attachments = EMPTY_ATTACHMENTS,
   onSelectAttachments,
   onDropAttachments,
   onRemoveAttachment,
@@ -266,7 +270,6 @@ function PermissionModeSelector({
   disabled: boolean
 }) {
   const { t } = useI18n()
-  const modes: PermissionMode[] = ['ask', 'auto', 'full_access']
   const label = t(`composer.permission.${mode}.label`)
 
   const select = (next: PermissionMode) => {
@@ -291,7 +294,7 @@ function PermissionModeSelector({
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" sideOffset={8} className="composer-permission-menu">
-        {modes.map((item) => (
+        {PERMISSION_MODES.map((item) => (
           <DropdownMenuItem
             key={item}
             className="composer-permission-item"

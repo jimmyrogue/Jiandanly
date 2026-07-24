@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { IconCopy, IconDownload, IconExternalLink } from '@tabler/icons-react'
+import { downloadFile } from '@/shared/files/downloadFile'
 import { useI18n } from '@/shared/i18n/i18n'
 
 interface MenuPos {
@@ -103,14 +104,7 @@ export function ChatImage({ src, alt }: { src?: string; alt?: string }) {
   async function downloadImage() {
     try {
       const blob = await fetchBlob(src!)
-      const objectUrl = URL.createObjectURL(blob)
-      const anchor = document.createElement('a')
-      anchor.href = objectUrl
-      anchor.download = filenameFor(src!)
-      document.body.appendChild(anchor)
-      anchor.click()
-      anchor.remove()
-      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 4000)
+      await downloadFile(filenameFor(src!), () => blob.arrayBuffer())
     } catch {
       window.open(src!, '_blank', 'noopener,noreferrer')
     }

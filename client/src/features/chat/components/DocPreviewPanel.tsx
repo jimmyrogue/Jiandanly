@@ -8,11 +8,11 @@ import {
 
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
-import { useI18n, type Translator } from '@/shared/i18n/i18n'
+import { useI18n } from '@/shared/i18n/i18n'
 import { FileTypeIcon } from '@/shared/files/FileTypeIcon'
 import { downloadFile } from '@/shared/files/downloadFile'
 import { getRuntimeConnection } from '@/runtime/client'
-import type { OpenDocument, PdfDocumentMetadata } from '@/shared/local-data/types'
+import type { OpenDocument } from '@/shared/local-data/types'
 
 import { DocxPreview } from './DocPreview/DocxPreview'
 import { PdfPreview } from './DocPreview/PdfPreview'
@@ -20,6 +20,7 @@ import { PptxPreview } from './DocPreview/PptxPreview'
 import { XlsxPreview } from './DocPreview/XlsxPreview'
 import { TextPreview } from './DocPreview/TextPreview'
 import { ImagePreview } from './DocPreview/ImagePreview'
+import { buildPdfMetaSummary } from './pdfMetaSummary'
 
 interface Props {
   doc: OpenDocument | null
@@ -346,37 +347,6 @@ export function DocPreviewPanel({ doc, refreshKey = 0, onClose }: Props) {
       </SheetContent>
     </Sheet>
   )
-}
-
-/**
- * Build the short metadata summary shown after the kind label in the
- * preview header — e.g. "15 页 · Vaswani et al." / "Encrypted".
- * Returns '' when there's nothing worth showing (no metadata, or a
- * metadata object with none of the fields we surface), so the caller
- * can decide whether to render the " · " separator.
- *
- * We deliberately surface only the high-signal fields: page count
- * (most useful), author (when present), and the encrypted flag (so
- * users understand why text extraction might be empty). Title is
- * skipped — it's usually redundant with the filename already shown
- * in the header.
- */
-export function buildPdfMetaSummary(
-  metadata: PdfDocumentMetadata | undefined,
-  t: Translator,
-): string {
-  if (!metadata) return ''
-  const parts: string[] = []
-  if (typeof metadata.pages === 'number' && metadata.pages > 0) {
-    parts.push(t('docPreview.metaPages', { count: String(metadata.pages) }))
-  }
-  if (metadata.author && metadata.author.trim()) {
-    parts.push(metadata.author.trim())
-  }
-  if (metadata.encrypted) {
-    parts.push(t('docPreview.metaEncrypted'))
-  }
-  return parts.join(' · ')
 }
 
 function viewportMaxWidth(): number {

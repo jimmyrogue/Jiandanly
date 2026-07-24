@@ -82,7 +82,7 @@ function defaultSkillContent(name: string, description: string): string {
   return lines.join('\n')
 }
 
-export function SkillsView({
+function useSkillsViewModel({
   listInstalled,
   embedded = false,
   onCreateSkill,
@@ -208,6 +208,15 @@ export function SkillsView({
     await refresh()
   }, [onDeleteSkill, refresh])
 
+  return { canCreateSkill, canEditSkills, deleteSkill, editor, embedded, filteredEmpty, form, loading, locale, onDeleteSkill, onLoadSkill, onOpenFolder, onUpdateSkill, openCreate, openEdit, personalRootPath, query, refresh, saving, sections, setEditor, setForm, setQuery, submitEditor, t }
+}
+
+export function SkillsView(props: Parameters<typeof useSkillsViewModel>[0]) {
+  return <SkillsViewContent view={useSkillsViewModel(props)} />
+}
+
+function SkillsViewContent({ view }: { view: ReturnType<typeof useSkillsViewModel> }) {
+  const { canCreateSkill, canEditSkills, deleteSkill, editor, embedded, filteredEmpty, form, loading, locale, onDeleteSkill, onLoadSkill, onOpenFolder, onUpdateSkill, openCreate, openEdit, personalRootPath, query, refresh, saving, sections, setEditor, setForm, setQuery, submitEditor, t } = view
   return (
     <section className="workspace skills-view">
       {!embedded ? (

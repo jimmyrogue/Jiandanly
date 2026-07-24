@@ -6,12 +6,7 @@ import type { PendingQuestion } from '../pendingQuestion'
 
 const OTHER = '__other__'
 
-export function PendingQuestionBar({
-  question,
-  onAnswer,
-  onSkip,
-  onCancel,
-}: {
+type PendingQuestionBarProps = {
   question: PendingQuestion | null
   onAnswer: (messageID: string, requestID: string, answers: Record<string, string[]>) => void
   /** Skip the question — replies to the runtime with empty answers so
@@ -21,7 +16,18 @@ export function PendingQuestionBar({
   /** Cancel the run entirely. The card disappears and the assistant
    *  message lands in `canceled` state. */
   onCancel?: (messageID: string) => void
-}) {
+}
+
+type ActivePendingQuestionBarProps = Omit<PendingQuestionBarProps, 'question'> & {
+  question: PendingQuestion
+}
+
+function usePendingQuestionBarViewModel({
+  question,
+  onAnswer,
+  onSkip,
+  onCancel,
+}: ActivePendingQuestionBarProps) {
   const { t } = useI18n()
   const [selected, setSelected] = useState<Record<number, string[]>>({})
   const [otherText, setOtherText] = useState<Record<number, string>>({})
@@ -56,10 +62,6 @@ export function PendingQuestionBar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [question, selected, otherText],
   )
-
-  if (!question) {
-    return null
-  }
 
   const total = question.questions.length
   const activeStep = Math.min(step, total - 1)
@@ -153,6 +155,20 @@ export function PendingQuestionBar({
     return () => window.removeEventListener('keydown', handler)
   })
 
+  return { activeStep, answers, chooseSingle, confirmOther, currentAnswered, finish, isLast, item, multi, onCancel, onSkip, otherText, otherValue, picks, question, selected, setOtherText, setStep, t, toggleMulti, total }
+}
+
+export function PendingQuestionBar(props: PendingQuestionBarProps) {
+  return props.question ? <ActivePendingQuestionBar {...props} question={props.question} /> : null
+}
+
+function ActivePendingQuestionBar(props: ActivePendingQuestionBarProps) {
+  return <PendingQuestionBarView view={usePendingQuestionBarViewModel(props)} />
+}
+
+function PendingQuestionBarView({ view }: { view: ReturnType<typeof usePendingQuestionBarViewModel> }) {
+  const { activeStep, answers, chooseSingle, confirmOther, currentAnswered, finish, isLast, item, multi, onCancel, onSkip, otherText, otherValue, picks, question, selected, setOtherText, setStep, t, toggleMulti, total } = view
+  const pickedLabels = new Set(picks)
   return (
     <div className="question-bar" role="region" aria-label={t('agent.question.title')}>
       <div className="question-bar-list">
@@ -178,7 +194,7 @@ export function PendingQuestionBar({
           </div>
           <div className="question-options" role={multi ? 'group' : 'radiogroup'}>
             {item.options.map((option, idx) => {
-              const active = picks.includes(option.label)
+              const active = pickedLabels.has(option.label)
               const shortcut = idx < 9 ? idx + 1 : null
               return (
                 <button

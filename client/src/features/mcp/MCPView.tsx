@@ -117,7 +117,7 @@ function requestFromForm(form: McpFormState): McpServerWriteRequest {
   return input
 }
 
-export function MCPView({
+function useMCPViewModel({
   listCatalog,
   embedded = false,
   disabledServers,
@@ -242,6 +242,15 @@ export function MCPView({
   const totalCount = catalog.servers.length
   const filteredEmpty = totalCount > 0 && filteredServers.length === 0
 
+  return { deleteServer, disabledSet, editor, embedded, filteredEmpty, form, loading, locale, onCreateServer, onDeleteServer, onOpenFolder, onUpdateServer, openCreate, openEdit, query, refresh, saving, sections, setEditor, setForm, setQuery, submitEditor, t, toggle, totalCount }
+}
+
+export function MCPView(props: Parameters<typeof useMCPViewModel>[0]) {
+  return <MCPViewContent view={useMCPViewModel(props)} />
+}
+
+function MCPViewContent({ view }: { view: ReturnType<typeof useMCPViewModel> }) {
+  const { deleteServer, disabledSet, editor, embedded, filteredEmpty, form, loading, locale, onCreateServer, onDeleteServer, onOpenFolder, onUpdateServer, openCreate, openEdit, query, refresh, saving, sections, setEditor, setForm, setQuery, submitEditor, t, toggle, totalCount } = view
   return (
     <section className="workspace skills-view">
       {!embedded ? (

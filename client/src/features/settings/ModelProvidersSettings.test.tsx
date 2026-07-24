@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { I18nProvider } from '@/shared/i18n/i18n'
+import { I18nProvider } from '@/shared/i18n/I18nProvider'
 import { ModelProvidersSettings } from './ModelProvidersSettings'
 
 const { discoverLocalModels, listLocalModelProviders, upsertLocalModelProvider } = vi.hoisted(() => ({

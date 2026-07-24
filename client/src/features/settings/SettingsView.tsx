@@ -94,7 +94,7 @@ function SettingsSection({
   )
 }
 
-export function SettingsView({
+function useSettingsViewModel({
   isDesktop = true,
   agentSettings,
   advancedSettingsReady = true,
@@ -243,6 +243,15 @@ export function SettingsView({
     }
   }
 
+  return { activeSection, adv, advancedSettingsReady, agentSettings, clearMemoryConfirmOpen, clearingMemory, importInputRef, isDesktop, locale, memoryEnabled, navItems, onAgentSettingsChange, onClearMemory, onExportLocalData, onImportLocalData, onModelProvidersChange, runtimeConnection, selectSection, setAdv, setClearMemoryConfirmOpen, setClearingMemory, setClientUpdate, setLocale, settingsScrollRef, t, updateAction, updateActiveSectionFromScroll, updateHint, updateStatus }
+}
+
+export function SettingsView(props: Parameters<typeof useSettingsViewModel>[0]) {
+  return <SettingsViewContent view={useSettingsViewModel(props)} />
+}
+
+function SettingsViewContent({ view }: { view: ReturnType<typeof useSettingsViewModel> }) {
+  const { activeSection, adv, advancedSettingsReady, agentSettings, clearMemoryConfirmOpen, clearingMemory, importInputRef, isDesktop, locale, memoryEnabled, navItems, onAgentSettingsChange, onClearMemory, onExportLocalData, onImportLocalData, onModelProvidersChange, runtimeConnection, selectSection, setAdv, setClearMemoryConfirmOpen, setClearingMemory, setClientUpdate, setLocale, settingsScrollRef, t, updateAction, updateActiveSectionFromScroll, updateHint, updateStatus } = view
   return (
     <section className="workspace">
       <header className="topbar topbar-page">

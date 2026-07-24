@@ -12,6 +12,9 @@
     "directory": "client"
   },
   "type": "module",
+  "sideEffects": [
+    "electron/srt-launcher.mjs"
+  ],
   "main": "electron/main.cjs",
   "scripts": {
     "predev": "pnpm --filter @shejane/runtime-sdk build",
@@ -30,7 +33,6 @@
   },
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.65",
-    "@fontsource-variable/geist": "^5.2.8",
     "@lexical/react": "^0.44.0",
     "@shejane/runtime-sdk": "workspace:*",
     "@tabler/icons-react": "^3.44.0",

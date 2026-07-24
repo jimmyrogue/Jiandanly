@@ -2,6 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { projectTransientAssistantText, timelineItem, toolDetail } from './chatStore'
 
 describe('runtime timeline', () => {
+  it('derives a stable event identity from the Runtime sequence when id is absent', () => {
+    expect(timelineItem({
+      event_type: 'tool.started',
+      run_id: 'run-1',
+      seq: 7,
+      payload: { tool: 'fs.read' },
+    })?.eventId).toBe('run-1:7')
+  })
 
   it('keeps only the current model round text across a tool call', () => {
     let content = projectTransientAssistantText('', {

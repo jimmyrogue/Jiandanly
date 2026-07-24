@@ -22,6 +22,7 @@ export function timelineItem(event: AgentRunEvent, t: Translator = createTransla
   }
   const payload = event.payload ?? {}
   const eventId = event.id
+    ?? (event.run_id && event.seq !== undefined ? `${event.run_id}:${event.seq}` : undefined)
   switch (event.event_type) {
     case 'llm.usage': {
       const input = Number(payload.input_tokens) || 0
@@ -485,6 +486,7 @@ function repairWorkflowLabelKey(
  *  Returns the unique image strings in document order. */
 function extractCodeExecImages(payload: Record<string, unknown>): string[] {
   const out: string[] = []
+  const seen = new Set<string>()
   const visit = (results: unknown) => {
     if (!Array.isArray(results)) return
     for (const entry of results) {
@@ -494,7 +496,8 @@ function extractCodeExecImages(payload: Record<string, unknown>): string[] {
       const dataMap = data as Record<string, unknown>
       for (const key of ['image/png', 'image/jpeg', 'image/svg+xml']) {
         const value = dataMap[key]
-        if (typeof value === 'string' && value.length > 0 && !out.includes(value)) {
+        if (typeof value === 'string' && value.length > 0 && !seen.has(value)) {
+          seen.add(value)
           out.push(value)
         }
       }

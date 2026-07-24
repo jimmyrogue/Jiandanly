@@ -185,6 +185,10 @@ export function parseSkillDraft(
   const functions: string[] = []
   const mcps: string[] = []
   const plugins: PluginDraftReference[] = []
+  const skillNames = new Set<string>()
+  const functionNames = new Set<string>()
+  const mcpNames = new Set<string>()
+  const pluginIDs = new Set<string>()
   let pluginCommand: PluginCommandDraftReference | undefined
   let text = ''
   for (const node of tokenizeDraft(draft)) {
@@ -192,13 +196,15 @@ export function parseSkillDraft(
       text += node.value
     } else if (node.type === 'skill') {
       text += `@${node.name}`
-      if (!skills.includes(node.name)) {
+      if (!skillNames.has(node.name)) {
+        skillNames.add(node.name)
         skills.push(node.name)
       }
     } else if (node.type === 'function') {
       // Function tokens are mode markers, not literal text: they add no text
       // (the per-function directive is injected by the send path).
-      if (!functions.includes(node.name)) {
+      if (!functionNames.has(node.name)) {
+        functionNames.add(node.name)
         functions.push(node.name)
       }
     } else if (node.type === 'mcp') {
@@ -206,11 +212,13 @@ export function parseSkillDraft(
       // intent verbatim. The actual server allowlist override + 'prefer
       // these tools' directive get injected by the send path.
       text += `@mcp:${node.name}`
-      if (!mcps.includes(node.name)) {
+      if (!mcpNames.has(node.name)) {
+        mcpNames.add(node.name)
         mcps.push(node.name)
       }
     } else if (node.type === 'plugin') {
-      if (!plugins.some((plugin) => plugin.pluginId === node.pluginId)) {
+      if (!pluginIDs.has(node.pluginId)) {
+        pluginIDs.add(node.pluginId)
         plugins.push({
           pluginId: node.pluginId,
           name: node.name,

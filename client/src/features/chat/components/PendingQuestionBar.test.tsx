@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PendingQuestionBar } from './PendingQuestionBar'
-import { I18nProvider } from '@/shared/i18n/i18n'
+import { I18nProvider } from '@/shared/i18n/I18nProvider'
 import type { PendingQuestion } from '../pendingQuestion'
 
 afterEach(() => cleanup())

@@ -12,7 +12,6 @@ Direct runtime dependencies include React, Lexical, Radix UI, Tailwind CSS, Tabl
 
 The following items need separate attention:
 
-- `@fontsource-variable/geist` and the bundled Geist font files are licensed under the SIL Open Font License 1.1 (`OFL-1.1`).
 - `lightningcss` and its platform packages are licensed under the Mozilla Public License 2.0 (`MPL-2.0`).
 - `caniuse-lite` data is licensed under Creative Commons Attribution 4.0 (`CC-BY-4.0`).
 - `jszip` is offered under `MIT OR GPL-3.0-or-later`; SheJane uses it under the MIT option.

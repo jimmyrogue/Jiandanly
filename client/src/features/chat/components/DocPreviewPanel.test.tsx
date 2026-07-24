@@ -1,10 +1,12 @@
 import { cleanup, render, screen, fireEvent } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { I18nProvider, createTranslator } from '@/shared/i18n/i18n'
+import { I18nProvider } from '@/shared/i18n/I18nProvider'
+import { createTranslator } from '@/shared/i18n/i18n'
 import type { OpenDocument } from '@/shared/local-data/types'
 
-import { DocPreviewPanel, buildPdfMetaSummary } from './DocPreviewPanel'
+import { DocPreviewPanel } from './DocPreviewPanel'
+import { buildPdfMetaSummary } from './pdfMetaSummary'
 
 // docx-preview and exceljs both touch DOM APIs (canvas / blob) that jsdom
 // only partially implements. We stub the subcomponents so this test focuses

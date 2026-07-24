@@ -29,15 +29,6 @@ function functionLabel(id: string): string {
 
 export type SerializedSkillNode = Spread<{ name: string }, SerializedLexicalNode>
 
-function SkillChip({ name }: { name: string }): JSX.Element {
-  return (
-    <span className="skill-chip--inline" data-skill={name}>
-      <IconSparkles className="skill-chip-icon" size={12} aria-hidden="true" />
-      {name}
-    </span>
-  )
-}
-
 export class SkillNode extends DecoratorNode<JSX.Element> {
   __name: string
 
@@ -83,7 +74,12 @@ export class SkillNode extends DecoratorNode<JSX.Element> {
   }
 
   decorate(_editor: LexicalEditor, _config: EditorConfig): JSX.Element {
-    return <SkillChip name={this.__name} />
+    return (
+      <span className="skill-chip--inline" data-skill={this.__name}>
+        <IconSparkles className="skill-chip-icon" size={12} aria-hidden="true" />
+        {this.__name}
+      </span>
+    )
   }
 }
 
@@ -96,15 +92,6 @@ export function $isSkillNode(node: LexicalNode | null | undefined): node is Skil
 }
 
 export type SerializedFunctionNode = Spread<{ name: string }, SerializedLexicalNode>
-
-function FunctionChip({ id }: { id: string }): JSX.Element {
-  return (
-    <span className="function-chip--inline" data-function={id}>
-      <IconPhoto className="skill-chip-icon" size={12} aria-hidden="true" />
-      {functionLabel(id)}
-    </span>
-  )
-}
 
 export class FunctionNode extends DecoratorNode<JSX.Element> {
   __name: string
@@ -151,7 +138,12 @@ export class FunctionNode extends DecoratorNode<JSX.Element> {
   }
 
   decorate(_editor: LexicalEditor, _config: EditorConfig): JSX.Element {
-    return <FunctionChip id={this.__name} />
+    return (
+      <span className="function-chip--inline" data-function={this.__name}>
+        <IconPhoto className="skill-chip-icon" size={12} aria-hidden="true" />
+        {functionLabel(this.__name)}
+      </span>
+    )
   }
 }
 
@@ -164,15 +156,6 @@ export function $isFunctionNode(node: LexicalNode | null | undefined): node is F
 }
 
 export type SerializedMCPNode = Spread<{ name: string }, SerializedLexicalNode>
-
-function MCPChip({ name }: { name: string }): JSX.Element {
-  return (
-    <span className="mcp-chip--inline" data-mcp={name}>
-      <IconServer className="skill-chip-icon" size={12} aria-hidden="true" />
-      {name}
-    </span>
-  )
-}
 
 /** Inline MCP server reference (selected from the slash menu's MCP
  *  group). Round-trips through the draft string as
@@ -223,7 +206,12 @@ export class MCPNode extends DecoratorNode<JSX.Element> {
   }
 
   decorate(_editor: LexicalEditor, _config: EditorConfig): JSX.Element {
-    return <MCPChip name={this.__name} />
+    return (
+      <span className="mcp-chip--inline" data-mcp={this.__name}>
+        <IconServer className="skill-chip-icon" size={12} aria-hidden="true" />
+        {this.__name}
+      </span>
+    )
   }
 }
 
@@ -239,15 +227,6 @@ export type SerializedPluginNode = Spread<
   { pluginId: string; name: string; expectedDigest: string },
   SerializedLexicalNode
 >
-
-function PluginChip({ name, pluginId }: { name: string; pluginId: string }): JSX.Element {
-  return (
-    <span className="plugin-chip--inline" data-plugin={pluginId} title={pluginId}>
-      <IconBox className="skill-chip-icon" size={12} aria-hidden="true" />
-      {name}
-    </span>
-  )
-}
 
 export class PluginNode extends DecoratorNode<JSX.Element> {
   __pluginId: string
@@ -312,7 +291,12 @@ export class PluginNode extends DecoratorNode<JSX.Element> {
   }
 
   decorate(_editor: LexicalEditor, _config: EditorConfig): JSX.Element {
-    return <PluginChip name={this.__name} pluginId={this.__pluginId} />
+    return (
+      <span className="plugin-chip--inline" data-plugin={this.__pluginId} title={this.__pluginId}>
+        <IconBox className="skill-chip-icon" size={12} aria-hidden="true" />
+        {this.__name}
+      </span>
+    )
   }
 }
 
@@ -338,15 +322,6 @@ export type SerializedPluginCommandNode = Spread<
   },
   SerializedLexicalNode
 >
-
-function PluginCommandChip({ title, pluginName }: { title: string; pluginName: string }): JSX.Element {
-  return (
-    <span className="plugin-command-chip--inline" title={`${pluginName}: ${title}`}>
-      <IconCommand className="skill-chip-icon" size={12} aria-hidden="true" />
-      {title}
-    </span>
-  )
-}
 
 export class PluginCommandNode extends DecoratorNode<JSX.Element> {
   __pluginId: string
@@ -435,7 +410,12 @@ export class PluginCommandNode extends DecoratorNode<JSX.Element> {
   }
 
   decorate(_editor: LexicalEditor, _config: EditorConfig): JSX.Element {
-    return <PluginCommandChip title={this.__title} pluginName={this.__pluginName} />
+    return (
+      <span className="plugin-command-chip--inline" title={`${this.__pluginName}: ${this.__title}`}>
+        <IconCommand className="skill-chip-icon" size={12} aria-hidden="true" />
+        {this.__title}
+      </span>
+    )
   }
 }
 

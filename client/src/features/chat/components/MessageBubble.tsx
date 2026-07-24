@@ -1,4 +1,4 @@
-import { cloneElement, Fragment, isValidElement, useEffect, useMemo, useRef, useState } from 'react'
+import { Children, cloneElement, isValidElement, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
@@ -15,7 +15,10 @@ import type { AgentTimelineItem, ChatMessage, LocalFileRef } from '@/shared/loca
 import { useSmoothTextStream } from '@/shared/streaming/useSmoothTextStream'
 import { completePartialMarkdown } from '@/shared/streaming/completePartialMarkdown'
 
-export function MessageBubble({
+const zhUsageNumberFormatter = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 })
+const enUsageNumberFormatter = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 })
+
+function useMessageBubbleViewModel({
   message,
   children,
   initialStreamText = '',
@@ -60,8 +63,18 @@ export function MessageBubble({
   const { locale, t } = useI18n()
   const previousMessageIDRef = useRef(message.id)
   const previousContentRef = useRef('')
-  const stream = useSmoothTextStream({ locale, segmentsPerTick: 3, tickMs: 22 })
   const isAssistant = message.role === 'assistant'
+  const commitStreamText = useCallback((displayedText: string) => {
+    if (isAssistant && message.status === 'streaming') {
+      onStreamTextCommit?.(message.id, displayedText)
+    }
+  }, [isAssistant, message.id, message.status, onStreamTextCommit])
+  const stream = useSmoothTextStream({
+    locale,
+    segmentsPerTick: 3,
+    tickMs: 22,
+    onCommit: commitStreamText,
+  })
 
   useEffect(() => {
     if (previousMessageIDRef.current !== message.id) {
@@ -111,12 +124,6 @@ export function MessageBubble({
       previousContentRef.current = message.content
     }
   }, [initialStreamText, isAssistant, message.content, message.id, message.status, stream])
-
-  useEffect(() => {
-    if (isAssistant && message.status === 'streaming' && stream.text) {
-      onStreamTextCommit?.(message.id, stream.text)
-    }
-  }, [isAssistant, message.id, message.status, onStreamTextCommit, stream.text])
 
   const [copied, setCopied] = useState(false)
   const [copyFailed, setCopyFailed] = useState(false)
@@ -219,6 +226,15 @@ export function MessageBubble({
     </div>
   ) : null
 
+  return { attachmentCards, canDelete, canEdit, canRegenerate, cancelEdit, children, commitEdit, content, copied, copyFailed, editText, editing, handleCopy, hideFailedAssistantContent, isAssistant, message, messageTime, onDelete, onLocalFileContextMenu, onOpenDiagnostics, onPreviewLocalFile, onRegenerate, runActive, setEditText, showStream, showUsage, startEdit, stream, t, usageParts, waitingText, workspaceRoot }
+}
+
+export function MessageBubble(props: Parameters<typeof useMessageBubbleViewModel>[0]) {
+  return <MessageBubbleView view={useMessageBubbleViewModel(props)} />
+}
+
+function MessageBubbleView({ view }: { view: ReturnType<typeof useMessageBubbleViewModel> }) {
+  const { attachmentCards, canDelete, canEdit, canRegenerate, cancelEdit, children, commitEdit, content, copied, copyFailed, editText, editing, handleCopy, hideFailedAssistantContent, isAssistant, message, messageTime, onDelete, onLocalFileContextMenu, onOpenDiagnostics, onPreviewLocalFile, onRegenerate, runActive, setEditText, showStream, showUsage, startEdit, stream, t, usageParts, waitingText, workspaceRoot } = view
   return (
     <article className={cn('message', message.role)}>
       {!isAssistant ? attachmentCards : null}
@@ -440,9 +456,7 @@ function buildUsageParts(
 }
 
 function formatUsageNumber(value: number, locale: string): string {
-  return new Intl.NumberFormat(locale === 'zh' ? 'zh-CN' : 'en-US', {
-    maximumFractionDigits: 2,
-  }).format(value)
+  return (locale === 'zh' ? zhUsageNumberFormatter : enUsageNumberFormatter).format(value)
 }
 
 function MarkdownContent({
@@ -584,13 +598,8 @@ function processChildren(
     return renderTextWithLocalFileLinks(children, workspaceRoot, onPreviewLocalFile, onLocalFileContextMenu)
   }
   if (Array.isArray(children)) {
-    return children.map((child, i) => (
-      // Fragments are transparent to layout AND to testing-library
-      // text matching (whereas a wrapping `<span>` introduces an
-      // extra element with the same textContent and confuses
-      // `findByText`).
-      <Fragment key={i}>{processChildren(child, workspaceRoot, onPreviewLocalFile, onLocalFileContextMenu)}</Fragment>
-    ))
+    return Children.map(children, (child) =>
+      processChildren(child, workspaceRoot, onPreviewLocalFile, onLocalFileContextMenu))
   }
   if (isValidElement(children)) {
     const props = (children.props ?? {}) as {
@@ -789,9 +798,9 @@ function CodeExecutionImages({ events }: { events?: AgentTimelineItem[] }) {
   if (images.length === 0) return null
   return (
     <div className="message-code-images">
-      {images.map((b64, idx) => (
+      {images.map((b64) => (
         <img
-          key={`${b64.slice(0, 24)}-${idx}`}
+          key={b64}
           src={`data:image/png;base64,${b64}`}
           alt=""
           className="message-code-image"

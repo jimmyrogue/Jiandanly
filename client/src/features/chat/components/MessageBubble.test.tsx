@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MessageBubble } from './MessageBubble'
-import { I18nProvider } from '@/shared/i18n/i18n'
+import { I18nProvider } from '@/shared/i18n/I18nProvider'
 import type { ChatMessage } from '@/shared/local-data/types'
 
 afterEach(() => {

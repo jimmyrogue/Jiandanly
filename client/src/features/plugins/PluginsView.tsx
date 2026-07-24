@@ -75,7 +75,7 @@ export interface PluginsViewProps {
   ) => Promise<PluginSetupAdvanceCommandReceipt>
 }
 
-export function PluginsView({
+function usePluginsViewModel({
   listPlugins,
   embedded = false,
   refreshVersion,
@@ -236,6 +236,15 @@ export function PluginsView({
       )
     : installedPlugins
 
+  return { advanceComputerUseSetup, busy, embedded, error, failed, filteredPlugins, getReadiness, importPlugin, installPlugin, installedPlugins, loading, mutate, openSetup, query, refresh, removePlugin, selectPackage, setEnabled, setQuery, setSetup, setup, setupActionLabel, t }
+}
+
+export function PluginsView(props: Parameters<typeof usePluginsViewModel>[0]) {
+  return <PluginsViewContent view={usePluginsViewModel(props)} />
+}
+
+function PluginsViewContent({ view }: { view: ReturnType<typeof usePluginsViewModel> }) {
+  const { advanceComputerUseSetup, busy, embedded, error, failed, filteredPlugins, getReadiness, importPlugin, installPlugin, installedPlugins, loading, mutate, openSetup, query, refresh, removePlugin, selectPackage, setEnabled, setQuery, setSetup, setup, setupActionLabel, t } = view
   return (
     <section className="workspace skills-view plugins-view">
       {!embedded ? (
@@ -295,9 +304,9 @@ export function PluginsView({
           ) : filteredPlugins.length === 0 ? (
             <div className="skills-section-empty">{t('plugins.notFound')}</div>
           ) : (
-            <div className="skills-grid" role="list">
+            <ul className="skills-grid">
               {filteredPlugins.map((plugin) => (
-                <article className="skill-card plugin-card" role="listitem" key={plugin.id}>
+                <li className="skill-card plugin-card" key={plugin.id}>
                   <div className="skill-card-head">
                     <div className="skill-card-title">
                       <span className="skill-card-icon" aria-hidden="true">
@@ -348,9 +357,9 @@ export function PluginsView({
                       />
                     ) : null}
                   </div>
-                </article>
+                </li>
               ))}
-            </div>
+            </ul>
           )}
 
         </div>

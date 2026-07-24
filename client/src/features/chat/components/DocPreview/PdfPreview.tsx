@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { useI18n } from '@/shared/i18n/i18n'
 
@@ -33,12 +33,9 @@ export function PdfPreview({ sourceKey, loadBytes, refreshKey = 0, onStatus }: P
   const { t } = useI18n()
   const [blobURL, setBlobURL] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  // Track the URL we created in this run so cleanup revokes it even
-  // if setBlobURL was replaced by a later effect run.
-  const createdURLRef = useRef<string | null>(null)
-
   useEffect(() => {
     let cancelled = false
+    let createdURL: string | null = null
     setError(null)
     setBlobURL(null)
     onStatus?.('loading')
@@ -48,7 +45,7 @@ export function PdfPreview({ sourceKey, loadBytes, refreshKey = 0, onStatus }: P
         if (cancelled) return
         const blob = new Blob([bytes], { type: 'application/pdf' })
         const url = URL.createObjectURL(blob)
-        createdURLRef.current = url
+        createdURL = url
         setBlobURL(url)
         onStatus?.('ready')
       })
@@ -61,13 +58,8 @@ export function PdfPreview({ sourceKey, loadBytes, refreshKey = 0, onStatus }: P
 
     return () => {
       cancelled = true
-      // Revoke the URL created during this effect run. Defer one
-      // tick so the still-mounted <embed> doesn't render an empty
-      // grey box during fast remounts.
-      const url = createdURLRef.current
-      createdURLRef.current = null
-      if (url) {
-        setTimeout(() => URL.revokeObjectURL(url), 0)
+      if (createdURL) {
+        URL.revokeObjectURL(createdURL)
       }
     }
   }, [sourceKey, refreshKey, loadBytes, onStatus])

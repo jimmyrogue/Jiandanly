@@ -275,7 +275,7 @@ function SkillDeletePlugin(): null {
   return null
 }
 
-function SkillTypeaheadPlugin({
+function useSkillTypeaheadViewModel({
   listSkills,
   listMcpServers,
   listPlugins,
@@ -357,17 +357,17 @@ function SkillTypeaheadPlugin({
       normalized === '' ||
       name.toLowerCase().includes(normalized) ||
       description.toLowerCase().includes(normalized)
-    const funcOptions = functionsCatalog
-      .filter((fn) => match(fn.name, fn.description))
-      .map((fn) => new ComposerMenuOption('function', fn.id, fn.name, fn.description))
-    const skillOptions = skills
-      .filter((skill) => match(skill.name, skill.description))
-      .map((skill) => new ComposerMenuOption('skill', skill.name, skill.name, skill.description))
-    const mcpOptions = mcpServers
-      .filter((server) => match(server.name, `${server.source} ${server.transport}`))
-      .map(
-        (server) =>
-          new ComposerMenuOption(
+    const funcOptions = functionsCatalog.flatMap((fn) =>
+      match(fn.name, fn.description)
+        ? [new ComposerMenuOption('function', fn.id, fn.name, fn.description)]
+        : [])
+    const skillOptions = skills.flatMap((skill) =>
+      match(skill.name, skill.description)
+        ? [new ComposerMenuOption('skill', skill.name, skill.name, skill.description)]
+        : [])
+    const mcpOptions = mcpServers.flatMap((server) =>
+      match(server.name, `${server.source} ${server.transport}`)
+        ? [new ComposerMenuOption(
             'mcp',
             server.name,
             server.name,
@@ -375,14 +375,12 @@ function SkillTypeaheadPlugin({
             // user can tell two same-named servers apart (rare, but
             // happens when shejane overrides a Claude Desktop one).
             `${server.source} · ${server.transport}`,
-          ),
-      )
+          )]
+        : [])
     const pluginCommandOptions = plugins.flatMap((plugin) =>
-      plugin.commands
-        .filter((command) => match(command.title, `${plugin.name} ${command.id} ${command.description}`))
-        .map(
-          (command) =>
-            new ComposerMenuOption(
+      plugin.commands.flatMap((command) =>
+        match(command.title, `${plugin.name} ${command.id} ${command.description}`)
+          ? [new ComposerMenuOption(
               'plugin-command',
               `${plugin.id}:${command.id}`,
               command.title,
@@ -392,8 +390,8 @@ function SkillTypeaheadPlugin({
               plugin,
               command.id,
               !pluginCommandsEnabled,
-            ),
-        ),
+            )]
+          : []),
     )
     return [...funcOptions, ...pluginCommandOptions, ...skillOptions, ...mcpOptions]
   }, [functionsCatalog, skills, mcpServers, plugins, pluginCommandsEnabled, query, t])
@@ -448,6 +446,15 @@ function SkillTypeaheadPlugin({
     [editor, t],
   )
 
+  return { editor, listMcpServers, listPlugins, loading, mcpLoading, menuOpenRef, onSelectOption, options, pluginsLoading, setQuery, t, triggerFn }
+}
+
+function SkillTypeaheadPlugin(props: Parameters<typeof useSkillTypeaheadViewModel>[0]) {
+  return <SkillTypeaheadView view={useSkillTypeaheadViewModel(props)} />
+}
+
+function SkillTypeaheadView({ view }: { view: ReturnType<typeof useSkillTypeaheadViewModel> }) {
+  const { editor, listMcpServers, listPlugins, loading, mcpLoading, menuOpenRef, onSelectOption, options, pluginsLoading, setQuery, t, triggerFn } = view
   return (
     <LexicalTypeaheadMenuPlugin<ComposerMenuOption>
       options={options}
@@ -608,33 +615,30 @@ function PluginMentionTypeaheadPlugin({
   const [loading, setLoading] = useState(false)
   const loadedRef = useRef(false)
 
-  useEffect(() => {
-    if (query !== null && !loadedRef.current) {
-      loadedRef.current = true
-      setLoading(true)
-      listPlugins()
-        .then((items) =>
-          setPlugins(
-            items.filter(isAvailablePlugin),
-          ),
-        )
-        .catch(() => setPlugins([]))
-        .finally(() => setLoading(false))
+  const handleQueryChange = (nextQuery: string | null) => {
+    setQuery(nextQuery)
+    if (nextQuery === null) {
+      loadedRef.current = false
+      return
     }
-    if (query === null) loadedRef.current = false
-  }, [query, listPlugins])
+    if (loadedRef.current) return
+    loadedRef.current = true
+    setLoading(true)
+    listPlugins()
+      .then((items) => setPlugins(items.filter(isAvailablePlugin)))
+      .catch(() => setPlugins([]))
+      .finally(() => setLoading(false))
+  }
 
   const options = useMemo(() => {
     const normalized = (query ?? '').toLowerCase()
-    return plugins
-      .filter(
-        (plugin) =>
-          normalized === '' ||
-          plugin.name.toLowerCase().includes(normalized) ||
-          plugin.id.toLowerCase().includes(normalized) ||
-          plugin.publisher.name.toLowerCase().includes(normalized),
-      )
-      .map((plugin) => new PluginMentionOption(plugin))
+    return plugins.flatMap((plugin) =>
+      normalized === '' ||
+      plugin.name.toLowerCase().includes(normalized) ||
+      plugin.id.toLowerCase().includes(normalized) ||
+      plugin.publisher.name.toLowerCase().includes(normalized)
+        ? [new PluginMentionOption(plugin)]
+        : [])
   }, [plugins, query])
 
   const triggerFn = useCallback((text: string): MenuTextMatch | null => {
@@ -682,7 +686,7 @@ function PluginMentionTypeaheadPlugin({
     <LexicalTypeaheadMenuPlugin<PluginMentionOption>
       options={options}
       triggerFn={triggerFn}
-      onQueryChange={setQuery}
+      onQueryChange={handleQueryChange}
       onSelectOption={onSelectOption}
       onOpen={() => {
         menuOpenRef.current = true

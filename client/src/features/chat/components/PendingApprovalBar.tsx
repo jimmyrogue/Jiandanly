@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { IconCircleCheck, IconShieldCheck, IconX } from '@tabler/icons-react'
 import { Button } from '@/components/ui/button'
 import { useI18n } from '@/shared/i18n/i18n'
@@ -20,14 +20,36 @@ export function PendingApprovalBar({
   ) => boolean | Promise<boolean>
   onReconcile?: (messageID: string, requestID: string, decision: LocalToolReconciliationDecision) => void
 }) {
+  if (!approval) {
+    return null
+  }
+  return (
+    <ActivePendingApprovalBar
+      key={approval.requestID}
+      approval={approval}
+      onDecision={onDecision}
+      onReconcile={onReconcile}
+    />
+  )
+}
+
+function ActivePendingApprovalBar({
+  approval,
+  onDecision,
+  onReconcile,
+}: {
+  approval: PendingApproval
+  onDecision: (
+    messageID: string,
+    requestID: string,
+    decision: LocalPermissionDecision,
+    scope?: LocalPermissionScope,
+  ) => boolean | Promise<boolean>
+  onReconcile?: (messageID: string, requestID: string, decision: LocalToolReconciliationDecision) => void
+}) {
   const { t } = useI18n()
   const [locallySubmittedRequestID, setLocallySubmittedRequestID] = useState<string | null>(null)
-  useEffect(() => {
-    if (approval && locallySubmittedRequestID && approval.requestID !== locallySubmittedRequestID) {
-      setLocallySubmittedRequestID(null)
-    }
-  }, [approval, locallySubmittedRequestID])
-  if (!approval || approval.requestID === locallySubmittedRequestID) {
+  if (approval.requestID === locallySubmittedRequestID) {
     return null
   }
   if (approval.kind === 'reconciliation') {

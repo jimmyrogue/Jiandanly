@@ -1,6 +1,6 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { I18nProvider } from '@/shared/i18n/i18n'
+import { I18nProvider } from '@/shared/i18n/I18nProvider'
 import type { Conversation } from '@/shared/local-data/types'
 import { ChatThread } from './ChatThread'
 

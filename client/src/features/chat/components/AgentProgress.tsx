@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { createTranslator, useI18n, type Translator } from '@/shared/i18n/i18n'
 import type { AgentTimelineItem, AgentToolDetail, ChatMessage } from '@/shared/local-data/types'
+import { withStableTimelineKeys } from '../timelineKeys'
 import { failureRecoveryAction, type AgentFailureAction } from '../recovery'
 
 type ProgressTone = 'working' | 'permission' | 'done' | 'failed' | 'idle'
@@ -218,7 +219,7 @@ export function AgentProgress({
             const fullText = task.toolDetail?.text ?? task.target ?? ''
             const tooltip = task.toolDetail?.tooltip ?? fullText
             return (
-              <li key={task.toolCallId ?? `${idx}`} className="agent-progress-task-item">
+              <li key={task.toolCallId} className="agent-progress-task-item">
                 <span className="agent-progress-task-label">
                   {t('agent.task.itemLabel', { index: idx + 1 })}
                 </span>
@@ -294,8 +295,8 @@ function AgentProgressStageRow({ stage }: { stage: AgentProgressStage }) {
         <IconChevronRight className="tool-card-caret" aria-hidden="true" />
       </summary>
       <div className="tool-card-results agent-progress-stage-body">
-        {stage.events.map((event, index) => (
-          <div className="agent-progress-stage-event" key={event.eventId ?? `${stage.id}-${index}`}>
+        {withStableTimelineKeys(stage.events).map(({ item: event, key }) => (
+          <div className="agent-progress-stage-event" key={`${stage.id}:${key}`}>
             {event.label}
           </div>
         ))}
@@ -691,7 +692,7 @@ function operationCountsLabel(events: AgentTimelineItem[], t: Translator): strin
   return parts.join(' · ')
 }
 
-export function deriveAgentProgress(message: ChatMessage, t: Translator = createTranslator('zh')): AgentProgressState | null {
+function deriveAgentProgress(message: ChatMessage, t: Translator = createTranslator('zh')): AgentProgressState | null {
   const events = message.agentEvents ?? []
   const pendingPermission = findPendingPermission(events, t)
   const sourcesCount = uniqueCount(events, (event) => (event.type === 'source.collected' ? event.sourceUrl || event.sourceTitle || event.eventId : undefined))

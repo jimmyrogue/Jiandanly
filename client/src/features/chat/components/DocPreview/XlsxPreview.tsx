@@ -116,8 +116,8 @@ function SheetTable({ rows }: { rows: string[][] }) {
     <div className="xlsx-sheet-scroll">
       <table className="xlsx-sheet-table">
         <tbody>
-          {rows.map((row, i) => (
-            <tr key={i}>
+          {keyRowOccurrences(rows).map(({ key, row }) => (
+            <tr key={key}>
               {row.map((cell, j) => (
                 <td key={j}>{cell}</td>
               ))}
@@ -127,4 +127,14 @@ function SheetTable({ rows }: { rows: string[][] }) {
       </table>
     </div>
   )
+}
+
+function keyRowOccurrences(rows: string[][]): Array<{ key: string, row: string[] }> {
+  const occurrences = new Map<string, number>()
+  return rows.map((row) => {
+    const value = JSON.stringify(row)
+    const occurrence = occurrences.get(value) ?? 0
+    occurrences.set(value, occurrence + 1)
+    return { key: `${value}:${occurrence}`, row }
+  })
 }

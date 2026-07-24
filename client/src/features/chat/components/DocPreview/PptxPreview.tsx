@@ -130,8 +130,8 @@ export function PptxPreview({
               {slide.title ? <h3 className="pptx-slide-title">{slide.title}</h3> : null}
               {slide.bullets.length > 0 ? (
                 <ul className="pptx-slide-bullets">
-                  {slide.bullets.map((bullet, i) => (
-                    <li key={i}>{bullet}</li>
+                  {keyTextOccurrences(slide.bullets).map(({ key, value }) => (
+                    <li key={key}>{value}</li>
                   ))}
                 </ul>
               ) : null}
@@ -150,4 +150,13 @@ export function PptxPreview({
       )}
     </div>
   )
+}
+
+function keyTextOccurrences(values: string[]): Array<{ key: string, value: string }> {
+  const occurrences = new Map<string, number>()
+  return values.map((value) => {
+    const occurrence = occurrences.get(value) ?? 0
+    occurrences.set(value, occurrence + 1)
+    return { key: `${value}:${occurrence}`, value }
+  })
 }

@@ -1,8 +1,9 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { createRef, type Ref } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { I18nProvider } from '@/shared/i18n/i18n'
+import { I18nProvider } from '@/shared/i18n/I18nProvider'
 import type { Conversation, MessageStatus } from '@/shared/local-data/types'
-import { ConversationSidebar } from './ConversationSidebar'
+import { ConversationSidebar, type ConversationSidebarHandle } from './ConversationSidebar'
 
 describe('ConversationSidebar', () => {
   afterEach(() => {
@@ -224,6 +225,15 @@ describe('ConversationSidebar', () => {
       })
     })
 
+    it('opens immediately through the app shortcut handle', () => {
+      const sidebarRef = createRef<ConversationSidebarHandle>()
+      renderSidebar([emptyConversation('a', '行程安排')], undefined, {}, sidebarRef)
+
+      act(() => sidebarRef.current?.openSearch())
+
+      expect(screen.getByRole('searchbox')).toBeInTheDocument()
+    })
+
     it('filters rows by a title substring', () => {
       renderSidebar([emptyConversation('a', '行程安排'), emptyConversation('b', '报销流程')])
       fireEvent.click(screen.getByRole('button', { name: '搜索' }))
@@ -272,18 +282,21 @@ function renderSidebar(
   conversations: Conversation[],
   activeID?: string,
   handlers: Partial<ConversationSidebarHandlers> = {},
+  sidebarRef?: Ref<ConversationSidebarHandle>,
 ) {
-  return render(sidebarElement(conversations, activeID, handlers))
+  return render(sidebarElement(conversations, activeID, handlers, sidebarRef))
 }
 
 function sidebarElement(
   conversations: Conversation[],
   activeID?: string,
   handlers: Partial<ConversationSidebarHandlers> = {},
+  sidebarRef?: Ref<ConversationSidebarHandle>,
 ) {
   return (
     <I18nProvider>
       <ConversationSidebar
+        ref={sidebarRef}
         conversations={conversations}
         activeID={activeID}
         onNewConversation={vi.fn()}

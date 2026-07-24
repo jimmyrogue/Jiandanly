@@ -13,7 +13,7 @@ const {
 } = require('electron')
 const fs = require('node:fs')
 const path = require('node:path')
-const { spawn } = require('node:child_process')
+const childProcess = require('node:child_process')
 const crypto = require('node:crypto')
 const net = require('node:net')
 const { installLocalRuntimeAuthorization } = require('./runtime-auth.cjs')
@@ -375,7 +375,7 @@ async function spawnBundledRuntime() {
   runtimeToken = crypto.randomBytes(32).toString('hex')
   runtimeURL = `http://127.0.0.1:${port}`
 
-  const child = spawn(runtimeBinaryPath(), [
+  const child = childProcess.spawn(runtimeBinaryPath(), [
     '--host', '127.0.0.1',
     '--port', String(port),
     '--token', runtimeToken,
@@ -440,7 +440,7 @@ async function stopBundledRuntime(child = runtimeProcess) {
         if (process.platform === 'win32') {
           try {
             await new Promise((resolve, reject) => {
-              const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true })
+              const killer = childProcess.spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true })
               killer.once('error', reject)
               killer.once('exit', (code) => {
                 if (code === 0) {

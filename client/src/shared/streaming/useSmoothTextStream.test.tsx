@@ -51,6 +51,7 @@ describe('useSmoothTextStream', () => {
     expect(result.current.text).toBe('今天AI新闻很多。')
     expect(result.current.isStreaming).toBe(false)
     expect(commits.length).toBeLessThan(5)
+    expect(commits.at(-1)).toBe('今天AI新闻很多。')
   })
 
   it('flushes residual English word fragments on finish', () => {

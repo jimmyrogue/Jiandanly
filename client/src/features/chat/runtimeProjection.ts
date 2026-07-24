@@ -28,15 +28,16 @@ export function projectRuntimeThread(
   const existingByID = new Map((existing?.messages ?? []).map((message) => [message.id, message]))
   const messages = [...snapshot.items]
     .sort((left, right) => left.position - right.position || left.id.localeCompare(right.id))
-    .filter((item) => !isHiddenTranscriptItem(item))
-    .map((item) => projectRuntimeItem(
-      item,
-      runs.get(item.run_id ?? ''),
-      eventsByRun,
-      snapshot.event_high_watermarks ?? {},
-      existingByID,
-      t,
-    ))
+    .flatMap((item) => isHiddenTranscriptItem(item)
+      ? []
+      : [projectRuntimeItem(
+          item,
+          runs.get(item.run_id ?? ''),
+          eventsByRun,
+          snapshot.event_high_watermarks ?? {},
+          existingByID,
+          t,
+        )])
 
   const metadata = objectValue(snapshot.thread.metadata)
   return {

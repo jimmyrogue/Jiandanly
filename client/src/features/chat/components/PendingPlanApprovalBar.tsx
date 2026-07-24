@@ -47,8 +47,8 @@ export function PendingPlanApprovalBar({
       </div>
       {plan.todos.length > 0 ? (
         <ol className="plan-bar-todos">
-          {plan.todos.slice(0, 6).map((todo, index) => (
-            <li key={`${todo.content}-${index}`}>{todo.content}</li>
+          {plan.todos.slice(0, 6).map((todo) => (
+            <li key={`${todo.status}:${todo.content}`}>{todo.content}</li>
           ))}
         </ol>
       ) : null}

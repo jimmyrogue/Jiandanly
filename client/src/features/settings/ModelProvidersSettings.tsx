@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useReducer, useState, type FormEvent } from 'react'
 import { IconPhoto, IconPlus, IconTool, IconTrash } from '@tabler/icons-react'
 import {
   Dialog,
@@ -39,13 +39,71 @@ const PROVIDER_TEMPLATES = [
 
 type ProviderTemplateID = typeof PROVIDER_TEMPLATES[number]['id']
 type ProviderKind = LocalModelProvider['kind']
+type ManualModelDraft = { id: string, value: string }
 const compactTokens = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 })
 
 function customProviderID(kind: ProviderKind) {
   return `custom-${kind === 'anthropic' ? 'anthropic' : 'openai'}-${Date.now().toString(36)}`.slice(0, 32)
 }
 
-export function ModelProvidersSettings({
+function createManualModelDraft(value = ''): ManualModelDraft {
+  return { id: crypto.randomUUID(), value }
+}
+
+type ProviderEditorState = {
+  dialogOpen: boolean
+  templateID: ProviderTemplateID
+  providerID: string
+  name: string
+  providerKind: ProviderKind
+  baseURL: string
+  apiKey: string
+  selectedModels: LocalModelProfile[]
+  manualModels: ManualModelDraft[]
+  modelQuery: string
+  maxInputTokens: string
+  maxOutputTokens: string
+  requiresAPIKey: boolean
+  discoveredModels: DiscoveredLocalModel[]
+  manualModelID: boolean
+  discovering: boolean
+  savedCredentialConfigured: boolean
+  editing: boolean
+  saving: boolean
+}
+
+type ProviderEditorAction = { type: 'patch'; patch: Partial<ProviderEditorState> }
+
+const initialProviderEditorState: ProviderEditorState = {
+  dialogOpen: false,
+  templateID: 'openai',
+  providerID: 'openai',
+  name: 'OpenAI',
+  providerKind: 'openai_compatible',
+  baseURL: 'https://api.openai.com/v1',
+  apiKey: '',
+  selectedModels: [],
+  manualModels: [{ id: 'initial-model', value: '' }],
+  modelQuery: '',
+  maxInputTokens: '',
+  maxOutputTokens: '',
+  requiresAPIKey: true,
+  discoveredModels: [],
+  manualModelID: true,
+  discovering: false,
+  savedCredentialConfigured: false,
+  editing: false,
+  saving: false,
+}
+
+function providerEditorReducer(
+  state: ProviderEditorState,
+  action: ProviderEditorAction,
+): ProviderEditorState {
+  return { ...state, ...action.patch }
+}
+
+function useModelProvidersViewModel({
   config,
   onChanged,
 }: {
@@ -54,25 +112,38 @@ export function ModelProvidersSettings({
 }) {
   const { t } = useI18n()
   const [providers, setProviders] = useState<LocalModelProvider[]>([])
-  const [dialogOpen, setDialogOpen] = useState(false)
-  const [templateID, setTemplateID] = useState<ProviderTemplateID>('openai')
-  const [providerID, setProviderID] = useState('openai')
-  const [name, setName] = useState('OpenAI')
-  const [providerKind, setProviderKind] = useState<ProviderKind>('openai_compatible')
-  const [baseURL, setBaseURL] = useState('https://api.openai.com/v1')
-  const [apiKey, setAPIKey] = useState('')
-  const [selectedModels, setSelectedModels] = useState<LocalModelProfile[]>([])
-  const [manualModelIDs, setManualModelIDs] = useState<string[]>([''])
-  const [modelQuery, setModelQuery] = useState('')
-  const [maxInputTokens, setMaxInputTokens] = useState('')
-  const [maxOutputTokens, setMaxOutputTokens] = useState('')
-  const [requiresAPIKey, setRequiresAPIKey] = useState(true)
-  const [discoveredModels, setDiscoveredModels] = useState<DiscoveredLocalModel[]>([])
-  const [manualModelID, setManualModelID] = useState(true)
-  const [discovering, setDiscovering] = useState(false)
-  const [savedCredentialConfigured, setSavedCredentialConfigured] = useState(false)
-  const [editing, setEditing] = useState(false)
-  const [saving, setSaving] = useState(false)
+  const [editor, dispatchEditor] = useReducer(providerEditorReducer, initialProviderEditorState)
+  const {
+    apiKey,
+    baseURL,
+    dialogOpen,
+    discoveredModels,
+    discovering,
+    editing,
+    manualModelID,
+    manualModels,
+    maxInputTokens,
+    maxOutputTokens,
+    modelQuery,
+    name,
+    providerID,
+    providerKind,
+    requiresAPIKey,
+    savedCredentialConfigured,
+    saving,
+    selectedModels,
+    templateID,
+  } = editor
+  const patchEditor = (patch: Partial<ProviderEditorState>) => {
+    dispatchEditor({ type: 'patch', patch })
+  }
+  const setAPIKey = (apiKey: string) => patchEditor({ apiKey })
+  const setBaseURL = (baseURL: string) => patchEditor({ baseURL })
+  const setDialogOpen = (dialogOpen: boolean) => patchEditor({ dialogOpen })
+  const setMaxInputTokens = (maxInputTokens: string) => patchEditor({ maxInputTokens })
+  const setMaxOutputTokens = (maxOutputTokens: string) => patchEditor({ maxOutputTokens })
+  const setModelQuery = (modelQuery: string) => patchEditor({ modelQuery })
+  const setName = (name: string) => patchEditor({ name })
   const [error, setError] = useState('')
 
   const refresh = useCallback(async () => {
@@ -89,34 +160,29 @@ export function ModelProvidersSettings({
 
   const selectTemplate = (nextID: ProviderTemplateID) => {
     const template = PROVIDER_TEMPLATES.find((candidate) => candidate.id === nextID)!
-    setTemplateID(nextID)
-    setProviderID(nextID.startsWith('custom-') ? customProviderID(template.kind) : template.id)
-    setName(template.name)
-    setProviderKind(template.kind)
-    setBaseURL(template.baseURL)
-    setRequiresAPIKey(true)
-    setAPIKey('')
-    setSelectedModels([])
-    setManualModelIDs([''])
-    setModelQuery('')
-    setDiscoveredModels([])
-    setManualModelID(true)
-    setSavedCredentialConfigured(false)
+    patchEditor({
+      templateID: nextID,
+      providerID: nextID.startsWith('custom-') ? customProviderID(template.kind) : template.id,
+      name: template.name,
+      providerKind: template.kind,
+      baseURL: template.baseURL,
+      requiresAPIKey: true,
+      apiKey: '',
+      selectedModels: [],
+      manualModels: [createManualModelDraft()],
+      modelQuery: '',
+      discoveredModels: [],
+      manualModelID: true,
+      savedCredentialConfigured: false,
+    })
   }
 
   const startAdding = () => {
-    selectTemplate('openai')
-    setSelectedModels([])
-    setManualModelIDs([''])
-    setModelQuery('')
-    setMaxInputTokens('')
-    setMaxOutputTokens('')
-    setDiscoveredModels([])
-    setManualModelID(true)
-    setSavedCredentialConfigured(false)
-    setEditing(false)
+    patchEditor({
+      ...initialProviderEditorState,
+      dialogOpen: true,
+    })
     setError('')
-    setDialogOpen(true)
   }
 
   const editProvider = (provider: LocalModelProvider) => {
@@ -132,33 +198,35 @@ export function ModelProvidersSettings({
     const knownTemplate = PROVIDER_TEMPLATES.find((template) => (
       template.id === provider.id && template.kind === provider.kind
     ))
-    setTemplateID(knownTemplate?.id ?? (
-      provider.kind === 'anthropic' ? 'custom-anthropic' : 'custom-openai'
-    ))
-    setProviderID(provider.id)
-    setName(provider.name)
-    setProviderKind(provider.kind)
-    setBaseURL(provider.base_url)
-    setAPIKey('')
-    setSelectedModels(provider.models)
-    setManualModelIDs(provider.models.length > 0
-      ? provider.models.map((candidate) => candidate.model_id)
-      : [''])
-    setModelQuery('')
-    setMaxInputTokens(sharedMaxInputTokens?.toString() ?? '')
-    setMaxOutputTokens(sharedMaxOutputTokens?.toString() ?? '')
-    setRequiresAPIKey(provider.requires_api_key)
-    setDiscoveredModels(provider.models.map((candidate) => ({ ...candidate })))
-    setManualModelID(false)
-    setSavedCredentialConfigured(provider.credential_configured)
-    setEditing(true)
+    patchEditor({
+      templateID: knownTemplate?.id ?? (
+        provider.kind === 'anthropic' ? 'custom-anthropic' : 'custom-openai'
+      ),
+      providerID: provider.id,
+      name: provider.name,
+      providerKind: provider.kind,
+      baseURL: provider.base_url,
+      apiKey: '',
+      selectedModels: provider.models,
+      manualModels: provider.models.length > 0
+        ? provider.models.map((candidate) => createManualModelDraft(candidate.model_id))
+        : [createManualModelDraft()],
+      modelQuery: '',
+      maxInputTokens: sharedMaxInputTokens?.toString() ?? '',
+      maxOutputTokens: sharedMaxOutputTokens?.toString() ?? '',
+      requiresAPIKey: provider.requires_api_key,
+      discoveredModels: provider.models.map((candidate) => ({ ...candidate })),
+      manualModelID: false,
+      savedCredentialConfigured: provider.credential_configured,
+      editing: true,
+      dialogOpen: true,
+    })
     setError('')
-    setDialogOpen(true)
   }
 
   const discoverModels = async () => {
     if (!config) return
-    setDiscovering(true)
+    patchEditor({ discovering: true })
     setError('')
     try {
       const models = await discoverLocalModels(
@@ -178,44 +246,63 @@ export function ModelProvidersSettings({
           })
         }
       }
-      setDiscoveredModels(discovered)
-      setModelQuery('')
+      patchEditor({ discoveredModels: discovered, modelQuery: '' })
       if (models.length === 0) {
-        setManualModelID(true)
+        patchEditor({ manualModelID: true })
         setError(t('settings.models.noModelsFound'))
         return
       }
-      setManualModelID(false)
+      patchEditor({ manualModelID: false })
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
-      setDiscovering(false)
+      patchEditor({ discovering: false })
     }
   }
 
   const toggleModel = (model: DiscoveredLocalModel) => {
-    setSelectedModels((current) => current.some((candidate) => candidate.model_id === model.model_id)
-      ? current.filter((candidate) => candidate.model_id !== model.model_id)
-      : [...current, {
+    patchEditor({
+      selectedModels: selectedModels.some((candidate) => candidate.model_id === model.model_id)
+        ? selectedModels.filter((candidate) => candidate.model_id !== model.model_id)
+        : [...selectedModels, {
           ...model,
-        }])
+        }],
+    })
   }
 
-  const updateManualModel = (index: number, value: string) => {
-    const values = manualModelIDs.map((candidate, candidateIndex) => (
-      candidateIndex === index ? value : candidate
+  const updateManualModel = (id: string, value: string) => {
+    const manualModelsNext = manualModels.map((candidate) => (
+      candidate.id === id ? { ...candidate, value } : candidate
     ))
-    setManualModelIDs(values)
-    const ids = [...new Set(values.map((candidate) => candidate.trim()).filter(Boolean))]
-    setSelectedModels((current) => ids.map((modelID) => current.find(
-      (candidate) => candidate.model_id === modelID,
-    ) ?? {
-      model_id: modelID,
-      display_name: modelID,
-      tool_calling: true,
-      streaming: true,
-      image_inputs: false,
-    }))
+    const ids = [...new Set(manualModelsNext.flatMap((candidate) => {
+      const value = candidate.value.trim()
+      return value ? [value] : []
+    }))]
+    patchEditor({
+      manualModels: manualModelsNext,
+      selectedModels: ids.map((modelID) => selectedModels.find(
+        (candidate) => candidate.model_id === modelID,
+      ) ?? {
+        model_id: modelID,
+        display_name: modelID,
+        tool_calling: true,
+        streaming: true,
+        image_inputs: false,
+      }),
+    })
+  }
+
+  const addManualModel = () => {
+    patchEditor({ manualModels: [...manualModels, createManualModelDraft()] })
+  }
+
+  const useSelectedModelsManually = () => {
+    patchEditor({
+      manualModels: selectedModels.length > 0
+        ? selectedModels.map((model) => createManualModelDraft(model.model_id))
+        : [createManualModelDraft()],
+      manualModelID: true,
+    })
   }
 
   const showModelConfiguration = !requiresAPIKey || Boolean(apiKey.trim()) || savedCredentialConfigured
@@ -227,7 +314,7 @@ export function ModelProvidersSettings({
   const submit = async (event: FormEvent) => {
     event.preventDefault()
     if (!config) return
-    setSaving(true)
+    patchEditor({ saving: true })
     setError('')
     try {
       await upsertLocalModelProvider(
@@ -251,14 +338,13 @@ export function ModelProvidersSettings({
         },
         config,
       )
-      setAPIKey('')
-      setDialogOpen(false)
+      patchEditor({ apiKey: '', dialogOpen: false })
       await refresh()
       onChanged?.()
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
-      setSaving(false)
+      patchEditor({ saving: false })
     }
   }
 
@@ -274,10 +360,18 @@ export function ModelProvidersSettings({
     }
   }
 
+  return { addManualModel, apiKey, baseURL, config, dialogOpen, discoverModels, discovering, editProvider, editing, error, manualModelID, manualModels, maxInputTokens, maxOutputTokens, modelQuery, name, providers, remove, requiresAPIKey, saving, selectTemplate, selectedModels, setAPIKey, setBaseURL, setDialogOpen, setMaxInputTokens, setMaxOutputTokens, setModelQuery, setName, showModelConfiguration, startAdding, submit, t, templateID, toggleModel, updateManualModel, useSelectedModelsManually, visibleModels }
+}
+
+export function ModelProvidersSettings(props: Parameters<typeof useModelProvidersViewModel>[0]) {
+  return <ModelProvidersSettingsView view={useModelProvidersViewModel(props)} />
+}
+
+function ModelProvidersSettingsView({ view }: { view: ReturnType<typeof useModelProvidersViewModel> }) {
+  const { addManualModel, apiKey, baseURL, config, dialogOpen, discoverModels, discovering, editProvider, editing, error, manualModelID, manualModels, maxInputTokens, maxOutputTokens, modelQuery, name, providers, remove, requiresAPIKey, saving, selectTemplate, selectedModels, setAPIKey, setBaseURL, setDialogOpen, setMaxInputTokens, setMaxOutputTokens, setModelQuery, setName, showModelConfiguration, startAdding, submit, t, templateID, toggleModel, updateManualModel, useSelectedModelsManually, visibleModels } = view
   if (!config) {
     return <div className="settings-provider-empty">{t('settings.models.runtimeOffline')}</div>
   }
-
   return (
     <div className="settings-model-providers">
       {providers.length === 0 ? (
@@ -388,21 +482,21 @@ export function ModelProvidersSettings({
                   </div>
                   {manualModelID ? (
                     <div className="settings-provider-manual-models">
-                      {manualModelIDs.map((modelID, index) => (
-                        <div className="settings-provider-manual-row" key={index}>
+                      {manualModels.map((model, index) => (
+                        <div className="settings-provider-manual-row" key={model.id}>
                           <Input
                             aria-label={`${t('settings.models.modelId')} ${index + 1}`}
-                            value={modelID}
+                            value={model.value}
                             placeholder={t('settings.models.modelIdHint')}
-                            onChange={(event) => updateManualModel(index, event.target.value)}
+                            onChange={(event) => updateManualModel(model.id, event.target.value)}
                           />
-                          {index === manualModelIDs.length - 1 ? (
+                          {index === manualModels.length - 1 ? (
                             <button
                               type="button"
                               className="settings-provider-add-model"
                               aria-label={t('settings.models.addModel')}
-                              disabled={!modelID.trim()}
-                              onClick={() => setManualModelIDs((current) => [...current, ''])}
+                              disabled={!model.value.trim()}
+                              onClick={addManualModel}
                             >
                               <IconPlus size={15} aria-hidden="true" />
                             </button>
@@ -459,12 +553,7 @@ export function ModelProvidersSettings({
                         <button
                           type="button"
                           className="settings-provider-manual-model"
-                          onClick={() => {
-                            setManualModelIDs(selectedModels.length > 0
-                              ? selectedModels.map((model) => model.model_id)
-                              : [''])
-                            setManualModelID(true)
-                          }}
+                          onClick={useSelectedModelsManually}
                         >
                           {t('settings.models.enterModelId')}
                         </button>

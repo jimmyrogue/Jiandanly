@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Fragment, forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from 'react'
 import {
   IconBox,
   IconDots,
@@ -48,9 +48,13 @@ import type { Conversation } from '@/shared/local-data/types'
 
 type ConversationSidebarStatus = 'needs_attention' | 'running'
 
+export interface ConversationSidebarHandle {
+  openSearch: () => void
+}
+
 const seenConversationVersionsStorageKey = 'shejane.sidebar.seenConversationVersions.v1'
 
-export function ConversationSidebar({
+function useConversationSidebarViewModel({
   conversations,
   activeID,
   onNewConversation,
@@ -65,7 +69,6 @@ export function ConversationSidebar({
   onOpenPlugins,
   onOpenSettings,
   activeView = 'chat',
-  searchRequestVersion = 0,
   resizeHandle,
 }: {
   conversations: Conversation[]
@@ -86,7 +89,6 @@ export function ConversationSidebar({
    *  all live there now (the old account dropdown + agent-settings dialog). */
   onOpenSettings?: () => void
   activeView?: 'chat' | 'plugins' | 'settings'
-  searchRequestVersion?: number
   resizeHandle?: ReactNode
 }) {
   const { t, locale } = useI18n()
@@ -126,15 +128,13 @@ export function ConversationSidebar({
     if (!version) {
       return
     }
-    setSeenConversationVersions((current) => {
-      if (current[activeConversation.id] === version) {
-        return current
-      }
-      const next = { ...current, [activeConversation.id]: version }
-      writeSeenConversationVersions(next)
-      return next
-    })
-  }, [activeConversation])
+    if (seenConversationVersions[activeConversation.id] === version) {
+      return
+    }
+    const next = { ...seenConversationVersions, [activeConversation.id]: version }
+    setSeenConversationVersions(next)
+    writeSeenConversationVersions(next)
+  }, [activeConversation, seenConversationVersions])
 
   useEffect(() => {
     if (searchOpen) {
@@ -150,21 +150,14 @@ export function ConversationSidebar({
     }
   }, [])
 
-  useEffect(() => {
-    if (!searchRequestVersion) {
-      return
-    }
-    openSearch()
-  }, [searchRequestVersion])
-
-  function openSearch() {
+  const openSearch = useCallback(() => {
     if (searchExitTimerRef.current) {
       window.clearTimeout(searchExitTimerRef.current)
     }
     setSearchMounted(true)
     setSearchOpen(true)
     window.setTimeout(() => searchInputRef.current?.focus(), 0)
-  }
+  }, [])
 
   function closeSearch() {
     setSearchQuery('')
@@ -266,6 +259,20 @@ export function ConversationSidebar({
     )
   }
 
+  return { activeView, deleteConversation, deleteConversationTitle, deleteMessageCount, importInputRef, isDesktop, normalizedQuery, onCollapseSidebar, onDeleteConversation, onImportLocalData, onNewConversation, onOpenPlugins, onOpenSettings, onRenameConversation, openSearch, pinnedConversations, recentConversations, renameConversation, renameTitle, renderConversationRow, resizeHandle, searchInputRef, searchMounted, searchOpen, searchQuery, setDeleteConversationID, setRenameConversationID, setRenameTitle, setSearchQuery, t, toggleSearch }
+}
+
+export const ConversationSidebar = forwardRef<
+  ConversationSidebarHandle,
+  Parameters<typeof useConversationSidebarViewModel>[0]
+>(function ConversationSidebar(props, ref) {
+  const view = useConversationSidebarViewModel(props)
+  useImperativeHandle(ref, () => ({ openSearch: view.openSearch }), [view.openSearch])
+  return <ConversationSidebarView view={view} />
+})
+
+function ConversationSidebarView({ view }: { view: ReturnType<typeof useConversationSidebarViewModel> }) {
+  const { activeView, deleteConversation, deleteConversationTitle, deleteMessageCount, importInputRef, isDesktop, normalizedQuery, onCollapseSidebar, onDeleteConversation, onImportLocalData, onNewConversation, onOpenPlugins, onOpenSettings, onRenameConversation, pinnedConversations, recentConversations, renameConversation, renameTitle, renderConversationRow, resizeHandle, searchInputRef, searchMounted, searchOpen, searchQuery, setDeleteConversationID, setRenameConversationID, setRenameTitle, setSearchQuery, t, toggleSearch } = view
   return (
     <aside className="sidebar">
       {resizeHandle}

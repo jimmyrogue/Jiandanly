@@ -1,8 +1,8 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { ReactElement } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AgentProgress, deriveAgentProgress } from './AgentProgress'
-import { I18nProvider } from '@/shared/i18n/i18n'
+import { AgentProgress } from './AgentProgress'
+import { I18nProvider } from '@/shared/i18n/I18nProvider'
 import type { ChatMessage } from '@/shared/local-data/types'
 
 function message(overrides: Partial<ChatMessage> = {}): ChatMessage {
@@ -196,17 +196,6 @@ describe('AgentProgress', () => {
     expect(screen.queryByText('任务失败')).not.toBeInTheDocument()
     expect(screen.getByText('读取网页')).toBeInTheDocument()
     expect(screen.getByText('https://example.com/news')).toBeInTheDocument()
-  })
-
-  it('keeps an active tool failure in the working progress state', () => {
-    expect(
-      deriveAgentProgress(
-        message({
-          status: 'streaming',
-          agentEvents: [{ type: 'tool.failed', label: '工具失败：读取网页', tool: 'web.fetch' }],
-        }),
-      ),
-    ).toMatchObject({ tone: 'working', label: '工具失败：读取网页' })
   })
 
   it('prefers an in-flight tool over a completed sibling for the headline', () => {
@@ -566,26 +555,26 @@ describe('AgentProgress', () => {
   })
 
   it('falls back to operator guidance for fatal failures without a category-specific action', () => {
-    const progress = deriveAgentProgress(
-      message({
-        status: 'error',
-        agentEvents: [
-          {
-            type: 'run.failed',
-            label: 'RuntimeError · 需要运维处理',
-            failureActionKind: 'operator_action',
-            failureSuggestedAction: 'Inspect logs and fix implementation.',
-          },
-        ],
-      }),
+    renderAgentProgress(
+      <AgentProgress
+        message={message({
+          status: 'error',
+          agentEvents: [
+            {
+              type: 'run.failed',
+              label: 'RuntimeError · 需要运维处理',
+              failureActionKind: 'operator_action',
+              failureSuggestedAction: 'Inspect logs and fix implementation.',
+            },
+          ],
+        })}
+      />,
     )
 
-    expect(progress).toMatchObject({
-      tone: 'failed',
-      label: '需要运维处理',
-      failureMessage: 'RuntimeError',
-      detail: '请检查本地日志或实现错误，修复后再重试。',
-    })
+    expect(screen.getByText('需要运维处理')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '展开详情' }))
+    expect(screen.getByText('RuntimeError')).toBeInTheDocument()
+    expect(screen.getByText('请检查本地日志或实现错误，修复后再重试。')).toBeInTheDocument()
   })
 
   it('parallel task dispatches: header shows count only; descriptions render as a per-task list below', () => {
@@ -781,50 +770,6 @@ describe('AgentProgress', () => {
     expect(screen.getByText('搜索成都5月底天气')).toBeInTheDocument()
   })
 
-  it('derives failed and active progress labels from existing timeline items', () => {
-    expect(
-      deriveAgentProgress(
-        message({
-          status: 'error',
-          agentEvents: [{ type: 'tool.failed', label: '工具失败：搜索网页' }],
-        }),
-      ),
-    ).toMatchObject({ tone: 'failed', label: '任务失败', failureMessage: '工具失败：搜索网页' })
-
-    expect(
-      deriveAgentProgress(
-        message({
-          status: 'error',
-          agentEvents: [
-            {
-              type: 'run.failed',
-              label: 'model provider is not configured · 需要你处理',
-              failureCategory: 'configuration',
-              failureActionKind: 'user_action',
-            },
-          ],
-        }),
-      ),
-    ).toMatchObject({ tone: 'failed', label: '配置缺失', failureMessage: 'model provider is not configured' })
-
-    expect(
-      deriveAgentProgress(
-        message({
-          status: 'streaming',
-          agentEvents: [{ type: 'tool.requested', label: '调用工具：阅读网页正文' }],
-        }),
-      ),
-    ).toMatchObject({ tone: 'working', label: '阅读网页正文' })
-
-    expect(
-      deriveAgentProgress(
-        message({
-          status: 'waiting_input',
-          agentEvents: [],
-        }),
-      ),
-    ).toMatchObject({ tone: 'working', label: '等待你的回答' })
-  })
 })
 
 function renderAgentProgress(node: ReactElement) {

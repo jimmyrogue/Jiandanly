@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+const zhWordSegmenter = typeof Intl !== 'undefined' && 'Segmenter' in Intl
+  ? new Intl.Segmenter('zh', { granularity: 'word' })
+  : null
+
 export interface StreamSegment {
   id: number
   text: string
@@ -28,9 +32,8 @@ export function segmentStreamText(text: string, locale: SmoothTextStreamOptions[
     return []
   }
   const resolvedLocale = locale === 'auto' ? (containsCJK(text) ? 'zh' : 'en') : locale
-  if (resolvedLocale === 'zh' && typeof Intl !== 'undefined' && 'Segmenter' in Intl) {
-    const segmenter = new Intl.Segmenter('zh', { granularity: 'word' })
-    return Array.from(segmenter.segment(text), (part) => part.segment).filter(Boolean)
+  if (resolvedLocale === 'zh' && zhWordSegmenter) {
+    return Array.from(zhWordSegmenter.segment(text), (part) => part.segment).filter(Boolean)
   }
   return text.match(/\S+\s*|\s+/g) ?? []
 }
@@ -47,6 +50,7 @@ export function useSmoothTextStream(options: SmoothTextStreamOptions = {}): Smoo
   const timerRef = useRef<number | undefined>()
   const idRef = useRef(0)
   const endedRef = useRef(false)
+  const committedTextRef = useRef('')
 
   useEffect(() => {
     onCommitRef.current = options.onCommit
@@ -58,7 +62,8 @@ export function useSmoothTextStream(options: SmoothTextStreamOptions = {}): Smoo
     }
     const next = items.map((text) => ({ id: idRef.current++, text }))
     setSegments((previous) => [...previous, ...next])
-    onCommitRef.current?.(items.join(''))
+    committedTextRef.current += items.join('')
+    onCommitRef.current?.(committedTextRef.current)
   }, [])
 
   const drainBufferToQueue = useCallback((flushAll: boolean) => {
@@ -110,7 +115,11 @@ export function useSmoothTextStream(options: SmoothTextStreamOptions = {}): Smoo
     queueRef.current = []
     idRef.current = initialText ? 1 : 0
     endedRef.current = false
+    committedTextRef.current = initialText
     setSegments(initialText ? [{ id: 0, text: initialText }] : [])
+    if (initialText) {
+      onCommitRef.current?.(initialText)
+    }
     setIsStreaming(true)
     timerRef.current = window.setTimeout(tick, tickMs)
   }, [stopTimer, tick, tickMs])
@@ -144,6 +153,7 @@ export function useSmoothTextStream(options: SmoothTextStreamOptions = {}): Smoo
     bufferRef.current = ''
     queueRef.current = []
     endedRef.current = false
+    committedTextRef.current = ''
     setSegments([])
     setIsStreaming(false)
     stopTimer()

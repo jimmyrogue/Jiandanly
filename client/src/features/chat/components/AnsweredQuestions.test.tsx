@@ -1,7 +1,7 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import { AnsweredQuestions } from './AnsweredQuestions'
-import { I18nProvider } from '@/shared/i18n/i18n'
+import { I18nProvider } from '@/shared/i18n/I18nProvider'
 import type { ChatMessage } from '@/shared/local-data/types'
 
 afterEach(() => cleanup())
