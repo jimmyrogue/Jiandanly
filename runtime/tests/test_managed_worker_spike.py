@@ -41,6 +41,44 @@ def test_vision_host_call_rejects_unimplemented_structured_task() -> None:
         _vision_request(frame, invocation)
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("model_binding_id", "vision-forged", "model binding changed"),
+        ("input_ids", ["unbound-image"], "inputs are invalid"),
+    ],
+)
+def test_vision_host_call_cannot_change_frozen_scope(
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    invocation = {
+        "grants": {"capabilities": ["model.vision.invoke"]},
+        "model_binding_id": "vision-default",
+        "inputs": [{"id": "image"}],
+    }
+    params = {
+        "model_binding_id": "vision-default",
+        "input_ids": ["image"],
+        "task": "describe",
+        "prompt": "Describe the image.",
+        "max_output_tokens": 64,
+    }
+    params[field] = value
+
+    with pytest.raises(WorkerProtocolError, match=message):
+        _vision_request(
+            {
+                "jsonrpc": "2.0",
+                "id": "worker:vision:1",
+                "method": "model/vision/invoke",
+                "params": params,
+            },
+            invocation,
+        )
+
+
 @pytest.mark.asyncio
 async def test_managed_worker_renders_authorized_document_to_staging(tmp_path: Path) -> None:
     input_root = tmp_path / "input"
@@ -443,3 +481,57 @@ print(json.dumps({"jsonrpc":"2.0","id":"worker:vision:1","method":"model/vision/
             input_root=input_root,
             output_root=output_root,
         )
+
+
+@pytest.mark.asyncio
+async def test_managed_worker_allows_only_one_vision_host_call(tmp_path: Path) -> None:
+    input_root = tmp_path / "input"
+    output_root = tmp_path / "output"
+    input_root.mkdir()
+    output_root.mkdir()
+    script = r"""
+import json
+import sys
+
+def send(value):
+    print(json.dumps(value, separators=(",", ":")), flush=True)
+
+initialize = json.loads(sys.stdin.readline())
+send({"jsonrpc":"2.0","id":initialize["id"],"result":{"protocol_version":1,"process_isolated":True,"access_isolated":False,"resource_isolated":False,"sandboxed":False}})
+json.loads(sys.stdin.readline())
+request = {"jsonrpc":"2.0","method":"model/vision/invoke","params":{"model_binding_id":"vision-default","input_ids":["image"],"task":"describe","prompt":"Describe.","max_output_tokens":64}}
+send({"id":"worker:vision:1", **request})
+json.loads(sys.stdin.readline())
+send({"id":"worker:vision:2", **request})
+"""
+    calls = 0
+
+    async def invoke_vision(_params: dict[str, object]) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        return {"text": "A paper lantern."}
+
+    executor = ManagedWorkerActionExecutor(
+        (sys.executable, "-c", script),
+        vision_handler=invoke_vision,
+    )
+    with pytest.raises(WorkerProtocolError, match="host-call limit"):
+        await executor.invoke(
+            {
+                "invocation_id": "923e4567-e89b-42d3-a456-426614174008",
+                "operation_id": "run_01:vision.analyze:second-call",
+                "action": {
+                    "plugin_id": "dev.shejane.fixture.vision",
+                    "plugin_digest": "sha256:" + "e" * 64,
+                    "action_id": "vision.analyze",
+                },
+                "inputs": [{"id": "image"}],
+                "grants": {"capabilities": ["model.vision.invoke"]},
+                "model_binding_id": "vision-default",
+                "limits": {"timeout_ms": 2_000, "memory_mb": 64, "output_mb": 1},
+            },
+            input_root=input_root,
+            output_root=output_root,
+        )
+
+    assert calls == 1

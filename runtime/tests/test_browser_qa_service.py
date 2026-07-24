@@ -151,6 +151,20 @@ for await (const line of lines) {
     )
     monkeypatch.setenv("SHEJANE_RUNTIME_NODE_PATH", node)
     monkeypatch.setenv("SYSTEMROOT", "C:\\Windows")
+    prepared: list[Path] = []
+
+    def prepare_on_first_call(
+        source: Path,
+        _alias_root: Path,
+        _digest: str,
+    ) -> Path:
+        prepared.append(source)
+        return source
+
+    monkeypatch.setattr(
+        "shejane_runtime.plugins.browser_qa.prepare_browser_runtime",
+        prepare_on_first_call,
+    )
     profile = tmp_path / "profiles" / "workspace"
     service = BrowserQAService(
         package,
@@ -159,9 +173,11 @@ for await (const line of lines) {
         browser_runtime_root=tmp_path / "browser-runtime",
         runtime_asset=runtime_asset(payload),
     )
+    assert prepared == []
 
     first = await service.call("observe", {}, timeout_ms=5_000)
     second = await service.call("observe", {}, timeout_ms=5_000)
+    assert prepared == [payload / "browsers"]
     assert first["pid"] == second["pid"]
     assert first["profile"] == str(profile)
     assert str(first["proxy"]).startswith("http://127.0.0.1:")

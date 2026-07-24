@@ -265,18 +265,23 @@ class BrowserQAService(ComputerUseService):
         self._profile_root.mkdir(parents=True, exist_ok=True)
         self._headless = headless
         self._runtime_asset = runtime_asset
-        self._browsers_root = prepare_browser_runtime(
-            runtime_asset.payload / "browsers",
-            browser_runtime_root,
-            runtime_asset.digest,
-        )
+        self._browser_runtime_root = browser_runtime_root
+        self._browsers_root: Path | None = None
         self._proxy = BrowserNetworkProxy()
 
     async def _ensure_process(self) -> asyncio.subprocess.Process:
+        if self._browsers_root is None:
+            self._browsers_root = await asyncio.to_thread(
+                prepare_browser_runtime,
+                self._runtime_asset.payload / "browsers",
+                self._browser_runtime_root,
+                self._runtime_asset.digest,
+            )
         await self._proxy.start()
         return await super()._ensure_process()
 
     def _extra_environment(self) -> dict[str, str]:
+        assert self._browsers_root is not None
         return {
             "SHEJANE_BROWSER_QA_PROFILE": windows_extended_path(self._profile_root),
             "SHEJANE_BROWSER_QA_PROXY": self._proxy.url,

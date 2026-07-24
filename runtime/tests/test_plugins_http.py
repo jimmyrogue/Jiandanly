@@ -174,7 +174,12 @@ def _pack_computer_use_builtin(destination: Path) -> None:
         archive.writestr("payload/bridge-server.mjs", "process.exit(0)\n")
 
 
-def _pack_browser_qa_builtin(destination: Path, digest: str) -> None:
+def _pack_browser_qa_builtin(
+    destination: Path,
+    digest: str,
+    *,
+    bridge_source: str = "process.exit(0)\n",
+) -> None:
     manifest = {
         "schema_version": 1,
         "id": "org.shejane.browser-qa",
@@ -222,7 +227,7 @@ def _pack_browser_qa_builtin(destination: Path, digest: str) -> None:
         archive.writestr(".shejane-plugin/plugin.json", json.dumps(manifest))
         archive.writestr("actions/open.input.json", json.dumps(schema))
         archive.writestr("actions/result.output.json", json.dumps(schema))
-        archive.writestr("payload/bridge-server.mjs", "process.exit(0)\n")
+        archive.writestr("payload/bridge-server.mjs", bridge_source)
 
 
 @pytest.fixture
@@ -376,7 +381,7 @@ def test_browser_qa_is_runtime_managed_and_cannot_be_removed(
         assert remove.json()["detail"]["code"] == "builtin_capability_managed"
 
 
-def test_plugin_list_does_not_reconcile_fixed_packages_after_startup(
+def test_plugin_list_reads_registry_without_activating_fixed_package(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     asset = tmp_path / "browser-qa.shejane-runtime-asset"
@@ -392,7 +397,15 @@ def test_plugin_list_does_not_reconcile_fixed_packages_after_startup(
         .digest
     )
     package = tmp_path / "browser-qa.shejane-plugin"
-    _pack_browser_qa_builtin(package, digest)
+    activation_marker = tmp_path / "browser-qa-started"
+    _pack_browser_qa_builtin(
+        package,
+        digest,
+        bridge_source=(
+            "import { writeFileSync } from 'node:fs';\n"
+            f"writeFileSync({json.dumps(str(activation_marker))}, 'started');\n"
+        ),
+    )
     monkeypatch.setattr(
         "shejane_runtime.plugins.registry.current_managed_worker_platform",
         lambda: "darwin/arm64",
@@ -413,6 +426,7 @@ def test_plugin_list_does_not_reconcile_fixed_packages_after_startup(
 
     assert listed.status_code == 200, listed.text
     assert [plugin["id"] for plugin in listed.json()["plugins"]] == ["org.shejane.browser-qa"]
+    assert not activation_marker.exists()
 
 
 def test_ocr_asset_and_plugin_are_runtime_managed_and_cannot_be_removed(
