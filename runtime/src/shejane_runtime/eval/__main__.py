@@ -2,7 +2,7 @@
 
     SHEJANE_EVAL_RUNTIME_URL  (default http://127.0.0.1:17371)
     SHEJANE_EVAL_TOKEN       (or SHEJANE_RUNTIME_TOKEN) — runtime bearer token
-    SHEJANE_EVAL_MODEL       concrete local:<provider>:<model> selection
+    SHEJANE_EVAL_MODEL       concrete local:<connection>:<model> selection
 
 Exits non-zero if any case fails, so it gates CI / `make eval`. Uses the
 heuristic judge (objective, no extra LLM cost). For a meaningful score the
@@ -28,7 +28,9 @@ from .harness import evaluate, format_report, heuristic_judge
 def _required_model() -> str:
     model = os.environ.get("SHEJANE_EVAL_MODEL", "").strip()
     if len(model) > 128 or re.fullmatch(RUNTIME_MODEL_PATTERN, model) is None:
-        raise ValueError("set SHEJANE_EVAL_MODEL to a concrete local:<provider>:<model> selection")
+        raise ValueError(
+            "set SHEJANE_EVAL_MODEL to a concrete local:<connection>:<model> selection"
+        )
     return model
 
 

@@ -11,7 +11,7 @@
  *
  * The suite boots a real Runtime and uses its explicit fake-model seam, so
  * HTTP, commands, SSE and the compiled agent loop are all exercised without
- * depending on an external model provider.
+ * depending on an external model service.
  */
 import { describe, it, expect } from 'vitest'
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs'

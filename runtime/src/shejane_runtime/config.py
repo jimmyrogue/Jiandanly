@@ -168,7 +168,7 @@ class Settings(BaseSettings):
         return value
 
     # When set, the agent uses a deterministic in-process fake LLM instead of
-    # any model provider — no network, no key. Used by the SSE contract test to
+    # any model service — no network, no key. Used by the SSE contract test to
     # exercise the real run/stream pipeline (event names + envelope) without a
     # live upstream. NEVER enable in production.
     fake_llm: bool = Field(default=False, alias="SHEJANE_FAKE_LLM")

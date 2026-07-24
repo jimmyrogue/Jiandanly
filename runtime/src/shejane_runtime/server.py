@@ -17,6 +17,7 @@ import os
 import re
 import shutil
 import tempfile
+import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -38,6 +39,7 @@ from . import __version__
 from .agent.builder import open_checkpointer, open_store
 from .api_schemas import (
     MAX_LOCAL_REQUEST_BODY_BYTES,
+    AddModelServiceModelRequest,
     AnswerQuestionCommand,
     AnswerQuestionCommandReceipt,
     AnswerQuestionRequest,
@@ -45,18 +47,18 @@ from .api_schemas import (
     CancelRunCommandReceipt,
     CancelRunResponse,
     ClearMemoryResponse,
+    ConnectModelServiceRequest,
     CreateRunRequest,
     CreateScheduledRunRequest,
     CreateWorkspaceRequest,
     DeleteLocalThreadResponse,
     DiagnoseWorkspaceRequest,
-    DiscoverLocalModelsRequest,
-    DiscoverLocalModelsResponse,
     ForkRunRequest,
     HealthResponse,
+    ImportModelServiceRequest,
     InjectRunInstructionRequest,
     InjectRunInstructionResponse,
-    ListLocalModelProvidersResponse,
+    ListModelServiceConnectionsResponse,
     ListPluginsResponse,
     ListRunsResponse,
     ListScheduledRunsResponse,
@@ -64,7 +66,6 @@ from .api_schemas import (
     ListThreadsResponse,
     ListWorkspacesResponse,
     LocalArtifact,
-    LocalModelProvider,
     LocalRun,
     LocalRunDiagnostics,
     LocalRuntimeModelCatalog,
@@ -78,6 +79,9 @@ from .api_schemas import (
     McpServerInfo,
     McpServerWriteRequest,
     McpServerWriteResponse,
+    ModelServiceConnection,
+    ModelServiceModel,
+    ModelServicePresetCatalog,
     PermissionResolution,
     PlanApprovalResolution,
     PlanResolveCommand,
@@ -101,6 +105,7 @@ from .api_schemas import (
     PptxOutlineResponse,
     QuestionAnswer,
     ReconcileToolRequest,
+    ReconnectModelServiceRequest,
     ResolvePermissionCommand,
     ResolvePermissionCommandReceipt,
     ResolvePermissionRequest,
@@ -118,7 +123,6 @@ from .api_schemas import (
     ToolReconciliationResolution,
     UpdateLocalThreadRequest,
     UpdateRuntimeSettingsRequest,
-    UpsertLocalModelProviderRequest,
 )
 from .auth import LOCAL_OWNER_PRINCIPAL_ID, PairingTokenAuthMiddleware
 from .config import Settings, get_settings
@@ -133,6 +137,11 @@ from .model_credentials import (
     set_model_api_key,
 )
 from .model_profiles import apply_known_model_profile_defaults, discovered_model_profile
+from .model_services import (
+    adapter_for_custom_service,
+    list_model_service_presets,
+    model_service_preset,
+)
 from .permission_policy import PermissionScopeNotAllowedError
 from .plugins.registry import PluginRegistry, PluginRegistryError
 from .progress_ledger import (
@@ -205,17 +214,9 @@ def _apply_runtime_settings(settings: Settings, values: dict[str, Any]) -> Setti
 
 _HANDOFF_STATUSES = {"completed", "failed", "canceled", "waiting_permission", "waiting_input"}
 _TERMINAL_RUN_STATUSES = {"completed", "failed", "canceled", "cleanup_required"}
-_MODEL_PROVIDER_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
-_MODEL_CATALOG_PROVIDER_HOSTS = {
-    ("openai", "api.openai.com"),
-    ("openrouter", "openrouter.ai"),
-    ("deepseek", "api.deepseek.com"),
-    ("anthropic", "api.anthropic.com"),
-}
-_MODELS_DEV_URL = "https://models.dev/api.json"
 
 
-def _model_provider_base_url(raw: str) -> str:
+def _model_service_base_url(raw: str) -> str:
     value = raw.strip().rstrip("/")
     parsed = urlparse(value)
     if (
@@ -226,11 +227,11 @@ def _model_provider_base_url(raw: str) -> str:
         or bool(parsed.query)
         or bool(parsed.fragment)
     ):
-        raise HTTPException(status_code=400, detail="model provider base URL is invalid")
+        raise HTTPException(status_code=400, detail="model service address is invalid")
     return value
 
 
-def _provider_models(row: dict[str, Any]) -> list[dict[str, Any]]:
+def _model_connection_models(row: dict[str, Any]) -> list[dict[str, Any]]:
     try:
         models = json.loads(row.get("models_json") or "[]")
     except (json.JSONDecodeError, TypeError):
@@ -240,42 +241,287 @@ def _provider_models(row: dict[str, Any]) -> list[dict[str, Any]]:
     return [
         apply_known_model_profile_defaults(
             model,
-            provider_base_url=str(row.get("base_url") or ""),
+            service_base_url=str(row.get("base_url") or ""),
         )
-        if isinstance(model, dict)
-        else model
         for model in models
+        if isinstance(model, dict)
     ]
 
 
-async def _model_provider_response(
+def _merge_refreshed_model_catalog(
+    current: list[dict[str, Any]],
+    refreshed: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    current_by_id = {str(model["model_id"]): model for model in current}
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for model in refreshed:
+        model_id = str(model["model_id"])
+        previous = current_by_id.get(model_id)
+        if previous and previous.get("verification") == "verified":
+            model = {
+                **model,
+                "verification": "verified",
+                "streaming": bool(previous.get("streaming")),
+                "tool_calling": bool(previous.get("tool_calling")),
+            }
+        merged.append(model)
+        seen.add(model_id)
+    merged.extend(
+        model
+        for model in current
+        if model.get("source") == "manual" and str(model["model_id"]) not in seen
+    )
+    return merged
+
+
+async def _model_service_response(
     row: dict[str, Any],
     *,
     credential_configured: bool | None = None,
-) -> LocalModelProvider:
-    requires_api_key = bool(row.get("requires_api_key"))
+) -> ModelServiceConnection:
     configured = credential_configured
     if configured is None:
-        configured = not requires_api_key or bool(
+        configured = bool(
             await get_model_api_key(
                 str(row["principal_id"]),
                 str(row["id"]),
                 str(row["credential_ref"]),
             )
         )
-    return LocalModelProvider(
+    return ModelServiceConnection(
         id=str(row["id"]),
+        preset_id=str(row["preset_id"]),
         name=str(row["name"]),
-        kind=str(row["kind"]),
+        region=str(row["region"]),
+        adapter_id=str(row["adapter_id"]),
         base_url=str(row["base_url"]),
-        requires_api_key=requires_api_key,
         credential_configured=configured,
-        models=_provider_models(row),
-        enabled=bool(row.get("enabled")),
+        catalog_status=str(row["catalog_status"]),
+        models=_model_connection_models(row),
         version=int(row.get("version") or 1),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
     )
+
+
+async def _refresh_model_service_models(
+    *,
+    preset: dict[str, Any],
+    base_url: str,
+    adapter_id: str,
+    api_key: str,
+) -> tuple[list[dict[str, Any]], str]:
+    bundled = [dict(model) for model in preset.get("models", ())]
+    headers = {"Accept": "application/json"}
+    discovery_url = f"{base_url}/models"
+    if adapter_id == "anthropic_messages":
+        discovery_url = (
+            f"{base_url}/models" if base_url.endswith("/v1") else f"{base_url}/v1/models"
+        )
+        headers["anthropic-version"] = "2023-06-01"
+        headers["x-api-key"] = api_key
+    else:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=8.0,
+            follow_redirects=False,
+            trust_env=False,
+        ) as client:
+            response = await client.get(discovery_url, headers=headers)
+    except httpx.RequestError:
+        return bundled, "stale" if bundled else "unavailable"
+
+    if response.status_code == 401:
+        raise HTTPException(status_code=401, detail="model service API key is invalid")
+    if not response.is_success:
+        return bundled, "stale" if bundled else "unavailable"
+    try:
+        payload = response.json()
+    except ValueError:
+        return bundled, "stale" if bundled else "unavailable"
+    candidates = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(candidates, list):
+        return bundled, "stale" if bundled else "unavailable"
+
+    bundled_by_id = {str(model["model_id"]): model for model in bundled}
+    models: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        model_id = candidate.get("id")
+        if (
+            not isinstance(model_id, str)
+            or not model_id
+            or len(model_id) > 200
+            or any(character.isspace() for character in model_id)
+            or model_id in seen
+        ):
+            continue
+        seen.add(model_id)
+        raw_name = candidate.get("name") or candidate.get("display_name")
+        display_name = raw_name.strip() if isinstance(raw_name, str) else model_id
+        known = bundled_by_id.get(model_id)
+        profile = discovered_model_profile(
+            candidate,
+            model_id=model_id,
+            display_name=display_name[:100] or model_id[:100],
+            service_base_url=base_url,
+        )
+        profile.update(
+            {
+                "source": "bundled" if known else "discovered",
+                "verification": "verified" if known else "unverified",
+                "recommended": bool(known and known.get("recommended")),
+            }
+        )
+        if known:
+            profile.update({key: value for key, value in known.items() if value is not None})
+        models.append(profile)
+        if len(models) >= 1000:
+            break
+    for model in bundled:
+        if model["model_id"] not in seen:
+            models.append(model)
+    return models, "ready"
+
+
+async def _verify_model_service_compatibility(
+    *,
+    base_url: str,
+    adapter_id: str,
+    api_key: str,
+    model_id: str,
+) -> None:
+    headers = {
+        "Accept": "text/event-stream",
+        "Content-Type": "application/json",
+    }
+    if adapter_id == "anthropic_messages":
+        url = f"{base_url}/messages" if base_url.endswith("/v1") else f"{base_url}/v1/messages"
+        headers.update(
+            {
+                "anthropic-version": "2023-06-01",
+                "x-api-key": api_key,
+            }
+        )
+        payload = {
+            "model": model_id,
+            "max_tokens": 64,
+            "stream": True,
+            "messages": [{"role": "user", "content": "Call the ping tool."}],
+            "tools": [
+                {
+                    "name": "ping",
+                    "description": "Return a compatibility signal.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": False,
+                    },
+                }
+            ],
+            "tool_choice": {"type": "tool", "name": "ping"},
+        }
+    else:
+        url = f"{base_url}/chat/completions"
+        headers["Authorization"] = f"Bearer {api_key}"
+        payload = {
+            "model": model_id,
+            "max_tokens": 64,
+            "stream": True,
+            "messages": [{"role": "user", "content": "Call the ping tool."}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "ping",
+                        "description": "Return a compatibility signal.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {},
+                            "additionalProperties": False,
+                        },
+                    },
+                }
+            ],
+            "tool_choice": {"type": "function", "function": {"name": "ping"}},
+        }
+    try:
+        async with httpx.AsyncClient(
+            timeout=20.0,
+            follow_redirects=False,
+            trust_env=False,
+        ) as client:
+            response = await client.post(url, headers=headers, json=payload)
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "provider_unavailable",
+                "message": "模型服务暂时无法连接，请稍后重试。",
+            },
+        ) from exc
+    if response.status_code == 401:
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "invalid_api_key", "message": "API Key 无效，请检查后重试。"},
+        )
+    if not response.is_success:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "incompatible_model",
+                "message": "模型未通过流式工具调用兼容性测试。",
+            },
+        )
+    if "text/event-stream" not in response.headers.get("content-type", ""):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "incompatible_model",
+                "message": "模型没有返回流式结果。",
+            },
+        )
+    events: list[dict[str, Any]] = []
+    for line in response.text.splitlines():
+        if not line.startswith("data:"):
+            continue
+        data = line[5:].strip()
+        if not data or data == "[DONE]":
+            continue
+        try:
+            event = json.loads(data)
+        except ValueError:
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+    if adapter_id == "anthropic_messages":
+        compatible = any(
+            event.get("type") == "content_block_start"
+            and isinstance(event.get("content_block"), dict)
+            and event["content_block"].get("type") == "tool_use"
+            for event in events
+        )
+    else:
+        compatible = any(
+            isinstance(choice, dict)
+            and isinstance(choice.get("delta"), dict)
+            and bool(choice["delta"].get("tool_calls"))
+            for event in events
+            for choice in (event.get("choices") if isinstance(event.get("choices"), list) else ())
+        )
+    if not compatible:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "incompatible_model",
+                "message": "模型没有完成工具调用，无法用于 Agent 任务。",
+            },
+        )
 
 
 class _RequestBodyTooLarge(Exception):
@@ -785,7 +1031,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         exc: RequestValidationError,
     ) -> JSONResponse:
         # FastAPI normally includes the rejected input in its 422 payload.
-        # Local requests can contain provider credentials, so return only
+        # Local requests can contain model-service credentials, so return only
         # the location, message, and error type across the entire API.
         errors = [
             {key: value for key, value in error.items() if key not in {"input", "ctx"}}
@@ -849,28 +1095,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/v1/runtime", response_model=RuntimeInfo)
     async def runtime_info(request: Request) -> RuntimeInfo:
         runtime_settings: Settings = app.state.settings
-        provider_configured = False
+        service_configured = False
         store: LocalStore = app.state.store
         try:
-            providers = await store.list_model_providers(principal_id=request.state.principal_id)
-            for provider in providers:
-                if bool(provider.get("enabled")) and (
-                    not bool(provider.get("requires_api_key"))
-                    or await get_model_api_key(
-                        request.state.principal_id,
-                        str(provider["id"]),
-                        str(provider["credential_ref"]),
-                    )
+            connections = await store.list_model_connections(
+                principal_id=request.state.principal_id
+            )
+            for connection in connections:
+                if await get_model_api_key(
+                    request.state.principal_id,
+                    str(connection["id"]),
+                    str(connection["credential_ref"]),
                 ):
-                    provider_configured = True
+                    service_configured = True
                     break
         except CredentialStoreError:
-            provider_configured = False
+            service_configured = False
         return RuntimeInfo(
             protocol_version=RUNTIME_PROTOCOL_VERSION,
             runtime_version=__version__,
             capabilities=sorted(runtime_capabilities(runtime_settings)),
-            model_provider_configured=provider_configured,
+            model_service_configured=service_configured,
         )
 
     @app.get("/v1/settings", response_model=RuntimeSettingsResponse)
@@ -908,341 +1153,577 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return _runtime_settings_payload(updated, version=int(stored["version"]))
 
     @app.get(
-        "/v1/model-providers",
-        response_model=ListLocalModelProvidersResponse,
+        "/v1/model-services/presets",
+        response_model=ModelServicePresetCatalog,
     )
-    async def list_model_providers(request: Request) -> dict[str, Any]:
+    async def list_model_services_presets() -> dict[str, Any]:
+        return {"services": list_model_service_presets()}
+
+    @app.get(
+        "/v1/model-services",
+        response_model=ListModelServiceConnectionsResponse,
+    )
+    async def list_model_services(request: Request) -> dict[str, Any]:
         store: LocalStore = app.state.store
         try:
-            providers = [
-                await _model_provider_response(row)
-                for row in await store.list_model_providers(principal_id=request.state.principal_id)
-            ]
+            rows = await store.list_model_connections(principal_id=request.state.principal_id)
+            services = await asyncio.gather(*(_model_service_response(row) for row in rows))
         except CredentialStoreError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
-        return {"providers": providers}
+        return {"services": services}
 
     @app.post(
-        "/v1/model-providers/discover-models",
-        response_model=DiscoverLocalModelsResponse,
+        "/v1/model-services",
+        response_model=ModelServiceConnection,
+        status_code=201,
     )
-    async def discover_model_provider_models(
+    async def connect_model_service(
         request: Request,
-        body: DiscoverLocalModelsRequest,
-    ) -> dict[str, Any]:
-        base_url = _model_provider_base_url(body.base_url)
-        api_key = body.api_key.strip() if body.api_key is not None else None
-        provider_id = body.provider_id.strip().lower() if body.provider_id else None
-        if provider_id and not _MODEL_PROVIDER_ID_RE.fullmatch(provider_id):
-            raise HTTPException(status_code=400, detail="model provider id is invalid")
-
-        if provider_id and not api_key:
-            store: LocalStore = app.state.store
-            provider = await store.get_model_provider(
-                principal_id=request.state.principal_id,
-                provider_id=provider_id,
-            )
-            if provider is not None:
-                if str(provider["kind"]) != body.kind:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="saved credentials can only be used with the saved provider kind",
-                    )
-                if _model_provider_base_url(str(provider["base_url"])) != base_url:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="saved credentials can only be used with the saved provider URL",
-                    )
+        body: ConnectModelServiceRequest,
+    ) -> ModelServiceConnection:
+        preset = model_service_preset(body.preset_id)
+        if preset is None:
+            raise HTTPException(status_code=400, detail="model service is not supported")
+        api_key = body.api_key.strip()
+        if not api_key:
+            raise HTTPException(status_code=400, detail="API key is required")
+        if body.preset_id == "custom":
+            if not body.name or not body.base_url:
+                raise HTTPException(
+                    status_code=400,
+                    detail="custom model service needs a name and address",
+                )
+            name = body.name.strip()
+            region = "custom"
+            base_url = _model_service_base_url(body.base_url)
+            detected: dict[str, tuple[list[dict[str, Any]], str]] = {}
+            credential_error: HTTPException | None = None
+            for candidate in ("openai_chat", "anthropic_messages"):
                 try:
-                    api_key = await get_model_api_key(
-                        request.state.principal_id,
-                        provider_id,
-                        str(provider["credential_ref"]),
+                    candidate_models, candidate_status = await _refresh_model_service_models(
+                        preset=preset,
+                        base_url=base_url,
+                        adapter_id=candidate,
+                        api_key=api_key,
                     )
-                except CredentialStoreError as exc:
-                    raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-        headers = {"Accept": "application/json"}
-        discovery_url = f"{base_url}/models"
-        if body.kind == "anthropic":
-            discovery_url = (
-                f"{base_url}/models" if base_url.endswith("/v1") else f"{base_url}/v1/models"
+                except HTTPException as exc:
+                    if exc.status_code == 401:
+                        credential_error = exc
+                    continue
+                if candidate_status == "ready":
+                    detected[candidate] = (candidate_models, candidate_status)
+            adapter_id = body.adapter_id or adapter_for_custom_service(
+                openai_chat_available="openai_chat" in detected,
+                anthropic_messages_available="anthropic_messages" in detected,
             )
-            headers["anthropic-version"] = "2023-06-01"
-            if api_key:
-                headers["x-api-key"] = api_key
-        elif api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
-        try:
-            async with httpx.AsyncClient(
-                timeout=15.0,
-                follow_redirects=False,
-                trust_env=False,
-            ) as client:
-                upstream = await client.get(discovery_url, headers=headers)
-                upstream.raise_for_status()
-                catalog: dict[str, Any] = getattr(app.state, "model_metadata_catalog", {})
-                catalog_provider = (
-                    provider_id
-                    if (provider_id, urlparse(base_url).hostname) in _MODEL_CATALOG_PROVIDER_HOSTS
-                    else None
+            if adapter_id is None:
+                if credential_error is not None:
+                    raise credential_error
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "code": "adapter_detection_failed",
+                        "message": "无法自动识别接口格式，请在高级设置中选择接口格式。",
+                    },
                 )
-                if catalog_provider and not catalog:
-                    try:
-                        catalog_response = await client.get(_MODELS_DEV_URL)
-                        if catalog_response.is_success:
-                            catalog_payload = catalog_response.json()
-                            if isinstance(catalog_payload, dict):
-                                catalog = catalog_payload
-                                app.state.model_metadata_catalog = catalog
-                    except (httpx.RequestError, ValueError):
-                        pass
-        except httpx.HTTPStatusError as exc:
-            raise HTTPException(
-                status_code=502,
-                detail=f"model provider returned HTTP {exc.response.status_code} while listing models",
-            ) from exc
-        except httpx.RequestError as exc:
-            raise HTTPException(
-                status_code=502,
-                detail="model provider could not be reached while listing models",
-            ) from exc
-
-        try:
-            payload = upstream.json()
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=502,
-                detail="model provider returned an invalid model list",
-            ) from exc
-        candidates = payload.get("data") if isinstance(payload, dict) else None
-        if not isinstance(candidates, list):
-            raise HTTPException(
-                status_code=502,
-                detail="model provider returned an invalid model list",
-            )
-
-        models: list[dict[str, Any]] = []
-        catalog_provider_entry = (
-            catalog.get(catalog_provider)
-            if catalog_provider and isinstance(catalog, dict)
-            else None
-        )
-        catalog_models = (
-            catalog_provider_entry.get("models", {})
-            if isinstance(catalog_provider_entry, dict)
-            else {}
-        )
-        seen: set[str] = set()
-        for candidate in candidates:
-            if not isinstance(candidate, dict):
-                continue
-            model_id = candidate.get("id")
             if (
-                not isinstance(model_id, str)
-                or not model_id
-                or len(model_id) > 200
-                or any(character.isspace() for character in model_id)
-                or model_id in seen
+                body.adapter_id is not None
+                and adapter_id not in detected
+                and credential_error is not None
             ):
-                continue
-            raw_name = candidate.get("name") or candidate.get("display_name")
-            display_name = raw_name.strip() if isinstance(raw_name, str) else model_id
-            if not display_name or len(display_name) > 100:
-                display_name = model_id[:100]
-            seen.add(model_id)
-            models.append(
-                discovered_model_profile(
-                    candidate,
-                    model_id=model_id,
-                    display_name=display_name,
-                    provider_base_url=base_url,
-                    catalog_model=(
-                        catalog_models.get(model_id)
-                        if isinstance(catalog_models, dict)
-                        and isinstance(catalog_models.get(model_id), dict)
-                        else None
-                    ),
+                raise credential_error
+            models, catalog_status = detected.get(adapter_id, ([], "unavailable"))
+        else:
+            if body.name is not None or body.base_url is not None or body.adapter_id is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="official model service transport cannot be overridden",
                 )
+            regions = list(preset["regions"])
+            region_id = body.region or next(str(item["id"]) for item in regions if item["default"])
+            region_config = next(
+                (item for item in regions if item["id"] == region_id),
+                None,
             )
-            if len(models) >= 1000:
-                break
-        return {"models": models}
-
-    @app.put(
-        "/v1/model-providers/{provider_id}",
-        response_model=LocalModelProvider,
-    )
-    async def upsert_model_provider(
-        request: Request,
-        provider_id: str,
-        body: UpsertLocalModelProviderRequest,
-    ) -> LocalModelProvider:
-        provider_id = provider_id.strip().lower()
-        if not _MODEL_PROVIDER_ID_RE.fullmatch(provider_id) or provider_id in {
-            "auto",
-            "fake",
-            "gateway",
-            "local",
-        }:
-            raise HTTPException(status_code=400, detail="model provider id is invalid or reserved")
-        models = [model.model_dump(mode="json") for model in body.models]
-        if len({model["model_id"] for model in models}) != len(models):
-            raise HTTPException(status_code=400, detail="model ids must be unique per provider")
+            if region_config is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="model service region is not supported",
+                )
+            name = str(preset["name"])
+            region = str(region_config["id"])
+            base_url = str(region_config["base_url"])
+            adapter_id = str(preset["adapter_id"])
+            models, catalog_status = await _refresh_model_service_models(
+                preset=preset,
+                base_url=base_url,
+                adapter_id=adapter_id,
+                api_key=api_key,
+            )
+        connection_id = f"conn_{uuid.uuid4().hex}"
+        next_credential_ref = credential_ref(connection_id)
         principal_id = request.state.principal_id
-        api_key = body.api_key.strip() if body.api_key is not None else None
-        if api_key and not body.requires_api_key:
+        try:
+            await set_model_api_key(
+                principal_id,
+                connection_id,
+                api_key,
+                next_credential_ref,
+            )
+            try:
+                row = await app.state.store.create_model_connection(
+                    principal_id=principal_id,
+                    connection_id=connection_id,
+                    preset_id=body.preset_id,
+                    name=name,
+                    region=region,
+                    adapter_id=adapter_id,
+                    base_url=base_url,
+                    requires_api_key=True,
+                    credential_ref=next_credential_ref,
+                    models=models,
+                    catalog_status=catalog_status,
+                )
+            except BaseException:
+                await delete_model_api_key(
+                    principal_id,
+                    connection_id,
+                    next_credential_ref,
+                )
+                raise
+        except CredentialStoreError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return await _model_service_response(row, credential_configured=True)
+
+    @app.post(
+        "/v1/model-services/import",
+        response_model=ModelServiceConnection,
+        status_code=201,
+    )
+    async def import_model_service(
+        request: Request,
+        body: ImportModelServiceRequest,
+    ) -> ModelServiceConnection:
+        principal_id = request.state.principal_id
+        store: LocalStore = app.state.store
+        if await store.get_model_connection(
+            principal_id=principal_id,
+            connection_id=body.id,
+        ):
+            raise HTTPException(status_code=409, detail="model service already exists")
+        preset = model_service_preset(body.preset_id)
+        if preset is None:
+            raise HTTPException(status_code=400, detail="model service is not supported")
+        if body.preset_id == "custom":
             raise HTTPException(
                 status_code=400,
-                detail="API key must be omitted when the provider does not require one",
+                detail="custom model services must be reconnected manually",
             )
-        base_url = _model_provider_base_url(body.base_url)
-        store: LocalStore = app.state.store
-        try:
-            async with app.state.coordinator.model_provider_mutation(
-                principal_id=principal_id,
-                provider_id=provider_id,
-            ):
-                existing = await store.get_model_provider(
-                    principal_id=principal_id,
-                    provider_id=provider_id,
-                )
-                needs_credential_access = bool(
-                    body.requires_api_key
-                    or api_key
-                    or (existing and bool(existing.get("requires_api_key")))
-                )
-                existing_key = (
-                    await get_model_api_key(
-                        principal_id,
-                        provider_id,
-                        str(existing["credential_ref"]) if existing else None,
-                    )
-                    if needs_credential_access
-                    else None
-                )
-                if body.requires_api_key and not api_key and not existing_key:
-                    raise HTTPException(
-                        status_code=400, detail="model provider API key is required"
-                    )
-                old_credential_ref = (
-                    str(existing["credential_ref"]) if existing else credential_ref(provider_id)
-                )
-                next_credential_ref = old_credential_ref
-                if api_key and api_key != existing_key:
-                    next_credential_ref = new_credential_ref(provider_id)
-                    await set_model_api_key(
-                        principal_id,
-                        provider_id,
-                        api_key,
-                        next_credential_ref,
-                    )
-                try:
-                    provider = await store.upsert_model_provider(
-                        principal_id=principal_id,
-                        provider_id=provider_id,
-                        name=body.name.strip(),
-                        kind=body.kind,
-                        base_url=base_url,
-                        requires_api_key=body.requires_api_key,
-                        credential_ref=next_credential_ref,
-                        models=models,
-                        enabled=body.enabled,
-                    )
-                except BaseException:
-                    if next_credential_ref != old_credential_ref:
-                        await delete_model_api_key(
-                            principal_id,
-                            provider_id,
-                            next_credential_ref,
-                        )
-                    raise
-                if existing_key and (
-                    not body.requires_api_key or next_credential_ref != old_credential_ref
-                ):
-                    try:
-                        await delete_model_api_key(
-                            principal_id,
-                            provider_id,
-                            old_credential_ref,
-                        )
-                    except CredentialStoreError:
-                        log.warning(
-                            "failed to clean obsolete model credential provider=%s", provider_id
-                        )
-                return await _model_provider_response(
-                    provider,
-                    credential_configured=not body.requires_api_key
-                    or bool(api_key or existing_key),
-                )
-        except CredentialStoreError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        region_config = next(
+            (item for item in preset["regions"] if item["id"] == body.region),
+            None,
+        )
+        if region_config is None:
+            raise HTTPException(
+                status_code=400,
+                detail="model service region is not supported",
+            )
+        name = str(preset["name"])
+        region = str(region_config["id"])
+        adapter_id = str(preset["adapter_id"])
+        base_url = str(region_config["base_url"])
+        models = [dict(model) for model in preset["models"]]
+        row = await store.create_model_connection(
+            principal_id=principal_id,
+            connection_id=body.id,
+            preset_id=body.preset_id,
+            name=name,
+            region=region,
+            adapter_id=adapter_id,
+            base_url=base_url,
+            requires_api_key=True,
+            credential_ref=credential_ref(body.id),
+            models=models,
+            catalog_status="stale" if models else "unavailable",
+        )
+        return await _model_service_response(row, credential_configured=False)
 
-    @app.delete(
-        "/v1/model-providers/{provider_id}",
-        response_model=LocalModelProvider,
+    @app.put(
+        "/v1/model-services/{connection_id}/credential",
+        response_model=ModelServiceConnection,
     )
-    async def remove_model_provider(request: Request, provider_id: str) -> LocalModelProvider:
+    async def reconnect_model_service(
+        request: Request,
+        connection_id: str,
+        body: ReconnectModelServiceRequest,
+    ) -> ModelServiceConnection:
         principal_id = request.state.principal_id
         store: LocalStore = app.state.store
+        row = await store.get_model_connection(
+            principal_id=principal_id,
+            connection_id=connection_id,
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="model service not found")
+        api_key = body.api_key.strip()
+        if not api_key:
+            raise HTTPException(status_code=400, detail="API key is required")
+        preset = model_service_preset(str(row["preset_id"])) or {"models": ()}
+        models, catalog_status = await _refresh_model_service_models(
+            preset=preset,
+            base_url=str(row["base_url"]),
+            adapter_id=str(row["adapter_id"]),
+            api_key=api_key,
+        )
+        if catalog_status != "ready":
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "provider_unavailable",
+                    "message": "暂时无法验证新的 API Key，旧 Key 已保留。",
+                },
+            )
+        next_credential_ref = new_credential_ref(connection_id)
+        credential_swapped = False
         try:
-            async with app.state.coordinator.model_provider_mutation(
-                principal_id=principal_id,
-                provider_id=provider_id,
-            ):
-                provider = await store.get_model_provider(
+            await set_model_api_key(
+                principal_id,
+                connection_id,
+                api_key,
+                next_credential_ref,
+            )
+            try:
+                async with app.state.coordinator.model_connection_mutation(
                     principal_id=principal_id,
-                    provider_id=provider_id,
-                )
-                if provider is None:
-                    raise HTTPException(status_code=404, detail="model provider not found")
-                response = await _model_provider_response(provider)
-                provider_credential_ref = str(provider["credential_ref"])
-                await store.delete_model_provider(
-                    principal_id=principal_id,
-                    provider_id=provider_id,
-                )
-                for ref in {provider_credential_ref, credential_ref(provider_id)}:
+                    connection_id=connection_id,
+                ):
+                    current = await store.get_model_connection(
+                        principal_id=principal_id,
+                        connection_id=connection_id,
+                    )
+                    if current is None:
+                        raise HTTPException(status_code=404, detail="model service not found")
+                    previous_credential_ref = str(current["credential_ref"])
+                    updated = await store.replace_model_connection_credential(
+                        principal_id=principal_id,
+                        connection_id=connection_id,
+                        credential_ref=next_credential_ref,
+                        models=models,
+                        catalog_status=catalog_status,
+                    )
+                    assert updated is not None
+                    credential_swapped = True
                     try:
-                        await delete_model_api_key(principal_id, provider_id, ref)
-                    except CredentialStoreError:
-                        log.warning(
-                            "failed to clean deleted model credential provider=%s", provider_id
+                        await delete_model_api_key(
+                            principal_id,
+                            connection_id,
+                            previous_credential_ref,
                         )
+                    except CredentialStoreError:
+                        await store.replace_model_connection_credential(
+                            principal_id=principal_id,
+                            connection_id=connection_id,
+                            credential_ref=previous_credential_ref,
+                            models=_model_connection_models(current),
+                            catalog_status=str(current["catalog_status"]),
+                        )
+                        await delete_model_api_key(
+                            principal_id,
+                            connection_id,
+                            next_credential_ref,
+                        )
+                        raise
+            except BaseException:
+                if not credential_swapped:
+                    await delete_model_api_key(
+                        principal_id,
+                        connection_id,
+                        next_credential_ref,
+                    )
+                raise
         except CredentialStoreError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
-        return response
+        return await _model_service_response(updated, credential_configured=True)
+
+    @app.post(
+        "/v1/model-services/{connection_id}/refresh",
+        response_model=ModelServiceConnection,
+    )
+    async def refresh_model_service(
+        request: Request,
+        connection_id: str,
+    ) -> ModelServiceConnection:
+        principal_id = request.state.principal_id
+        store: LocalStore = app.state.store
+        row = await store.get_model_connection(
+            principal_id=principal_id,
+            connection_id=connection_id,
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="model service not found")
+        try:
+            api_key = await get_model_api_key(
+                principal_id,
+                connection_id,
+                str(row["credential_ref"]),
+            )
+        except CredentialStoreError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        if not api_key:
+            raise HTTPException(status_code=409, detail="model service needs an API key")
+        preset = model_service_preset(str(row["preset_id"])) or {
+            "models": tuple(
+                model for model in _model_connection_models(row) if model.get("source") == "bundled"
+            )
+        }
+        models, catalog_status = await _refresh_model_service_models(
+            preset=preset,
+            base_url=str(row["base_url"]),
+            adapter_id=str(row["adapter_id"]),
+            api_key=api_key,
+        )
+        async with app.state.coordinator.model_connection_catalog_update(
+            principal_id=principal_id,
+            connection_id=connection_id,
+        ):
+            current = await store.get_model_connection(
+                principal_id=principal_id,
+                connection_id=connection_id,
+            )
+            if current is None:
+                raise HTTPException(status_code=404, detail="model service not found")
+            cached = _model_connection_models(current)
+            models = (
+                _merge_refreshed_model_catalog(cached, models)
+                if catalog_status == "ready"
+                else cached or models
+            )
+            updated = await store.update_model_connection_catalog(
+                principal_id=principal_id,
+                connection_id=connection_id,
+                models=models,
+                catalog_status=catalog_status,
+            )
+        assert updated is not None
+        return await _model_service_response(updated, credential_configured=True)
+
+    @app.post(
+        "/v1/model-services/{connection_id}/models",
+        response_model=ModelServiceModel,
+        status_code=201,
+    )
+    async def add_model_service_model(
+        request: Request,
+        connection_id: str,
+        body: AddModelServiceModelRequest,
+    ) -> dict[str, Any]:
+        principal_id = request.state.principal_id
+        store: LocalStore = app.state.store
+        model = {
+            "model_id": body.model_id,
+            "display_name": body.display_name or body.model_id,
+            "source": "manual",
+            "verification": "unverified",
+            "recommended": False,
+            "tool_calling": True,
+            "streaming": True,
+            "image_inputs": False,
+            "max_input_tokens": None,
+            "max_output_tokens": None,
+        }
+        async with app.state.coordinator.model_connection_catalog_update(
+            principal_id=principal_id,
+            connection_id=connection_id,
+        ):
+            current = await store.get_model_connection(
+                principal_id=principal_id,
+                connection_id=connection_id,
+            )
+            if current is None:
+                raise HTTPException(status_code=404, detail="model service not found")
+            models = _model_connection_models(current)
+            if any(item["model_id"] == body.model_id for item in models):
+                raise HTTPException(status_code=409, detail="model already exists")
+            models.append(model)
+            await store.update_model_connection_catalog(
+                principal_id=principal_id,
+                connection_id=connection_id,
+                models=models,
+                catalog_status=str(current["catalog_status"]),
+            )
+        return model
+
+    @app.post(
+        "/v1/model-services/{connection_id}/models/{model_id:path}/verify",
+        response_model=ModelServiceModel,
+    )
+    async def verify_model_service_model(
+        request: Request,
+        connection_id: str,
+        model_id: str,
+    ) -> dict[str, Any]:
+        principal_id = request.state.principal_id
+        store: LocalStore = app.state.store
+        row = await store.get_model_connection(
+            principal_id=principal_id,
+            connection_id=connection_id,
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="model service not found")
+        models = _model_connection_models(row)
+        model = next((item for item in models if item["model_id"] == model_id), None)
+        if model is None:
+            raise HTTPException(status_code=404, detail="model not found")
+        try:
+            api_key = await get_model_api_key(
+                principal_id,
+                connection_id,
+                str(row["credential_ref"]),
+            )
+        except CredentialStoreError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        if not api_key:
+            raise HTTPException(status_code=409, detail="model service needs an API key")
+        await _verify_model_service_compatibility(
+            base_url=str(row["base_url"]),
+            adapter_id=str(row["adapter_id"]),
+            api_key=api_key,
+            model_id=model_id,
+        )
+        async with app.state.coordinator.model_connection_catalog_update(
+            principal_id=principal_id,
+            connection_id=connection_id,
+        ):
+            current = await store.get_model_connection(
+                principal_id=principal_id,
+                connection_id=connection_id,
+            )
+            if current is None:
+                raise HTTPException(status_code=404, detail="model service not found")
+            models = _model_connection_models(current)
+            model = next((item for item in models if item["model_id"] == model_id), None)
+            if model is None:
+                raise HTTPException(status_code=404, detail="model not found")
+            model.update(
+                {
+                    "verification": "verified",
+                    "tool_calling": True,
+                    "streaming": True,
+                }
+            )
+            await store.update_model_connection_catalog(
+                principal_id=principal_id,
+                connection_id=connection_id,
+                models=models,
+                catalog_status=str(current["catalog_status"]),
+            )
+        return model
+
+    @app.delete(
+        "/v1/model-services/{connection_id}",
+        status_code=204,
+        response_class=Response,
+    )
+    async def delete_model_service(
+        request: Request,
+        connection_id: str,
+    ) -> Response:
+        principal_id = request.state.principal_id
+        store: LocalStore = app.state.store
+        row = await store.get_model_connection(
+            principal_id=principal_id,
+            connection_id=connection_id,
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="model service not found")
+        try:
+            async with app.state.coordinator.model_connection_mutation(
+                principal_id=principal_id,
+                connection_id=connection_id,
+            ):
+                credential_reference = str(row["credential_ref"])
+                current_key = await get_model_api_key(
+                    principal_id,
+                    connection_id,
+                    credential_reference,
+                )
+                await delete_model_api_key(
+                    principal_id,
+                    connection_id,
+                    credential_reference,
+                )
+                try:
+                    deleted = await store.delete_model_connection(
+                        principal_id=principal_id,
+                        connection_id=connection_id,
+                    )
+                    assert deleted is not None
+                except BaseException:
+                    if current_key:
+                        await set_model_api_key(
+                            principal_id,
+                            connection_id,
+                            current_key,
+                            credential_reference,
+                        )
+                    raise
+        except CredentialStoreError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return Response(status_code=204)
 
     @app.get("/v1/models", response_model=LocalRuntimeModelCatalog)
     async def list_runtime_models(request: Request) -> dict[str, Any]:
         store: LocalStore = app.state.store
         models: list[dict[str, Any]] = []
+        if settings.fake_llm:
+            models.append(
+                {
+                    "spec": "local:test:model",
+                    "model_id": "model",
+                    "display_name": "Test model",
+                    "connection_id": "test",
+                    "service_name": "Test",
+                    "tool_calling": True,
+                    "streaming": True,
+                    "image_inputs": False,
+                    "verification": "verified",
+                    "recommended": True,
+                    "max_input_tokens": 128_000,
+                    "max_output_tokens": 8_192,
+                    "available": True,
+                }
+            )
         try:
-            for row in await store.list_model_providers(principal_id=request.state.principal_id):
-                if not bool(row.get("enabled")):
-                    continue
-                requires_key = bool(row.get("requires_api_key"))
-                configured = not requires_key or bool(
-                    await get_model_api_key(
+            rows = await store.list_model_connections(principal_id=request.state.principal_id)
+            configured_connections = await asyncio.gather(
+                *(
+                    get_model_api_key(
                         request.state.principal_id,
                         str(row["id"]),
                         str(row["credential_ref"]),
                     )
+                    for row in rows
                 )
-                for model in _provider_models(row):
+            )
+            for row, api_key in zip(rows, configured_connections, strict=True):
+                configured = bool(api_key)
+                for model in _model_connection_models(row):
                     models.append(
                         {
                             "spec": f"local:{row['id']}:{model['model_id']}",
                             "model_id": model["model_id"],
                             "display_name": model["display_name"],
-                            "provider_id": row["id"],
-                            "provider_name": row["name"],
+                            "connection_id": row["id"],
+                            "service_name": row["name"],
                             "tool_calling": bool(model.get("tool_calling")),
                             "streaming": bool(model.get("streaming")),
                             "image_inputs": bool(model.get("image_inputs")),
+                            "verification": model.get("verification", "unverified"),
+                            "recommended": bool(model.get("recommended")),
                             "max_input_tokens": model.get("max_input_tokens"),
                             "max_output_tokens": model.get("max_output_tokens"),
                             "available": configured
+                            and model.get("verification") == "verified"
                             and bool(model.get("tool_calling"))
                             and bool(model.get("streaming")),
                         }

@@ -108,7 +108,7 @@ describe('runtime timeline', () => {
   })
 
   it('uses the runtime run.failed error text in the timeline', () => {
-    expect(timelineItem({ event_type: 'run.failed', payload: { error: 'missing API key', type: 'ModelProviderError' } })).toMatchObject({
+    expect(timelineItem({ event_type: 'run.failed', payload: { error: 'missing API key', type: 'ModelServiceError' } })).toMatchObject({
       label: 'missing API key',
     })
   })
@@ -135,7 +135,7 @@ describe('runtime timeline', () => {
         event_type: 'run.failed',
         payload: {
           error: 'missing API key',
-          type: 'ModelProviderError',
+          type: 'ModelServiceError',
           category: 'configuration',
           retryable: false,
           action_kind: 'user_action',

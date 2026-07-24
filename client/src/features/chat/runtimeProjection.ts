@@ -1,7 +1,7 @@
 import type { AgentRunEvent } from '@shejane/runtime-sdk'
 import { createTranslator, type Translator } from '../../shared/i18n/i18n'
 import type { ChatMessage, Conversation, MessageStatus } from '../../shared/local-data/types'
-import type { LocalRun, LocalThreadItem, LocalThreadSnapshot } from '../../runtime/client'
+import { parseRuntimeModelSpec, type LocalRun, type LocalThreadItem, type LocalThreadSnapshot } from '../../runtime/client'
 import { timelineItem } from './chatStore'
 
 /** Build the disposable Electron cache from one authoritative Runtime thread. */
@@ -40,6 +40,7 @@ export function projectRuntimeThread(
         )])
 
   const metadata = objectValue(snapshot.thread.metadata)
+  const model = parseRuntimeModelSpec(String(metadata.model ?? ''))
   return {
     id: snapshot.thread.id,
     title: snapshot.thread.title,
@@ -47,6 +48,7 @@ export function projectRuntimeThread(
     ...(typeof metadata.pinned === 'boolean' ? { pinned: metadata.pinned } : {}),
     createdAt: snapshot.thread.created_at,
     updatedAt: snapshot.thread.updated_at,
+    ...(model ? { model } : existing?.model ? { model: existing.model } : {}),
     ...(projectValue(metadata.project) ? { project: projectValue(metadata.project) } : {}),
     ...(workspaceValue(metadata.workspace) ? { workspace: workspaceValue(metadata.workspace) } : {}),
     messages,

@@ -8,8 +8,8 @@ import {
   diagnoseLocalWorkspace,
   getLocalRunDiagnostics,
   getLocalRuntimeInfo,
-  listLocalModelProviders,
-  upsertLocalModelProvider,
+  connectModelService,
+  listModelServices,
   getRuntimeConnection,
   getLocalArtifact,
   listAuthorizedWorkspaces,
@@ -189,53 +189,46 @@ describe('Client Runtime adapter', () => {
       }),
     )
   })
-  it('writes and lists Runtime model providers without changing field names', async () => {
-    const provider = {
-      id: 'ollama',
-      name: 'Local Ollama',
-      kind: 'openai_compatible' as const,
-      base_url: 'http://127.0.0.1:11434/v1',
-      requires_api_key: false,
+  it('connects and lists Runtime model services without exposing the API key', async () => {
+    const service = {
+      id: 'conn_1',
+      preset_id: 'deepseek',
+      name: 'DeepSeek',
+      region: 'cn' as const,
+      adapter_id: 'openai_chat' as const,
+      base_url: 'https://api.deepseek.com/v1',
       credential_configured: true,
+      catalog_status: 'ready' as const,
       models: [{
-        model_id: 'qwen3:8b',
-        display_name: 'Qwen',
+        model_id: 'deepseek-v4-flash',
+        display_name: 'DeepSeek V4 Flash',
+        source: 'bundled' as const,
+        verification: 'verified' as const,
+        recommended: true,
         tool_calling: true,
         streaming: true,
         image_inputs: false,
       }],
-      enabled: true,
       version: 1,
       created_at: '2026-07-12T00:00:00Z',
       updated_at: '2026-07-12T00:00:00Z',
     }
     const fetcher = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify(provider), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ providers: [provider] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(service), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ services: [service] }), { status: 200 }))
     const config = { baseURL: 'http://127.0.0.1:17371', token: 'local-token' }
 
-    await upsertLocalModelProvider(
-      'ollama',
-      {
-        name: 'Local Ollama',
-        kind: 'openai_compatible',
-        base_url: 'http://127.0.0.1:11434/v1',
-        requires_api_key: false,
-        models: provider.models,
-        enabled: true,
-      },
+    await connectModelService(
+      { preset_id: 'deepseek', region: 'cn', api_key: 'secret' },
       config,
       fetcher,
     )
-    await expect(listLocalModelProviders(config, fetcher)).resolves.toEqual([provider])
+    await expect(listModelServices(config, fetcher)).resolves.toEqual([service])
 
     expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toEqual({
-      name: 'Local Ollama',
-      kind: 'openai_compatible',
-      base_url: 'http://127.0.0.1:11434/v1',
-      requires_api_key: false,
-      models: provider.models,
-      enabled: true,
+      preset_id: 'deepseek',
+      region: 'cn',
+      api_key: 'secret',
     })
   })
   it('discovers the authenticated runtime protocol and capabilities', async () => {
@@ -245,7 +238,7 @@ describe('Client Runtime adapter', () => {
           protocol_version: 1,
           runtime_version: '0.1.3',
           capabilities: ['agent.run', 'agent.stream'],
-          model_provider_configured: true,
+          model_service_configured: true,
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       ),

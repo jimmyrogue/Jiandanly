@@ -3,13 +3,15 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   createLocalRun,
   deliverPendingRuntimeCommands,
-  discoverLocalModels,
   fetchRunInput,
   getLocalArtifactContent,
+  importModelService,
   parseAgentSSEBuffer,
   parseRuntimeModelSpec,
   RuntimeHTTPError,
   SheJaneRuntimeClient,
+  listModelServicePresets,
+  reconnectModelService,
   streamLocalRun,
   updateRuntimeSettings,
 } from './index'
@@ -189,8 +191,8 @@ describe('plugin command outbox delivery', () => {
             model_binding: {
               id: 'vision-default',
               requested_model: 'local:vision:vision-a',
-              provider_id: 'vision',
-              provider_version: 1,
+              connection_id: 'vision',
+              connection_version: 1,
               model_id: 'vision-a',
             },
           }),
@@ -258,6 +260,7 @@ describe('parseRuntimeModelSpec', () => {
     expect(parseRuntimeModelSpec('local::gpt-4.1')).toBeUndefined()
     expect(parseRuntimeModelSpec('local:open ai:gpt-4.1')).toBeUndefined()
     expect(parseRuntimeModelSpec('local:openai:gpt 4.1')).toBeUndefined()
+    expect(parseRuntimeModelSpec(`local:conn_${'a'.repeat(32)}:${'m'.repeat(200)}`)).toBeDefined()
   })
 })
 
@@ -283,31 +286,89 @@ describe('SheJaneRuntimeClient', () => {
     )
   })
 
-  it('discovers provider models without exposing Runtime credentials', async () => {
+  it('lists Runtime-owned model service presets without transport details', async () => {
     const fetcher = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({
-        models: [{ model_id: 'openai/gpt-4.1', display_name: 'GPT-4.1' }],
+        services: [{
+          id: 'deepseek',
+          name: 'DeepSeek',
+          description: '推理和通用任务',
+          api_key_url: 'https://platform.deepseek.com/api_keys',
+          billing_url: 'https://platform.deepseek.com/usage',
+          regions: [{ id: 'cn', name: '中国站', default: true }],
+        }],
       }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       }),
     )
 
-    const models = await discoverLocalModels(
-      { provider_id: 'openrouter', base_url: 'https://openrouter.ai/api/v1' },
+    const services = await listModelServicePresets(
       { baseURL: 'http://127.0.0.1:17371', token: 'runtime-token' },
       fetcher,
     )
 
-    expect(models).toEqual([{ model_id: 'openai/gpt-4.1', display_name: 'GPT-4.1' }])
+    expect(services[0]).toMatchObject({ id: 'deepseek', regions: [{ id: 'cn' }] })
     expect(fetcher).toHaveBeenCalledWith(
-      'http://127.0.0.1:17371/v1/model-providers/discover-models',
+      'http://127.0.0.1:17371/v1/model-services/presets',
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer runtime-token' }),
+      }),
+    )
+  })
+
+  it('replaces a model service API key without exposing it in the URL', async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: 'conn_1' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    await reconnectModelService(
+      'conn/1',
+      { api_key: 'new-secret' },
+      { baseURL: 'http://127.0.0.1:17371', token: 'runtime-token' },
+      fetcher,
+    )
+
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://127.0.0.1:17371/v1/model-services/conn%2F1/credential',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ api_key: 'new-secret' }),
+      }),
+    )
+  })
+
+  it('imports model-service metadata without an API key', async () => {
+    const input = {
+      id: `conn_${'a'.repeat(32)}`,
+      preset_id: 'deepseek',
+      name: 'DeepSeek',
+      region: 'cn' as const,
+      adapter_id: 'openai_chat' as const,
+      base_url: 'https://api.deepseek.com/v1',
+      models: [],
+    }
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(input), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    await importModelService(
+      input,
+      { baseURL: 'http://127.0.0.1:17371', token: 'runtime-token' },
+      fetcher,
+    )
+
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://127.0.0.1:17371/v1/model-services/import',
       expect.objectContaining({
         method: 'POST',
-        body: JSON.stringify({
-          provider_id: 'openrouter',
-          base_url: 'https://openrouter.ai/api/v1',
-        }),
+        body: JSON.stringify(input),
       }),
     )
   })

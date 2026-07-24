@@ -1,6 +1,6 @@
 # Run Loop —— 当前能力实现态
 
-创建 Run 前，Runtime 会检查协议版本、客户端所需能力、资源归属和当前模型绑定。接纳成功后保存版本化的有效设置快照与模型凭据引用；真实密钥不进入 Run 或作业记录。模型必须使用 `local:<供应商编号>:<模型编号>`。任务开始或恢复时会重新核对工作区、设置快照、供应商版本和凭据引用，然后才进入模型循环。模型失败不会触发静默回退。模型资料明确保存是否支持图片输入，旧配置默认视为仅文本；文本模型的文件工具结果不会包含图片块，而会得到清晰的能力限制说明。
+创建 Run 前，Runtime 会检查协议版本、客户端所需能力、资源归属和当前模型绑定。接纳成功后保存版本化的有效设置快照与不可变凭据引用；真实密钥不进入 Run 或作业记录。模型必须使用 `local:<连接编号>:<模型编号>`。任务开始或恢复时会重新核对工作区、设置快照、模型服务版本和凭据引用，然后才进入模型循环。模型失败不会触发静默回退。模型资料明确保存是否支持图片输入；文本模型的文件工具结果不会包含图片块，而会得到清晰的能力限制说明。
 
 MCP Server 只从 Runtime 自有配置读取，不会隐式启动 Claude Desktop、Cursor 或 Codex 的全局配置。Runtime 级监督器按单个 Server 的配置指纹维护工具目录和长会话；连续 Run 取得固定目录快照并复用连接，`build_agent()` 不再为每个 Run 顺序发现或启动全部 Server。新增、修改或删除 Server 时，旧目录会退休；已有 Run 释放最后一个租约后才关闭旧会话。连接失败会进入 30 秒退避，避免每个 Run 重复等待；MCP 列表接口返回当前连接状态、工具数和不含密钥的错误类型。
 
@@ -372,7 +372,7 @@ MCP Server 只从 Runtime 自有配置读取，不会隐式启动 Claude Desktop
 | 上下文压缩 | Runtime 把已接纳历史原样交给 Deep Agents 的令牌感知摘要；不再按消息数二次截断或生成关键词摘要。旧对话首次迁入 Runtime 时，client 只保留 256 条 / 750000 字符的传输安全边界 | `test_runs_http` / `conversationHistory.test` |
 | 工具结构可见性 | 完整工具集固定属于图定义；Runtime 只在模型请求副本中按当前目标、保留历史和既有工具调用确定性隐藏无关的 Office 工具结构，并在供应商边界覆盖所有子 Agent，不改变 checkpoint 或图指纹 | `test_tool_visibility` / `test_model_ledger` / `test_agent_builder` |
 | 供应商上下文硬限制 | 每次真实模型调用前按声明窗口扣除工具结构并裁剪请求副本；剩余空间不足最小合法请求时在预留调用账本和联系供应商之前明确失败 | `test_model_ledger` |
-| 输出、时间与用量边界 | 模型资料限制最大输出，所有供应商调用有硬超时；Runtime 记录 token，并用调用次数、输出和时间限制资源 | `test_model_ledger` / provider tests |
+| 输出、时间与用量边界 | 模型资料限制最大输出，所有模型服务调用有硬超时；Runtime 记录 token，并用调用次数、输出和时间限制资源 | `test_model_ledger` / model-service tests |
 | research 收敛 | `before_model` per-tool 计数 | `test_middleware` |
 | 大工具结果转存与摘要 | Deep Agents `FilesystemMiddleware` + `SummarizationMiddleware` | `test_agent_builder` / `test_runs_http` |
 | orphan tool_call 自愈 | `before_agent` 扫 messages | `test_middleware` |

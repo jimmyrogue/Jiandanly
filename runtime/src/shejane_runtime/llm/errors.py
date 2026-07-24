@@ -1,12 +1,12 @@
-"""Provider-neutral model errors exposed to the Runtime run loop."""
+"""Model-service errors exposed to the Runtime run loop."""
 
 from __future__ import annotations
 
 from typing import Any
 
 
-class ModelProviderError(RuntimeError):
-    """Structured error emitted by a configured model provider."""
+class ModelServiceError(RuntimeError):
+    """Structured error emitted by a configured model service."""
 
     def __init__(
         self,
@@ -14,7 +14,7 @@ class ModelProviderError(RuntimeError):
         *,
         code: str | None = None,
         request_id: str | None = None,
-        provider: str | None = None,
+        service: str | None = None,
         recoverable: bool | None = None,
         retryable: bool | None = None,
     ) -> None:
@@ -22,21 +22,21 @@ class ModelProviderError(RuntimeError):
         self.message = message
         self.code = code
         self.request_id = request_id
-        self.provider = provider
+        self.service = service
         self.recoverable = recoverable
         self.retryable = retryable
 
     @classmethod
-    def from_payload(cls, payload: dict[str, Any]) -> ModelProviderError:
+    def from_payload(cls, payload: dict[str, Any]) -> ModelServiceError:
         message = _first_string(payload.get("message"), payload.get("error"), payload.get("detail"))
         code = _first_string(
             payload.get("code"), payload.get("error_code"), payload.get("errorCode")
         )
         return cls(
-            message or code or "model provider error",
+            message or code or "model service error",
             code=code,
             request_id=_first_string(payload.get("request_id"), payload.get("requestId")),
-            provider=_first_string(payload.get("provider")),
+            service=_first_string(payload.get("service"), payload.get("provider")),
             recoverable=payload.get("recoverable")
             if isinstance(payload.get("recoverable"), bool)
             else None,
@@ -50,15 +50,15 @@ class ModelProviderError(RuntimeError):
             "message": self.message,
             "error": self.message,
             "type": type(self).__name__,
-            "source": "model_provider",
+            "source": "model_service",
         }
         if self.code:
             payload["code"] = self.code
             payload["error_code"] = self.code
         if self.request_id:
             payload["request_id"] = self.request_id
-        if self.provider:
-            payload["provider"] = self.provider
+        if self.service:
+            payload["service"] = self.service
         if self.recoverable is not None:
             payload["recoverable"] = self.recoverable
         if self.retryable is not None:

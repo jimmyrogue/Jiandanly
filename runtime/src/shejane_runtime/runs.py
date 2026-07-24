@@ -44,7 +44,7 @@ from .agent.context_builder import RuntimeContext
 from .config import Settings, clamp_run_budget, get_settings
 from .event_translator import translate
 from .failure_policy import classify_failure_payload
-from .llm.errors import ModelProviderError
+from .llm.errors import ModelServiceError
 from .llm.runtime import bind_runtime_model
 from .model_credentials import (
     CredentialStoreError,
@@ -564,7 +564,7 @@ class RunCoordinator:
         self._lost_leases: set[asyncio.Task[Any]] = set()
         self._unconfirmed_cleanup: set[asyncio.Task[Any]] = set()
         self._started_jobs: set[asyncio.Task[Any]] = set()
-        self._model_provider_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        self._model_connection_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._agent_definitions: dict[str, Any] = {}
         self._agent_definition_lock = asyncio.Lock()
         self._fenced_checkpointer = (
@@ -632,7 +632,7 @@ class RunCoordinator:
     ) -> tuple[dict[str, Any], RunAdmissionError | None]:
         if self.settings.fake_llm:
             return {
-                "provider": "fake",
+                "adapter_id": "fake",
                 "credential_ref": None,
                 "requested_model": requested_model,
                 "required_capabilities": ["streaming", "tool_calling"],
@@ -642,20 +642,20 @@ class RunCoordinator:
             if len(parts) != 3 or not parts[1] or not parts[2]:
                 return {}, RunAdmissionError(
                     "model_spec_invalid",
-                    "local model spec must be local:<provider>:<model>",
+                    "local model spec must be local:<connection>:<model>",
                 )
-            provider_id, model_id = parts[1], parts[2]
-            async with self._model_provider_lock(principal_id, provider_id):
+            connection_id, model_id = parts[1], parts[2]
+            async with self._model_connection_lock(principal_id, connection_id):
                 return await self._local_model_binding_locked(
                     principal_id=principal_id,
-                    provider_id=provider_id,
+                    connection_id=connection_id,
                     model_id=model_id,
                     requested_model=requested_model,
                     required_capabilities=("streaming", "tool_calling"),
                 )
 
         return {}, RunAdmissionError(
-            "model_provider_missing",
+            "model_service_missing",
             "select a Runtime BYOK model before starting a run",
         )
 
@@ -666,11 +666,11 @@ class RunCoordinator:
         requested_model: str,
         required_capabilities: tuple[str, ...] = ("streaming", "tool_calling"),
     ) -> AsyncIterator[tuple[dict[str, Any], RunAdmissionError | None]]:
-        """Keep a local provider stable until its Run is durably admitted."""
+        """Keep a model connection stable until its Run is durably admitted."""
         if self.settings.fake_llm:
             yield (
                 {
-                    "provider": "fake",
+                    "adapter_id": "fake",
                     "credential_ref": None,
                     "requested_model": requested_model,
                     "profile": {capability: True for capability in required_capabilities},
@@ -688,15 +688,15 @@ class RunCoordinator:
                 {},
                 RunAdmissionError(
                     "model_spec_invalid",
-                    "local model spec must be local:<provider>:<model>",
+                    "local model spec must be local:<connection>:<model>",
                 ),
             )
             return
-        provider_id, model_id = parts[1], parts[2]
-        async with self._model_provider_lock(principal_id, provider_id):
+        connection_id, model_id = parts[1], parts[2]
+        async with self._model_connection_lock(principal_id, connection_id):
             yield await self._local_model_binding_locked(
                 principal_id=principal_id,
-                provider_id=provider_id,
+                connection_id=connection_id,
                 model_id=model_id,
                 requested_model=requested_model,
                 required_capabilities=required_capabilities,
@@ -706,22 +706,22 @@ class RunCoordinator:
         self,
         *,
         principal_id: str,
-        provider_id: str,
+        connection_id: str,
         model_id: str,
         requested_model: str,
         required_capabilities: tuple[str, ...] = ("streaming", "tool_calling"),
     ) -> tuple[dict[str, Any], RunAdmissionError | None]:
-        provider = await self.store.get_model_provider(
+        connection = await self.store.get_model_connection(
             principal_id=principal_id,
-            provider_id=provider_id,
+            connection_id=connection_id,
         )
-        if provider is None or not bool(provider.get("enabled")):
+        if connection is None:
             return {}, RunAdmissionError(
-                "model_provider_missing",
-                "local model provider is not configured",
+                "model_service_missing",
+                "model service is not connected",
             )
         try:
-            models = json.loads(provider.get("models_json") or "[]")
+            models = json.loads(connection.get("models_json") or "[]")
         except (json.JSONDecodeError, TypeError):
             models = []
         profile = next(
@@ -735,12 +735,17 @@ class RunCoordinator:
         if profile is None:
             return {}, RunAdmissionError(
                 "model_not_found",
-                "model is not configured for this provider",
+                "model is not available from this connection",
             )
         profile = apply_known_model_profile_defaults(
             profile,
-            provider_base_url=str(provider.get("base_url") or ""),
+            service_base_url=str(connection.get("base_url") or ""),
         )
+        if profile.get("verification") != "verified":
+            return {}, RunAdmissionError(
+                "model_unverified",
+                "model compatibility has not been verified",
+            )
         missing = [
             capability for capability in required_capabilities if not bool(profile.get(capability))
         ]
@@ -749,29 +754,27 @@ class RunCoordinator:
                 "model_capability_unavailable",
                 f"model must support {', '.join(missing)}",
             )
-        if bool(provider.get("requires_api_key")):
-            try:
-                if not await get_model_api_key(
-                    principal_id,
-                    provider_id,
-                    str(provider["credential_ref"]),
-                ):
-                    return {}, RunAdmissionError(
-                        "model_provider_missing",
-                        "model provider credential is not configured",
-                    )
-            except CredentialStoreError as exc:
+        try:
+            if not await get_model_api_key(
+                principal_id,
+                connection_id,
+                str(connection["credential_ref"]),
+            ):
                 return {}, RunAdmissionError(
-                    "model_credential_store_unavailable",
-                    str(exc),
+                    "model_service_missing",
+                    "model service API key is not configured",
                 )
+        except CredentialStoreError as exc:
+            return {}, RunAdmissionError(
+                "model_credential_store_unavailable",
+                str(exc),
+            )
         return {
-            "provider": str(provider["kind"]),
-            "provider_id": provider_id,
-            "provider_version": int(provider.get("version") or 1),
-            "base_url": str(provider["base_url"]),
-            "requires_api_key": bool(provider.get("requires_api_key")),
-            "credential_ref": str(provider["credential_ref"]),
+            "adapter_id": str(connection["adapter_id"]),
+            "connection_id": connection_id,
+            "connection_version": int(connection.get("version") or 1),
+            "base_url": str(connection["base_url"]),
+            "credential_ref": str(connection["credential_ref"]),
             "requested_model": requested_model,
             "model_id": model_id,
             "profile": profile,
@@ -792,23 +795,21 @@ class RunCoordinator:
         binding = settings_snapshot.get("_model_binding")
         if not isinstance(binding, dict):
             return "run model binding snapshot is missing", None
-        if binding.get("provider") == "fake":
+        if binding.get("adapter_id") == "fake":
             return (
-                (None, None)
-                if self.settings.fake_llm
-                else ("fake model provider is disabled", None)
+                (None, None) if self.settings.fake_llm else ("fake model service is disabled", None)
             )
-        if binding.get("provider") in {"openai_compatible", "anthropic"}:
-            provider_id = binding.get("provider_id")
-            if not isinstance(provider_id, str):
+        if binding.get("adapter_id") in {"openai_chat", "anthropic_messages"}:
+            connection_id = binding.get("connection_id")
+            if not isinstance(connection_id, str):
                 return "run model credential reference is invalid", None
-            async with self._model_provider_lock(principal_id, provider_id):
+            async with self._model_connection_lock(principal_id, connection_id):
                 return await self._model_binding_error_locked(
                     principal_id=principal_id,
-                    provider_id=provider_id,
+                    connection_id=connection_id,
                     binding=binding,
                 )
-        return "run model provider is no longer supported", None
+        return "run model adapter is no longer supported", None
 
     async def _skill_binding_error(self, settings_snapshot: dict[str, Any]) -> str | None:
         # Runs accepted before Skill fingerprints existed remain resumable.
@@ -829,32 +830,29 @@ class RunCoordinator:
         self,
         *,
         principal_id: str,
-        provider_id: str,
+        connection_id: str,
         binding: dict[str, Any],
     ) -> tuple[str | None, str | None]:
-        provider = await self.store.get_model_provider(
+        connection = await self.store.get_model_connection(
             principal_id=principal_id,
-            provider_id=provider_id,
+            connection_id=connection_id,
         )
         if (
-            provider is None
-            or not bool(provider.get("enabled"))
-            or int(provider.get("version") or 0) != binding.get("provider_version")
-            or binding.get("credential_ref") != provider.get("credential_ref")
+            connection is None
+            or int(connection.get("version") or 0) != binding.get("connection_version")
+            or binding.get("credential_ref") != connection.get("credential_ref")
         ):
-            return "model provider configuration was changed or revoked", None
-        if not bool(binding.get("requires_api_key")):
-            return None, None
+            return "model service connection was changed or removed", None
         try:
             api_key = await get_model_api_key(
                 principal_id,
-                provider_id,
+                connection_id,
                 str(binding["credential_ref"]),
             )
         except CredentialStoreError as exc:
             return str(exc), None
         if not api_key:
-            return "model provider credential is no longer configured", None
+            return "model service API key is no longer configured", None
         return None, api_key
 
     async def start_run(
@@ -2007,19 +2005,19 @@ class RunCoordinator:
         self._job_wakeup.set()
         return True
 
-    async def cancel_model_provider_runs(
+    async def cancel_model_connection_runs(
         self,
         *,
         principal_id: str,
-        provider_id: str,
+        connection_id: str,
     ) -> int:
-        """Cancel active runs before mutating a provider credential or binding."""
+        """Cancel active runs before mutating a model connection."""
         run_ids: list[str] = []
         for run_id, settings in list(self._settings_overrides.items()):
             if run_id not in self._tasks:
                 continue
             binding = settings.get("_model_binding")
-            if not isinstance(binding, dict) or binding.get("provider_id") != provider_id:
+            if not isinstance(binding, dict) or binding.get("connection_id") != connection_id:
                 continue
             run = await self.store.get_run(run_id)
             if run is not None and run.get("principal_id") == principal_id:
@@ -2034,30 +2032,41 @@ class RunCoordinator:
         if tasks:
             _done, pending = await asyncio.wait(tasks, timeout=5.0)
             if pending:
-                raise RuntimeError("active model provider runs did not stop")
+                raise RuntimeError("active model connection runs did not stop")
         return len(run_ids)
 
-    def _model_provider_lock(self, principal_id: str, provider_id: str) -> asyncio.Lock:
-        key = (principal_id, provider_id)
-        lock = self._model_provider_locks.get(key)
+    def _model_connection_lock(self, principal_id: str, connection_id: str) -> asyncio.Lock:
+        key = (principal_id, connection_id)
+        lock = self._model_connection_locks.get(key)
         if lock is None:
             lock = asyncio.Lock()
-            self._model_provider_locks[key] = lock
+            self._model_connection_locks[key] = lock
         return lock
 
     @asynccontextmanager
-    async def model_provider_mutation(
+    async def model_connection_mutation(
         self,
         *,
         principal_id: str,
-        provider_id: str,
+        connection_id: str,
     ) -> AsyncIterator[None]:
-        """Fence admission and execution while a provider binding changes."""
-        async with self._model_provider_lock(principal_id, provider_id):
-            await self.cancel_model_provider_runs(
+        """Fence admission and execution while a model connection changes."""
+        async with self._model_connection_lock(principal_id, connection_id):
+            await self.cancel_model_connection_runs(
                 principal_id=principal_id,
-                provider_id=provider_id,
+                connection_id=connection_id,
             )
+            yield
+
+    @asynccontextmanager
+    async def model_connection_catalog_update(
+        self,
+        *,
+        principal_id: str,
+        connection_id: str,
+    ) -> AsyncIterator[None]:
+        """Serialize catalog writes with admission without canceling Runs."""
+        async with self._model_connection_lock(principal_id, connection_id):
             yield
 
     async def stream(self, run_id: str, *, after_seq: int = 0) -> AsyncIterator[dict[str, Any]]:
@@ -2364,6 +2373,11 @@ class RunCoordinator:
                 turn_count=turn_count,
                 memory_enabled=memory_enabled,
                 skills_enabled=skills_enabled,
+                skill_catalog_hash=(
+                    str(run_settings["_skills_fingerprint"])
+                    if isinstance(run_settings.get("_skills_fingerprint"), str)
+                    else None
+                ),
                 mcp_enabled=mcp_enabled,
                 mcp_disabled_servers=mcp_disabled_servers or None,
                 mcp_catalog=self.mcp_catalog,
@@ -2665,11 +2679,11 @@ class RunCoordinator:
                     "run %s failed type=%s error=%s",
                     run_id,
                     type(exc).__name__,
-                    failure_payload.get("error", "model provider request failed"),
+                    failure_payload.get("error", "model service request failed"),
                 )
             else:
                 log.exception("run %s failed", run_id)
-            if isinstance(exc, ModelProviderError):
+            if isinstance(exc, ModelServiceError):
                 await self._enqueue(wakeup, run_id, "llm.error", failure_payload)
             if repair_context is not None:
                 await self._enqueue(
@@ -3149,7 +3163,7 @@ def _run_failed_payload(
     *,
     secrets: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    if isinstance(exc, ModelProviderError):
+    if isinstance(exc, ModelServiceError):
         payload = exc.to_event_payload()
     else:
         payload = {"error": str(exc), "type": type(exc).__name__}

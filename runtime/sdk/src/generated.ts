@@ -146,24 +146,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/model-providers": {
+    "/v1/model-services": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** List Model Providers */
-        get: operations["list_model_providers_v1_model_providers_get"];
+        /** List Model Services */
+        get: operations["list_model_services_v1_model_services_get"];
         put?: never;
-        post?: never;
+        /** Connect Model Service */
+        post: operations["connect_model_service_v1_model_services_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/v1/model-providers/discover-models": {
+    "/v1/model-services/import": {
         parameters: {
             query?: never;
             header?: never;
@@ -172,15 +173,32 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Discover Model Provider Models */
-        post: operations["discover_model_provider_models_v1_model_providers_discover_models_post"];
+        /** Import Model Service */
+        post: operations["import_model_service_v1_model_services_import_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/v1/model-providers/{provider_id}": {
+    "/v1/model-services/presets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Model Services Presets */
+        get: operations["list_model_services_presets_v1_model_services_presets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/model-services/{connection_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -188,11 +206,78 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Upsert Model Provider */
-        put: operations["upsert_model_provider_v1_model_providers__provider_id__put"];
+        put?: never;
         post?: never;
-        /** Remove Model Provider */
-        delete: operations["remove_model_provider_v1_model_providers__provider_id__delete"];
+        /** Delete Model Service */
+        delete: operations["delete_model_service_v1_model_services__connection_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/model-services/{connection_id}/credential": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Reconnect Model Service */
+        put: operations["reconnect_model_service_v1_model_services__connection_id__credential_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/model-services/{connection_id}/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Add Model Service Model */
+        post: operations["add_model_service_model_v1_model_services__connection_id__models_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/model-services/{connection_id}/models/{model_id}/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Verify Model Service Model */
+        post: operations["verify_model_service_model_v1_model_services__connection_id__models__model_id__verify_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/model-services/{connection_id}/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Refresh Model Service */
+        post: operations["refresh_model_service_v1_model_services__connection_id__refresh_post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -887,6 +972,13 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AddModelServiceModelRequest */
+        AddModelServiceModelRequest: {
+            /** Display Name */
+            display_name?: string | null;
+            /** Model Id */
+            model_id: string;
+        };
         /** AnswerQuestionCommand */
         AnswerQuestionCommand: {
             /** Answers */
@@ -979,6 +1071,21 @@ export interface components {
             cleared: true;
             /** Deleted Count */
             deleted_count: number;
+        };
+        /** ConnectModelServiceRequest */
+        ConnectModelServiceRequest: {
+            /** Adapter Id */
+            adapter_id?: ("openai_chat" | "anthropic_messages") | null;
+            /** Api Key */
+            api_key: string;
+            /** Base Url */
+            base_url?: string | null;
+            /** Name */
+            name?: string | null;
+            /** Preset Id */
+            preset_id: string;
+            /** Region */
+            region?: ("cn" | "intl" | "custom") | null;
         };
         /** CreateRunRequest */
         CreateRunRequest: {
@@ -1352,52 +1459,6 @@ export interface components {
              */
             status: "pending" | "resolved";
         };
-        /** DiscoverLocalModelsRequest */
-        DiscoverLocalModelsRequest: {
-            /** Api Key */
-            api_key?: string | null;
-            /** Base Url */
-            base_url: string;
-            /**
-             * Kind
-             * @default openai_compatible
-             * @enum {string}
-             */
-            kind: "openai_compatible" | "anthropic";
-            /** Provider Id */
-            provider_id?: string | null;
-        };
-        /** DiscoverLocalModelsResponse */
-        DiscoverLocalModelsResponse: {
-            /** Models */
-            models: components["schemas"]["DiscoveredLocalModel"][];
-        };
-        /** DiscoveredLocalModel */
-        DiscoveredLocalModel: {
-            /** Display Name */
-            display_name: string;
-            /**
-             * Image Inputs
-             * @default false
-             */
-            image_inputs: boolean;
-            /** Max Input Tokens */
-            max_input_tokens?: number | null;
-            /** Max Output Tokens */
-            max_output_tokens?: number | null;
-            /** Model Id */
-            model_id: string;
-            /**
-             * Streaming
-             * @default true
-             */
-            streaming: boolean;
-            /**
-             * Tool Calling
-             * @default true
-             */
-            tool_calling: boolean;
-        };
         /** EditedToolAction */
         EditedToolAction: {
             /** Args */
@@ -1507,6 +1568,29 @@ export interface components {
              */
             worker: string;
         };
+        /** ImportModelServiceRequest */
+        ImportModelServiceRequest: {
+            /**
+             * Adapter Id
+             * @enum {string}
+             */
+            adapter_id: "openai_chat" | "anthropic_messages";
+            /** Base Url */
+            base_url: string;
+            /** Id */
+            id: string;
+            /** Models */
+            models?: components["schemas"]["ModelServiceModel"][];
+            /** Name */
+            name: string;
+            /** Preset Id */
+            preset_id: string;
+            /**
+             * Region
+             * @enum {string}
+             */
+            region: "cn" | "intl" | "custom";
+        };
         /** InjectRunInstructionRequest */
         InjectRunInstructionRequest: {
             /** Content */
@@ -1546,10 +1630,10 @@ export interface components {
             /** Step */
             step: number;
         };
-        /** ListLocalModelProvidersResponse */
-        ListLocalModelProvidersResponse: {
-            /** Providers */
-            providers: components["schemas"]["LocalModelProvider"][];
+        /** ListModelServiceConnectionsResponse */
+        ListModelServiceConnectionsResponse: {
+            /** Services */
+            services: components["schemas"]["ModelServiceConnection"][];
         };
         /** ListPluginsResponse */
         ListPluginsResponse: {
@@ -1620,60 +1704,6 @@ export interface components {
             title: string;
             /** Tool Name */
             tool_name?: string | null;
-        };
-        /** LocalModelProfile */
-        LocalModelProfile: {
-            /** Display Name */
-            display_name: string;
-            /**
-             * Image Inputs
-             * @default false
-             */
-            image_inputs: boolean;
-            /** Max Input Tokens */
-            max_input_tokens?: number | null;
-            /** Max Output Tokens */
-            max_output_tokens?: number | null;
-            /** Model Id */
-            model_id: string;
-            /**
-             * Streaming
-             * @default true
-             */
-            streaming: boolean;
-            /**
-             * Tool Calling
-             * @default true
-             */
-            tool_calling: boolean;
-        };
-        /** LocalModelProvider */
-        LocalModelProvider: {
-            /** Base Url */
-            base_url: string;
-            /** Created At */
-            created_at: string;
-            /** Credential Configured */
-            credential_configured: boolean;
-            /** Enabled */
-            enabled: boolean;
-            /** Id */
-            id: string;
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "openai_compatible" | "anthropic";
-            /** Models */
-            models: components["schemas"]["LocalModelProfile"][];
-            /** Name */
-            name: string;
-            /** Requires Api Key */
-            requires_api_key: boolean;
-            /** Updated At */
-            updated_at: string;
-            /** Version */
-            version: number;
         };
         /**
          * LocalRun
@@ -1788,6 +1818,8 @@ export interface components {
         LocalRuntimeModel: {
             /** Available */
             available: boolean;
+            /** Connection Id */
+            connection_id: string;
             /** Display Name */
             display_name: string;
             /** Image Inputs */
@@ -1798,16 +1830,21 @@ export interface components {
             max_output_tokens?: number | null;
             /** Model Id */
             model_id: string;
-            /** Provider Id */
-            provider_id: string;
-            /** Provider Name */
-            provider_name: string;
+            /** Recommended */
+            recommended: boolean;
+            /** Service Name */
+            service_name: string;
             /** Spec */
             spec: string;
             /** Streaming */
             streaming: boolean;
             /** Tool Calling */
             tool_calling: boolean;
+            /**
+             * Verification
+             * @enum {string}
+             */
+            verification: "verified" | "unverified";
         };
         /** LocalRuntimeModelCatalog */
         LocalRuntimeModelCatalog: {
@@ -2121,6 +2158,115 @@ export interface components {
         McpServerWriteResponse: {
             server: components["schemas"]["McpServerInfo"];
         };
+        /** ModelServiceConnection */
+        ModelServiceConnection: {
+            /**
+             * Adapter Id
+             * @enum {string}
+             */
+            adapter_id: "openai_chat" | "anthropic_messages";
+            /** Base Url */
+            base_url: string;
+            /**
+             * Catalog Status
+             * @enum {string}
+             */
+            catalog_status: "ready" | "stale" | "unavailable";
+            /** Created At */
+            created_at: string;
+            /** Credential Configured */
+            credential_configured: boolean;
+            /** Id */
+            id: string;
+            /** Models */
+            models: components["schemas"]["ModelServiceModel"][];
+            /** Name */
+            name: string;
+            /** Preset Id */
+            preset_id: string;
+            /**
+             * Region
+             * @enum {string}
+             */
+            region: "cn" | "intl" | "custom";
+            /** Updated At */
+            updated_at: string;
+            /** Version */
+            version: number;
+        };
+        /** ModelServiceModel */
+        ModelServiceModel: {
+            /** Display Name */
+            display_name: string;
+            /**
+             * Image Inputs
+             * @default false
+             */
+            image_inputs: boolean;
+            /** Max Input Tokens */
+            max_input_tokens?: number | null;
+            /** Max Output Tokens */
+            max_output_tokens?: number | null;
+            /** Model Id */
+            model_id: string;
+            /**
+             * Recommended
+             * @default false
+             */
+            recommended: boolean;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "bundled" | "discovered" | "manual";
+            /**
+             * Streaming
+             * @default true
+             */
+            streaming: boolean;
+            /**
+             * Tool Calling
+             * @default true
+             */
+            tool_calling: boolean;
+            /**
+             * Verification
+             * @enum {string}
+             */
+            verification: "verified" | "unverified";
+        };
+        /** ModelServicePreset */
+        ModelServicePreset: {
+            /** Api Key Url */
+            api_key_url: string | null;
+            /** Billing Url */
+            billing_url: string | null;
+            /** Description */
+            description: string;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Regions */
+            regions: components["schemas"]["ModelServiceRegion"][];
+        };
+        /** ModelServicePresetCatalog */
+        ModelServicePresetCatalog: {
+            /** Services */
+            services: components["schemas"]["ModelServicePreset"][];
+        };
+        /** ModelServiceRegion */
+        ModelServiceRegion: {
+            /** Default */
+            default: boolean;
+            /**
+             * Id
+             * @enum {string}
+             */
+            id: "cn" | "intl";
+            /** Name */
+            name: string;
+        };
         /** PermissionResolution */
         PermissionResolution: {
             /**
@@ -2416,14 +2562,14 @@ export interface components {
         };
         /** PluginModelBindingSummary */
         PluginModelBindingSummary: {
+            /** Connection Id */
+            connection_id: string;
+            /** Connection Version */
+            connection_version: number;
             /** Id */
             id: string;
             /** Model Id */
             model_id: string;
-            /** Provider Id */
-            provider_id: string;
-            /** Provider Version */
-            provider_version: number;
             /** Requested Model */
             requested_model: string;
         };
@@ -2726,6 +2872,11 @@ export interface components {
              */
             decision: "confirmed_completed" | "retry_not_executed" | "abort";
         };
+        /** ReconnectModelServiceRequest */
+        ReconnectModelServiceRequest: {
+            /** Api Key */
+            api_key: string;
+        };
         /** ResolvePermissionCommand */
         ResolvePermissionCommand: {
             /** Command Id */
@@ -2852,8 +3003,8 @@ export interface components {
         RuntimeInfo: {
             /** Capabilities */
             capabilities: string[];
-            /** Model Provider Configured */
-            model_provider_configured: boolean;
+            /** Model Service Configured */
+            model_service_configured: boolean;
             /** Protocol Version */
             protocol_version: number;
             /** Runtime Version */
@@ -3083,33 +3234,6 @@ export interface components {
             unknown_model_max_output_tokens?: number | null;
             /** Verification Repair Max */
             verification_repair_max?: number | null;
-        };
-        /** UpsertLocalModelProviderRequest */
-        UpsertLocalModelProviderRequest: {
-            /** Api Key */
-            api_key?: string | null;
-            /** Base Url */
-            base_url: string;
-            /**
-             * Enabled
-             * @default true
-             */
-            enabled: boolean;
-            /**
-             * Kind
-             * @default openai_compatible
-             * @enum {string}
-             */
-            kind: "openai_compatible" | "anthropic";
-            /** Models */
-            models: components["schemas"]["LocalModelProfile"][];
-            /** Name */
-            name: string;
-            /**
-             * Requires Api Key
-             * @default true
-             */
-            requires_api_key: boolean;
         };
         /** ValidationError */
         ValidationError: {
@@ -3387,7 +3511,7 @@ export interface operations {
             };
         };
     };
-    list_model_providers_v1_model_providers_get: {
+    list_model_services_v1_model_services_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -3402,12 +3526,12 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ListLocalModelProvidersResponse"];
+                    "application/json": components["schemas"]["ListModelServiceConnectionsResponse"];
                 };
             };
         };
     };
-    discover_model_provider_models_v1_model_providers_discover_models_post: {
+    connect_model_service_v1_model_services_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -3416,17 +3540,17 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["DiscoverLocalModelsRequest"];
+                "application/json": components["schemas"]["ConnectModelServiceRequest"];
             };
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DiscoverLocalModelsResponse"];
+                    "application/json": components["schemas"]["ModelServiceConnection"];
                 };
             };
             /** @description Validation Error */
@@ -3440,18 +3564,100 @@ export interface operations {
             };
         };
     };
-    upsert_model_provider_v1_model_providers__provider_id__put: {
+    import_model_service_v1_model_services_import_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportModelServiceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelServiceConnection"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_model_services_presets_v1_model_services_presets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelServicePresetCatalog"];
+                };
+            };
+        };
+    };
+    delete_model_service_v1_model_services__connection_id__delete: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                provider_id: string;
+                connection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reconnect_model_service_v1_model_services__connection_id__credential_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connection_id: string;
             };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["UpsertLocalModelProviderRequest"];
+                "application/json": components["schemas"]["ReconnectModelServiceRequest"];
             };
         };
         responses: {
@@ -3461,7 +3667,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LocalModelProvider"];
+                    "application/json": components["schemas"]["ModelServiceConnection"];
                 };
             };
             /** @description Validation Error */
@@ -3475,12 +3681,48 @@ export interface operations {
             };
         };
     };
-    remove_model_provider_v1_model_providers__provider_id__delete: {
+    add_model_service_model_v1_model_services__connection_id__models_post: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                provider_id: string;
+                connection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddModelServiceModelRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelServiceModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    verify_model_service_model_v1_model_services__connection_id__models__model_id__verify_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connection_id: string;
+                model_id: string;
             };
             cookie?: never;
         };
@@ -3492,7 +3734,38 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LocalModelProvider"];
+                    "application/json": components["schemas"]["ModelServiceModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_model_service_v1_model_services__connection_id__refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelServiceConnection"];
                 };
             };
             /** @description Validation Error */

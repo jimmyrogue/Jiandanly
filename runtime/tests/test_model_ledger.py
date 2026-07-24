@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
 import re
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
@@ -27,9 +28,24 @@ from shejane_runtime.llm.ledger import (
     ModelContextBudgetExceeded,
     _conservative_token_count,
     _enforce_context_envelope,
+    _estimate_tool_tokens,
     _provider_tools,
+    _truncate_large_message,
 )
 from shejane_runtime.store.sqlite import LocalStore, ModelCallBudgetExceeded
+
+
+def test_tool_token_estimate_is_local_and_conservative() -> None:
+    tool_schema = {
+        "name": "lookup",
+        "description": "查询天气",
+        "input_schema": {"type": "object"},
+    }
+
+    estimated = _estimate_tool_tokens([tool_schema])
+
+    payload = '[{"name": "lookup", "description": "查询天气", "input_schema": {"type": "object"}}]'
+    assert estimated == math.ceil(len(payload.encode("utf-8")) / 2)
 
 
 class _StreamingModel(BaseChatModel):
@@ -587,6 +603,26 @@ def test_context_envelope_uses_conservative_count_for_chinese() -> None:
 
     assert _conservative_token_count(bounded) <= 8_000
     assert "Runtime truncated" in str(bounded[0].content)
+
+
+def test_context_envelope_preserves_short_system_blocks() -> None:
+    message = SystemMessage(
+        content=[
+            {"type": "text", "text": "A" * 4_000},
+            {
+                "type": "text",
+                "text": "Read `/skills/example/SKILL.md` before answering.",
+            },
+            {"type": "text", "text": "B" * 4_000},
+        ]
+    )
+
+    bounded = _truncate_large_message(message, max_chars=3_000)
+
+    assert isinstance(bounded.content, list)
+    assert bounded.content[1]["text"] == "Read `/skills/example/SKILL.md` before answering."
+    assert "Runtime truncated" in bounded.content[0]["text"]
+    assert "Runtime truncated" in bounded.content[2]["text"]
 
 
 def test_context_envelope_preserves_latest_tool_result_with_block_system_prompt() -> None:

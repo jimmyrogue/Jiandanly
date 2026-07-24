@@ -102,7 +102,7 @@ class CompletionRouterMiddleware(AgentMiddleware):
             return _terminal_route(
                 "failed",
                 "model_output_filtered",
-                "The model provider filtered the final output.",
+                "The model service filtered the final output.",
                 recoverable=False,
                 run_id=run_id,
             )

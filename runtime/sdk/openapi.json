@@ -1,6 +1,36 @@
 {
   "components": {
     "schemas": {
+      "AddModelServiceModelRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "display_name": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "model_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "title": "Model Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model_id"
+        ],
+        "title": "AddModelServiceModelRequest",
+        "type": "object"
+      },
       "AnswerQuestionCommand": {
         "additionalProperties": false,
         "properties": {
@@ -193,6 +223,86 @@
         "title": "ClearMemoryResponse",
         "type": "object"
       },
+      "ConnectModelServiceRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "adapter_id": {
+            "anyOf": [
+              {
+                "enum": [
+                  "openai_chat",
+                  "anthropic_messages"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adapter Id"
+          },
+          "api_key": {
+            "maxLength": 8192,
+            "minLength": 1,
+            "title": "Api Key",
+            "type": "string"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "preset_id": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Preset Id",
+            "type": "string"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "enum": [
+                  "cn",
+                  "intl",
+                  "custom"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region"
+          }
+        },
+        "required": [
+          "preset_id",
+          "api_key"
+        ],
+        "title": "ConnectModelServiceRequest",
+        "type": "object"
+      },
       "CreateRunRequest": {
         "additionalProperties": false,
         "properties": {
@@ -268,7 +378,7 @@
             "title": "Metadata"
           },
           "model": {
-            "maxLength": 128,
+            "maxLength": 256,
             "minLength": 1,
             "pattern": "^local:[^:\\s]+:\\S+$",
             "title": "Model",
@@ -476,7 +586,7 @@
             "title": "Metadata"
           },
           "model": {
-            "maxLength": 128,
+            "maxLength": 256,
             "minLength": 1,
             "pattern": "^local:[^:\\s]+:\\S+$",
             "title": "Model",
@@ -1288,138 +1398,6 @@
         "title": "DiagnosticsWaitCandidate",
         "type": "object"
       },
-      "DiscoverLocalModelsRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "api_key": {
-            "anyOf": [
-              {
-                "maxLength": 8192,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Api Key"
-          },
-          "base_url": {
-            "maxLength": 2048,
-            "minLength": 1,
-            "title": "Base Url",
-            "type": "string"
-          },
-          "kind": {
-            "default": "openai_compatible",
-            "enum": [
-              "openai_compatible",
-              "anthropic"
-            ],
-            "title": "Kind",
-            "type": "string"
-          },
-          "provider_id": {
-            "anyOf": [
-              {
-                "maxLength": 32,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Provider Id"
-          }
-        },
-        "required": [
-          "base_url"
-        ],
-        "title": "DiscoverLocalModelsRequest",
-        "type": "object"
-      },
-      "DiscoverLocalModelsResponse": {
-        "properties": {
-          "models": {
-            "items": {
-              "$ref": "#/components/schemas/DiscoveredLocalModel"
-            },
-            "title": "Models",
-            "type": "array"
-          }
-        },
-        "required": [
-          "models"
-        ],
-        "title": "DiscoverLocalModelsResponse",
-        "type": "object"
-      },
-      "DiscoveredLocalModel": {
-        "additionalProperties": false,
-        "properties": {
-          "display_name": {
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Display Name",
-            "type": "string"
-          },
-          "image_inputs": {
-            "default": false,
-            "title": "Image Inputs",
-            "type": "boolean"
-          },
-          "max_input_tokens": {
-            "anyOf": [
-              {
-                "maximum": 10000000.0,
-                "minimum": 1.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Max Input Tokens"
-          },
-          "max_output_tokens": {
-            "anyOf": [
-              {
-                "maximum": 1000000.0,
-                "minimum": 128.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Max Output Tokens"
-          },
-          "model_id": {
-            "maxLength": 200,
-            "minLength": 1,
-            "pattern": "^\\S+$",
-            "title": "Model Id",
-            "type": "string"
-          },
-          "streaming": {
-            "default": true,
-            "title": "Streaming",
-            "type": "boolean"
-          },
-          "tool_calling": {
-            "default": true,
-            "title": "Tool Calling",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "model_id",
-          "display_name"
-        ],
-        "title": "DiscoveredLocalModel",
-        "type": "object"
-      },
       "EditedToolAction": {
         "properties": {
           "args": {
@@ -1706,6 +1684,69 @@
         "title": "HealthResponse",
         "type": "object"
       },
+      "ImportModelServiceRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "adapter_id": {
+            "enum": [
+              "openai_chat",
+              "anthropic_messages"
+            ],
+            "title": "Adapter Id",
+            "type": "string"
+          },
+          "base_url": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Base Url",
+            "type": "string"
+          },
+          "id": {
+            "pattern": "^conn_[a-f0-9]{32}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/ModelServiceModel"
+            },
+            "maxItems": 1000,
+            "title": "Models",
+            "type": "array"
+          },
+          "name": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "preset_id": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Preset Id",
+            "type": "string"
+          },
+          "region": {
+            "enum": [
+              "cn",
+              "intl",
+              "custom"
+            ],
+            "title": "Region",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "preset_id",
+          "name",
+          "region",
+          "adapter_id",
+          "base_url"
+        ],
+        "title": "ImportModelServiceRequest",
+        "type": "object"
+      },
       "InjectRunInstructionRequest": {
         "properties": {
           "content": {
@@ -1794,20 +1835,20 @@
         "title": "LatestCheckpoint",
         "type": "object"
       },
-      "ListLocalModelProvidersResponse": {
+      "ListModelServiceConnectionsResponse": {
         "properties": {
-          "providers": {
+          "services": {
             "items": {
-              "$ref": "#/components/schemas/LocalModelProvider"
+              "$ref": "#/components/schemas/ModelServiceConnection"
             },
-            "title": "Providers",
+            "title": "Services",
             "type": "array"
           }
         },
         "required": [
-          "providers"
+          "services"
         ],
-        "title": "ListLocalModelProvidersResponse",
+        "title": "ListModelServiceConnectionsResponse",
         "type": "object"
       },
       "ListPluginsResponse": {
@@ -2012,141 +2053,6 @@
           "created_at"
         ],
         "title": "LocalArtifact",
-        "type": "object"
-      },
-      "LocalModelProfile": {
-        "additionalProperties": false,
-        "properties": {
-          "display_name": {
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Display Name",
-            "type": "string"
-          },
-          "image_inputs": {
-            "default": false,
-            "title": "Image Inputs",
-            "type": "boolean"
-          },
-          "max_input_tokens": {
-            "anyOf": [
-              {
-                "maximum": 10000000.0,
-                "minimum": 1.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Max Input Tokens"
-          },
-          "max_output_tokens": {
-            "anyOf": [
-              {
-                "maximum": 1000000.0,
-                "minimum": 128.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Max Output Tokens"
-          },
-          "model_id": {
-            "maxLength": 200,
-            "minLength": 1,
-            "pattern": "^\\S+$",
-            "title": "Model Id",
-            "type": "string"
-          },
-          "streaming": {
-            "default": true,
-            "title": "Streaming",
-            "type": "boolean"
-          },
-          "tool_calling": {
-            "default": true,
-            "title": "Tool Calling",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "model_id",
-          "display_name"
-        ],
-        "title": "LocalModelProfile",
-        "type": "object"
-      },
-      "LocalModelProvider": {
-        "properties": {
-          "base_url": {
-            "title": "Base Url",
-            "type": "string"
-          },
-          "created_at": {
-            "title": "Created At",
-            "type": "string"
-          },
-          "credential_configured": {
-            "title": "Credential Configured",
-            "type": "boolean"
-          },
-          "enabled": {
-            "title": "Enabled",
-            "type": "boolean"
-          },
-          "id": {
-            "title": "Id",
-            "type": "string"
-          },
-          "kind": {
-            "enum": [
-              "openai_compatible",
-              "anthropic"
-            ],
-            "title": "Kind",
-            "type": "string"
-          },
-          "models": {
-            "items": {
-              "$ref": "#/components/schemas/LocalModelProfile"
-            },
-            "title": "Models",
-            "type": "array"
-          },
-          "name": {
-            "title": "Name",
-            "type": "string"
-          },
-          "requires_api_key": {
-            "title": "Requires Api Key",
-            "type": "boolean"
-          },
-          "updated_at": {
-            "title": "Updated At",
-            "type": "string"
-          },
-          "version": {
-            "title": "Version",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "id",
-          "name",
-          "kind",
-          "base_url",
-          "requires_api_key",
-          "credential_configured",
-          "models",
-          "enabled",
-          "version",
-          "created_at",
-          "updated_at"
-        ],
-        "title": "LocalModelProvider",
         "type": "object"
       },
       "LocalRun": {
@@ -2505,6 +2411,10 @@
             "title": "Available",
             "type": "boolean"
           },
+          "connection_id": {
+            "title": "Connection Id",
+            "type": "string"
+          },
           "display_name": {
             "title": "Display Name",
             "type": "string"
@@ -2539,12 +2449,12 @@
             "title": "Model Id",
             "type": "string"
           },
-          "provider_id": {
-            "title": "Provider Id",
-            "type": "string"
+          "recommended": {
+            "title": "Recommended",
+            "type": "boolean"
           },
-          "provider_name": {
-            "title": "Provider Name",
+          "service_name": {
+            "title": "Service Name",
             "type": "string"
           },
           "spec": {
@@ -2558,17 +2468,27 @@
           "tool_calling": {
             "title": "Tool Calling",
             "type": "boolean"
+          },
+          "verification": {
+            "enum": [
+              "verified",
+              "unverified"
+            ],
+            "title": "Verification",
+            "type": "string"
           }
         },
         "required": [
           "spec",
           "model_id",
           "display_name",
-          "provider_id",
-          "provider_name",
+          "connection_id",
+          "service_name",
           "tool_calling",
           "streaming",
           "image_inputs",
+          "verification",
+          "recommended",
           "available"
         ],
         "title": "LocalRuntimeModel",
@@ -3337,6 +3257,278 @@
         "title": "McpServerWriteResponse",
         "type": "object"
       },
+      "ModelServiceConnection": {
+        "properties": {
+          "adapter_id": {
+            "enum": [
+              "openai_chat",
+              "anthropic_messages"
+            ],
+            "title": "Adapter Id",
+            "type": "string"
+          },
+          "base_url": {
+            "title": "Base Url",
+            "type": "string"
+          },
+          "catalog_status": {
+            "enum": [
+              "ready",
+              "stale",
+              "unavailable"
+            ],
+            "title": "Catalog Status",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "credential_configured": {
+            "title": "Credential Configured",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/ModelServiceModel"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "preset_id": {
+            "title": "Preset Id",
+            "type": "string"
+          },
+          "region": {
+            "enum": [
+              "cn",
+              "intl",
+              "custom"
+            ],
+            "title": "Region",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "preset_id",
+          "name",
+          "region",
+          "adapter_id",
+          "base_url",
+          "credential_configured",
+          "catalog_status",
+          "models",
+          "version",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ModelServiceConnection",
+        "type": "object"
+      },
+      "ModelServiceModel": {
+        "additionalProperties": false,
+        "properties": {
+          "display_name": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "image_inputs": {
+            "default": false,
+            "title": "Image Inputs",
+            "type": "boolean"
+          },
+          "max_input_tokens": {
+            "anyOf": [
+              {
+                "maximum": 10000000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Input Tokens"
+          },
+          "max_output_tokens": {
+            "anyOf": [
+              {
+                "maximum": 1000000.0,
+                "minimum": 128.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Output Tokens"
+          },
+          "model_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "title": "Model Id",
+            "type": "string"
+          },
+          "recommended": {
+            "default": false,
+            "title": "Recommended",
+            "type": "boolean"
+          },
+          "source": {
+            "enum": [
+              "bundled",
+              "discovered",
+              "manual"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "streaming": {
+            "default": true,
+            "title": "Streaming",
+            "type": "boolean"
+          },
+          "tool_calling": {
+            "default": true,
+            "title": "Tool Calling",
+            "type": "boolean"
+          },
+          "verification": {
+            "enum": [
+              "verified",
+              "unverified"
+            ],
+            "title": "Verification",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model_id",
+          "display_name",
+          "source",
+          "verification"
+        ],
+        "title": "ModelServiceModel",
+        "type": "object"
+      },
+      "ModelServicePreset": {
+        "properties": {
+          "api_key_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key Url"
+          },
+          "billing_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Billing Url"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "regions": {
+            "items": {
+              "$ref": "#/components/schemas/ModelServiceRegion"
+            },
+            "title": "Regions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "api_key_url",
+          "billing_url",
+          "regions"
+        ],
+        "title": "ModelServicePreset",
+        "type": "object"
+      },
+      "ModelServicePresetCatalog": {
+        "properties": {
+          "services": {
+            "items": {
+              "$ref": "#/components/schemas/ModelServicePreset"
+            },
+            "title": "Services",
+            "type": "array"
+          }
+        },
+        "required": [
+          "services"
+        ],
+        "title": "ModelServicePresetCatalog",
+        "type": "object"
+      },
+      "ModelServiceRegion": {
+        "properties": {
+          "default": {
+            "title": "Default",
+            "type": "boolean"
+          },
+          "id": {
+            "enum": [
+              "cn",
+              "intl"
+            ],
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "default"
+        ],
+        "title": "ModelServiceRegion",
+        "type": "object"
+      },
       "PermissionResolution": {
         "properties": {
           "decision": {
@@ -4041,7 +4233,7 @@
             "title": "Expected Digest"
           },
           "model": {
-            "maxLength": 128,
+            "maxLength": 256,
             "minLength": 1,
             "pattern": "^local:[^:\\s]+:\\S+$",
             "title": "Model",
@@ -4112,6 +4304,14 @@
       "PluginModelBindingSummary": {
         "additionalProperties": false,
         "properties": {
+          "connection_id": {
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "connection_version": {
+            "title": "Connection Version",
+            "type": "integer"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -4119,14 +4319,6 @@
           "model_id": {
             "title": "Model Id",
             "type": "string"
-          },
-          "provider_id": {
-            "title": "Provider Id",
-            "type": "string"
-          },
-          "provider_version": {
-            "title": "Provider Version",
-            "type": "integer"
           },
           "requested_model": {
             "title": "Requested Model",
@@ -4136,8 +4328,8 @@
         "required": [
           "id",
           "requested_model",
-          "provider_id",
-          "provider_version",
+          "connection_id",
+          "connection_version",
           "model_id"
         ],
         "title": "PluginModelBindingSummary",
@@ -4885,6 +5077,22 @@
         "title": "ReconcileToolRequest",
         "type": "object"
       },
+      "ReconnectModelServiceRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "api_key": {
+            "maxLength": 8192,
+            "minLength": 1,
+            "title": "Api Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "api_key"
+        ],
+        "title": "ReconnectModelServiceRequest",
+        "type": "object"
+      },
       "ResolvePermissionCommand": {
         "additionalProperties": false,
         "properties": {
@@ -5168,8 +5376,8 @@
             "title": "Capabilities",
             "type": "array"
           },
-          "model_provider_configured": {
-            "title": "Model Provider Configured",
+          "model_service_configured": {
+            "title": "Model Service Configured",
             "type": "boolean"
           },
           "protocol_version": {
@@ -5185,7 +5393,7 @@
           "protocol_version",
           "runtime_version",
           "capabilities",
-          "model_provider_configured"
+          "model_service_configured"
         ],
         "title": "RuntimeInfo",
         "type": "object"
@@ -5735,71 +5943,6 @@
         "title": "UpdateRuntimeSettingsRequest",
         "type": "object"
       },
-      "UpsertLocalModelProviderRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "api_key": {
-            "anyOf": [
-              {
-                "maxLength": 8192,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Api Key"
-          },
-          "base_url": {
-            "maxLength": 2048,
-            "minLength": 1,
-            "title": "Base Url",
-            "type": "string"
-          },
-          "enabled": {
-            "default": true,
-            "title": "Enabled",
-            "type": "boolean"
-          },
-          "kind": {
-            "default": "openai_compatible",
-            "enum": [
-              "openai_compatible",
-              "anthropic"
-            ],
-            "title": "Kind",
-            "type": "string"
-          },
-          "models": {
-            "items": {
-              "$ref": "#/components/schemas/LocalModelProfile"
-            },
-            "maxItems": 100,
-            "minItems": 1,
-            "title": "Models",
-            "type": "array"
-          },
-          "name": {
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Name",
-            "type": "string"
-          },
-          "requires_api_key": {
-            "default": true,
-            "title": "Requires Api Key",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "name",
-          "base_url",
-          "models"
-        ],
-        "title": "UpsertLocalModelProviderRequest",
-        "type": "object"
-      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -6223,129 +6366,41 @@
         "summary": "Clear Memory"
       }
     },
-    "/v1/model-providers": {
+    "/v1/model-services": {
       "get": {
-        "operationId": "list_model_providers_v1_model_providers_get",
+        "operationId": "list_model_services_v1_model_services_get",
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ListLocalModelProvidersResponse"
+                  "$ref": "#/components/schemas/ListModelServiceConnectionsResponse"
                 }
               }
             },
             "description": "Successful Response"
           }
         },
-        "summary": "List Model Providers"
-      }
-    },
-    "/v1/model-providers/discover-models": {
-      "post": {
-        "operationId": "discover_model_provider_models_v1_model_providers_discover_models_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/DiscoverLocalModelsRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DiscoverLocalModelsResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Discover Model Provider Models"
-      }
-    },
-    "/v1/model-providers/{provider_id}": {
-      "delete": {
-        "operationId": "remove_model_provider_v1_model_providers__provider_id__delete",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "provider_id",
-            "required": true,
-            "schema": {
-              "title": "Provider Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/LocalModelProvider"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Remove Model Provider"
+        "summary": "List Model Services"
       },
-      "put": {
-        "operationId": "upsert_model_provider_v1_model_providers__provider_id__put",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "provider_id",
-            "required": true,
-            "schema": {
-              "title": "Provider Id",
-              "type": "string"
-            }
-          }
-        ],
+      "post": {
+        "operationId": "connect_model_service_v1_model_services_post",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/UpsertLocalModelProviderRequest"
+                "$ref": "#/components/schemas/ConnectModelServiceRequest"
               }
             }
           },
           "required": true
         },
         "responses": {
-          "200": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LocalModelProvider"
+                  "$ref": "#/components/schemas/ModelServiceConnection"
                 }
               }
             },
@@ -6362,7 +6417,280 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Upsert Model Provider"
+        "summary": "Connect Model Service"
+      }
+    },
+    "/v1/model-services/import": {
+      "post": {
+        "operationId": "import_model_service_v1_model_services_import_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportModelServiceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelServiceConnection"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Import Model Service"
+      }
+    },
+    "/v1/model-services/presets": {
+      "get": {
+        "operationId": "list_model_services_presets_v1_model_services_presets_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelServicePresetCatalog"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Model Services Presets"
+      }
+    },
+    "/v1/model-services/{connection_id}": {
+      "delete": {
+        "operationId": "delete_model_service_v1_model_services__connection_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Model Service"
+      }
+    },
+    "/v1/model-services/{connection_id}/credential": {
+      "put": {
+        "operationId": "reconnect_model_service_v1_model_services__connection_id__credential_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReconnectModelServiceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelServiceConnection"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reconnect Model Service"
+      }
+    },
+    "/v1/model-services/{connection_id}/models": {
+      "post": {
+        "operationId": "add_model_service_model_v1_model_services__connection_id__models_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddModelServiceModelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelServiceModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Model Service Model"
+      }
+    },
+    "/v1/model-services/{connection_id}/models/{model_id}/verify": {
+      "post": {
+        "operationId": "verify_model_service_model_v1_model_services__connection_id__models__model_id__verify_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "title": "Model Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelServiceModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Verify Model Service Model"
+      }
+    },
+    "/v1/model-services/{connection_id}/refresh": {
+      "post": {
+        "operationId": "refresh_model_service_v1_model_services__connection_id__refresh_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelServiceConnection"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Refresh Model Service"
       }
     },
     "/v1/models": {

@@ -30,7 +30,7 @@ describe('SettingsView', () => {
       </I18nProvider>,
     )
 
-    expect(screen.getAllByText('模型供应商')).not.toHaveLength(0)
+    expect(screen.getAllByText('模型服务')).not.toHaveLength(0)
     expect(screen.getByRole('switch', { name: '记忆' })).toBeInTheDocument()
     expect(screen.getByRole('switch', { name: '子代理' })).toBeInTheDocument()
     expect(screen.getByRole('switch', { name: '浏览器无头' })).toBeInTheDocument()

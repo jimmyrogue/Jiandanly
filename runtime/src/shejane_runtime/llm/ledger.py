@@ -35,7 +35,7 @@ from pydantic import Field
 
 from ..middleware.tool_visibility import visible_tools_for_messages
 from ..store.sqlite import LocalStore
-from .errors import ModelProviderError
+from .errors import ModelServiceError
 
 
 class ModelContextBudgetExceeded(RuntimeError):
@@ -391,7 +391,7 @@ def _outcome_may_be_unknown(exc: BaseException) -> bool:
 
 
 def _error_code(exc: BaseException) -> str:
-    if isinstance(exc, ModelProviderError) and exc.code:
+    if isinstance(exc, ModelServiceError) and exc.code:
         return exc.code[:100]
     if isinstance(exc, httpx.HTTPStatusError):
         return f"http_{exc.response.status_code}"
@@ -509,15 +509,21 @@ def _truncate_large_message(message: BaseMessage, *, max_chars: int) -> BaseMess
     if total_chars <= max_chars:
         return message
 
+    low = 0
+    high = max(len(text) for _, text, _ in text_parts)
+    per_part_limit = 0
+    while low <= high:
+        candidate = (low + high) // 2
+        if sum(min(len(text), candidate) for _, text, _ in text_parts) <= max_chars:
+            per_part_limit = candidate
+            low = candidate + 1
+        else:
+            high = candidate - 1
+
     bounded = list(content)
-    remaining_chars = total_chars
-    remaining_budget = max_chars
     for index, text, is_block in text_parts:
-        target = min(len(text), remaining_budget * len(text) // remaining_chars)
-        replacement = text if len(text) <= target else _truncate_text(text, target)
+        replacement = text if len(text) <= per_part_limit else _truncate_text(text, per_part_limit)
         bounded[index] = {**bounded[index], "text": replacement} if is_block else replacement
-        remaining_chars -= len(text)
-        remaining_budget -= len(replacement)
     return message.model_copy(update={"content": bounded})
 
 
@@ -554,17 +560,9 @@ def _estimate_tool_tokens(
             }
         )
     payload = json.dumps(serializable, ensure_ascii=False, default=str)
-    try:
-        import tiktoken
-
-        encoded = tiktoken.get_encoding("cl100k_base").encode(payload)
-        # Tool schemas are controlled Runtime JSON rather than arbitrary user
-        # prose. A 50% margin covers provider tokenizer differences while
-        # avoiding the unusable one-character-per-token bound for ASCII JSON.
-        return max(0, math.ceil(len(encoded) * 1.5))
-    except Exception:
-        # Fail conservatively when the tokenizer is unavailable.
-        return max(0, len(payload))
+    # JSON is mostly ASCII (~4 bytes/token), while CJK approaches 3 bytes/token.
+    # Two bytes/token stays conservative without downloading tokenizer data.
+    return max(0, math.ceil(len(payload.encode("utf-8")) / 2))
 
 
 def _conservative_token_count(messages: list[BaseMessage]) -> int:

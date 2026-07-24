@@ -277,11 +277,11 @@ async def test_plugin_adapter_uses_frozen_vision_binding_without_exposing_creden
     binding["model_binding"] = {
         "id": "vision-default",
         "requested_model": "local:vision:vision-a",
-        "provider": "openai_compatible",
-        "provider_id": "vision",
-        "provider_version": 1,
+        "adapter_id": "openai_chat",
+        "connection_id": "vision",
+        "connection_version": 1,
         "base_url": "https://provider.invalid/v1",
-        "credential_ref": "keyring:model-provider:vision:revision",
+        "credential_ref": "keyring:model-service:vision:revision",
         "model_id": "vision-a",
         "profile": {"image_inputs": True},
     }
@@ -364,8 +364,8 @@ send({"jsonrpc":"2.0","id":shutdown["id"],"result":{}})
     assert result["provenance"]["model"] == {
         "backend": "cloud",
         "binding_id": "vision-default",
-        "provider_id": "vision",
-        "provider_version": 1,
+        "connection_id": "vision",
+        "connection_version": 1,
         "model_id": "vision-a",
         "usage": {"input_tokens": 12, "output_tokens": 3},
     }
@@ -373,29 +373,36 @@ send({"jsonrpc":"2.0","id":shutdown["id"],"result":{}})
 
 
 @pytest.mark.asyncio
-async def test_vision_provider_call_uses_authorized_image_and_redacts_credentials(
+async def test_vision_service_call_uses_authorized_image_and_redacts_credentials(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = reset_settings_for_tests(data_dir=tmp_path)
     store = await LocalStore.open(tmp_path / "runtime.db")
-    await store.upsert_model_provider(
+    await store.create_model_connection(
         principal_id=LOCAL_OWNER_PRINCIPAL_ID,
-        provider_id="vision",
+        connection_id="vision",
+        preset_id="custom",
         name="Vision",
-        kind="openai_compatible",
+        region="custom",
+        adapter_id="openai_chat",
         base_url="https://provider.invalid/v1",
         requires_api_key=True,
-        credential_ref="keyring:model-provider:vision:revision",
+        credential_ref="keyring:model-service:vision:revision",
         models=[
             {
                 "model_id": "vision-a",
                 "display_name": "Vision A",
+                "source": "manual",
+                "verification": "verified",
+                "recommended": False,
+                "tool_calling": True,
+                "streaming": True,
                 "image_inputs": True,
                 "max_output_tokens": 512,
             }
         ],
-        enabled=True,
+        catalog_status="ready",
     )
     input_root = tmp_path / "input"
     image_path = input_root / "image" / "image.png"
@@ -423,16 +430,21 @@ async def test_vision_provider_call_uses_authorized_image_and_redacts_credential
     binding = {
         "id": "vision-default",
         "requested_model": "local:vision:vision-a",
-        "provider": "openai_compatible",
-        "provider_id": "vision",
-        "provider_version": 1,
+        "adapter_id": "openai_chat",
+        "connection_id": "vision",
+        "connection_version": 1,
         "base_url": "https://provider.invalid/v1",
         "requires_api_key": True,
-        "credential_ref": "keyring:model-provider:vision:revision",
+        "credential_ref": "keyring:model-service:vision:revision",
         "model_id": "vision-a",
         "profile": {
             "model_id": "vision-a",
             "display_name": "Vision A",
+            "source": "manual",
+            "verification": "verified",
+            "recommended": False,
+            "tool_calling": True,
+            "streaming": True,
             "image_inputs": True,
             "max_output_tokens": 512,
         },
@@ -472,7 +484,7 @@ async def test_vision_provider_call_uses_authorized_image_and_redacts_credential
     assert captured["options"] == {"max_tokens": 64, "temperature": 0}
     assert result == {
         "text": "A white square.",
-        "model": {"provider_id": "vision", "provider_version": 1, "model_id": "vision-a"},
+        "model": {"connection_id": "vision", "connection_version": 1, "model_id": "vision-a"},
         "usage": {"input_tokens": 12, "output_tokens": 4, "total_tokens": 16},
     }
 

@@ -273,8 +273,8 @@ class PluginToolAdapter:
                 provenance["model"] = {
                     "backend": "cloud",
                     "binding_id": str(action.model_binding["id"]),
-                    "provider_id": str(action.model_binding["provider_id"]),
-                    "provider_version": int(action.model_binding["provider_version"]),
+                    "connection_id": str(action.model_binding["connection_id"]),
+                    "connection_version": int(action.model_binding["connection_version"]),
                     "model_id": str(action.model_binding["model_id"]),
                     **(
                         {"usage": vision_result["usage"]}

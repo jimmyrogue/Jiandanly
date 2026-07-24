@@ -145,7 +145,7 @@ Declaring `model.vision.invoke` does not select a provider. The user or deployme
   "plugin_id": "dev.example.vision",
   "expected_digest": "sha256:<package-digest>",
   "binding_id": "vision-default",
-  "model": "local:<provider-id>:<model-id>"
+  "model": "local:<connection-id>:<model-id>"
 }
 ```
 

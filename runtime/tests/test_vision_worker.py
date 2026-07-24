@@ -165,8 +165,8 @@ async def test_cloud_vision_worker_uses_frozen_host_binding_without_asset(
         return {
             "text": "A paper lantern.",
             "model": {
-                "provider_id": "vision-provider",
-                "provider_version": 3,
+                "connection_id": "vision-provider",
+                "connection_version": 3,
                 "model_id": "vision-model",
             },
             "usage": {"input_tokens": 20, "output_tokens": 5, "total_tokens": 25},
@@ -192,8 +192,8 @@ async def test_cloud_vision_worker_uses_frozen_host_binding_without_asset(
     ]
     assert result["output"]["model"] == {
         "binding_id": "vision-default",
-        "provider_id": "vision-provider",
-        "provider_version": 3,
+        "connection_id": "vision-provider",
+        "connection_version": 3,
         "model_id": "vision-model",
     }
     assert result["output"]["warnings"] == [

@@ -794,7 +794,7 @@ def _model_binding_summary(binding: Any) -> dict[str, Any] | None:
     return {
         "id": str(binding["id"]),
         "requested_model": str(binding["requested_model"]),
-        "provider_id": str(binding["provider_id"]),
-        "provider_version": int(binding["provider_version"]),
+        "connection_id": str(binding["connection_id"]),
+        "connection_version": int(binding["connection_version"]),
         "model_id": str(binding["model_id"]),
     }

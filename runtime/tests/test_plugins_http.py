@@ -13,6 +13,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 
+import shejane_runtime.runs as runs_module
 from shejane_runtime.config import reset_settings_for_tests
 from shejane_runtime.plugins.catalog import PluginCatalog
 from shejane_runtime.plugins.identity import plugin_action_catalog_hash
@@ -851,6 +852,11 @@ def test_vision_model_binding_is_validated_and_frozen_per_run(
         data_dir=tmp_path / "runtime",
     )
     monkeypatch.setattr(RunCoordinator, "start", lambda _self: None)
+
+    async def configured_key(*_args, **_kwargs):
+        return "test-key"
+
+    monkeypatch.setattr(runs_module, "get_model_api_key", configured_key)
     with TestClient(create_app(settings)) as client:
         manifest = json.loads((WORKER_FIXTURE / ".shejane-plugin" / "plugin.json").read_text())
         manifest["contributions"]["actions"][0]["capabilities"].append("model.vision.invoke")
@@ -869,34 +875,37 @@ def test_vision_model_binding_is_validated_and_frozen_per_run(
                 source="test",
             )
         )
-        provider = client.put(
-            "/v1/model-providers/vision",
-            headers=AUTH,
-            json={
-                "name": "Vision provider",
-                "kind": "openai_compatible",
-                "base_url": "http://127.0.0.1:11434/v1",
-                "requires_api_key": False,
-                "models": [
+        client.portal.call(
+            partial(
+                client.app.state.store.create_model_connection,
+                principal_id="local:owner",
+                connection_id="vision",
+                preset_id="custom",
+                name="Vision service",
+                region="custom",
+                adapter_id="openai_chat",
+                base_url="http://127.0.0.1:11434/v1",
+                requires_api_key=True,
+                credential_ref="keyring:model-service:vision",
+                models=[
                     {
-                        "model_id": "vision-a",
-                        "display_name": "Vision A",
+                        "model_id": model_id,
+                        "display_name": display_name,
+                        "source": "manual",
+                        "verification": "verified",
+                        "recommended": False,
                         "tool_calling": True,
                         "streaming": True,
                         "image_inputs": True,
-                    },
-                    {
-                        "model_id": "vision-b",
-                        "display_name": "Vision B",
-                        "tool_calling": True,
-                        "streaming": True,
-                        "image_inputs": True,
-                    },
+                    }
+                    for model_id, display_name in (
+                        ("vision-a", "Vision A"),
+                        ("vision-b", "Vision B"),
+                    )
                 ],
-                "enabled": True,
-            },
+                catalog_status="ready",
+            )
         )
-        assert provider.status_code == 200, provider.text
 
         unconfigured = client.post(
             "/v1/commands",
@@ -926,8 +935,8 @@ def test_vision_model_binding_is_validated_and_frozen_per_run(
         assert first.json()["model_binding"] == {
             "id": "vision-default",
             "requested_model": "local:vision:vision-a",
-            "provider_id": "vision",
-            "provider_version": 1,
+            "connection_id": "vision",
+            "connection_version": 1,
             "model_id": "vision-a",
         }
         enabled = client.post(

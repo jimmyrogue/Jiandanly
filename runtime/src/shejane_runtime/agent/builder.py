@@ -6,7 +6,7 @@ batteries-included middleware stack and the SubAgent / Skills /
 Filesystem / Shell integrations we need anyway. Our
 remaining job is to:
 
-  1. Bind the Runtime-selected BYOK model provider.
+  1. Bind the Runtime-selected BYOK model connection.
   2. Build a *narrow* tool list (everything outside the deepagents auto
      stack: time, environment, clipboard, local web fetch, MCP, browser).
   3. Pass per-run config: `subagents=`, `skills=`, `backend=`,
@@ -24,7 +24,7 @@ What deepagents auto-adds for us (we no longer wire these manually):
   SummarizationMiddleware         ← auto context compaction
   PatchToolCallsMiddleware        ← orphan tool_call self-heal
   ToolExclusionMiddleware         ← conditional tool gating
-  Prompt caching                  ← provider middleware when supported
+  Prompt caching                  ← adapter middleware when supported
   MemoryMiddleware                ← AGENTS.md loader
   Tool review + durable receipts  ← our Runtime middleware, including subagents
 """
@@ -607,7 +607,10 @@ def _build_chat_model(
                 "max_output_tokens": settings.unknown_model_max_output_tokens,
             }
         )
-    if model_binding and model_binding.get("provider") in {"openai_compatible", "anthropic"}:
+    if model_binding and model_binding.get("adapter_id") in {
+        "openai_chat",
+        "anthropic_messages",
+    }:
         raw_profile = model_binding.get("profile")
         profile = (
             {
@@ -627,7 +630,7 @@ def _build_chat_model(
         profile.setdefault("max_output_tokens", settings.unknown_model_max_output_tokens)
         profile.setdefault("image_inputs", False)
         profile["image_tool_message"] = profile["image_inputs"]
-        if model_binding["provider"] == "anthropic":
+        if model_binding["adapter_id"] == "anthropic_messages":
             from langchain_anthropic import ChatAnthropic
 
             return ChatAnthropic(
@@ -670,13 +673,13 @@ async def _invoke_plugin_vision(
     principal_id: str,
     settings: Settings,
 ) -> dict[str, Any]:
-    provider_id = str(model_binding["provider_id"])
-    provider = await store.get_model_provider(
+    connection_id = str(model_binding["connection_id"])
+    connection = await store.get_model_connection(
         principal_id=principal_id,
-        provider_id=provider_id,
+        connection_id=connection_id,
     )
     try:
-        models = json.loads(provider.get("models_json") or "[]") if provider else []
+        models = json.loads(connection.get("models_json") or "[]") if connection else []
     except (json.JSONDecodeError, TypeError):
         models = []
     current_profile = next(
@@ -690,15 +693,14 @@ async def _invoke_plugin_vision(
     if isinstance(current_profile, dict):
         current_profile = apply_known_model_profile_defaults(
             current_profile,
-            provider_base_url=str(provider.get("base_url") or "") if provider else "",
+            service_base_url=str(connection.get("base_url") or "") if connection else "",
         )
     if (
-        provider is None
-        or not bool(provider.get("enabled"))
-        or int(provider.get("version") or 1) != int(model_binding["provider_version"])
-        or str(provider.get("kind")) != str(model_binding["provider"])
-        or str(provider.get("base_url")) != str(model_binding["base_url"])
-        or str(provider.get("credential_ref")) != str(model_binding["credential_ref"])
+        connection is None
+        or int(connection.get("version") or 1) != int(model_binding["connection_version"])
+        or str(connection.get("adapter_id")) != str(model_binding["adapter_id"])
+        or str(connection.get("base_url")) != str(model_binding["base_url"])
+        or str(connection.get("credential_ref")) != str(model_binding["credential_ref"])
         or current_profile != dict(model_binding["profile"])
         or not bool(current_profile.get("image_inputs"))
     ):
@@ -707,21 +709,17 @@ async def _invoke_plugin_vision(
             "configured Vision model binding changed or is unavailable",
         )
     try:
-        api_key = (
-            await get_model_api_key(
-                principal_id,
-                provider_id,
-                str(model_binding["credential_ref"]),
-            )
-            if bool(model_binding.get("requires_api_key"))
-            else None
+        api_key = await get_model_api_key(
+            principal_id,
+            connection_id,
+            str(model_binding["credential_ref"]),
         )
     except CredentialStoreError as exc:
         raise PluginActionError(
             "model_credential_store_unavailable",
             "Vision model credential store is unavailable",
         ) from exc
-    if bool(model_binding.get("requires_api_key")) and not api_key:
+    if not api_key:
         raise PluginActionError(
             "model_binding_unavailable",
             "configured Vision model credential is unavailable",
@@ -779,7 +777,7 @@ async def _invoke_plugin_vision(
         except (Image.DecompressionBombError, UnidentifiedImageError, OSError) as exc:
             raise PluginActionError("invalid_invocation", "Vision input image is invalid") from exc
         encoded = base64.b64encode(body).decode("ascii")
-        if model_binding["provider"] == "anthropic":
+        if model_binding["adapter_id"] == "anthropic_messages":
             blocks.append(
                 {
                     "type": "image",
@@ -810,14 +808,14 @@ async def _invoke_plugin_vision(
         response = await model.ainvoke([HumanMessage(content=blocks)])
     except Exception as exc:
         log.warning(
-            "plugin vision provider request failed provider=%s model=%s error=%s",
-            provider_id,
+            "plugin vision model request failed connection=%s model=%s error=%s",
+            connection_id,
             model_binding["model_id"],
             type(exc).__name__,
         )
         raise PluginActionError(
-            "vision_provider_failed",
-            "configured Vision provider request failed",
+            "vision_model_service_failed",
+            "configured Vision model service request failed",
         ) from exc
     content = response.content
     text = (
@@ -830,7 +828,10 @@ async def _invoke_plugin_vision(
         )
     )
     if not text or len(text) > 262_144:
-        raise PluginActionError("vision_provider_failed", "Vision provider returned invalid text")
+        raise PluginActionError(
+            "vision_model_service_failed",
+            "Vision model service returned invalid text",
+        )
     raw_usage = getattr(response, "usage_metadata", None)
     usage = {
         key: int(value)
@@ -843,8 +844,8 @@ async def _invoke_plugin_vision(
     return {
         "text": text,
         "model": {
-            "provider_id": provider_id,
-            "provider_version": int(model_binding["provider_version"]),
+            "connection_id": connection_id,
+            "connection_version": int(model_binding["connection_version"]),
             "model_id": str(model_binding["model_id"]),
         },
         "usage": usage,
@@ -909,6 +910,7 @@ async def build_agent(
     retry_context: dict[str, Any] | None = None,
     memory_enabled: bool = True,
     skills_enabled: bool = True,
+    skill_catalog_hash: str | None = None,
     mcp_enabled: bool = True,
     mcp_disabled_servers: set[str] | None = None,
     mcp_catalog: MCPToolCatalog | None = None,
@@ -1195,6 +1197,9 @@ async def build_agent(
 
     skills_dirs = _resolve_skills_dirs() if skills_enabled else []
     skills_arg = [str(d) for d in skills_dirs] if skills_dirs else None
+    effective_skill_catalog_hash = skill_catalog_hash if skills_arg else None
+    if skills_arg and not effective_skill_catalog_hash:
+        effective_skill_catalog_hash = skill_catalog_fingerprint()
     memory_arg = _resolve_memory_sources(settings)
 
     # FilesystemBackend serves three deepagents subsystems at once:
@@ -1331,6 +1336,7 @@ async def build_agent(
         tools=tools,
         subagents=subagents_arg,
         skills=skills_arg,
+        skill_catalog_hash=effective_skill_catalog_hash,
         memory=memory_arg,
         plugin_catalog_hash=(plugin_lease.action_catalog_hash if plugin_lease else None),
     )
@@ -1371,6 +1377,7 @@ def _agent_definition_fingerprint(
     tools: list[Any],
     subagents: list[Any] | None,
     skills: list[str] | None,
+    skill_catalog_hash: str | None,
     memory: list[str] | None,
     plugin_catalog_hash: str | None,
 ) -> str:
@@ -1390,6 +1397,7 @@ def _agent_definition_fingerprint(
             if isinstance(item, dict)
         ],
         "skills": skills or [],
+        "skill_catalog_hash": skill_catalog_hash,
         "memory": memory or [],
         "plugin_catalog_hash": plugin_catalog_hash,
         "middleware": {

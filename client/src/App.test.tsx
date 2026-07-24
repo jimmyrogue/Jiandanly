@@ -218,7 +218,7 @@ describe('desktop shell', () => {
     expect(configureModels).not.toHaveAttribute('aria-haspopup')
     fireEvent.click(configureModels)
 
-    expect(await screen.findByRole('heading', { name: '模型供应商' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '模型服务' })).toBeInTheDocument()
   })
 
   it('lets an unsent chat clear its selected workspace', async () => {
@@ -347,12 +347,14 @@ describe('desktop shell', () => {
             spec: 'local:test:model',
             model_id: 'model',
             display_name: 'Test Model',
-            provider_id: 'test',
-            provider_name: 'Test',
+            connection_id: 'test',
+            service_name: 'Test',
             available: true,
             tool_calling: true,
             streaming: true,
             image_inputs: false,
+            verification: 'verified',
+            recommended: true,
           }],
         }), { status: 200, headers: { 'content-type': 'application/json' } })
       }

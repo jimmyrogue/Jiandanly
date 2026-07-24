@@ -14,7 +14,7 @@ make test-e2e
 
 Windows AMD64 另有强制的 `Windows AMD64 fixed capabilities production gate`：OCR 从锁定输入双构建 Runtime Asset、冻结 Worker、生成 digest-bound 插件，并以冻结 Worker/引擎运行真实质量与 hostile-input 测试；Browser QA 安装 Playwright 1.61.1 固定的 Chromium 1228，双构建 Runtime Asset 后使用最终插件包完成打开、填写、点击、截图和关闭。两条路径都在原生 Windows runner 执行，不依赖开发机已有资产，也不允许缺少原生产物时跳过。
 
-随后脚本会创建临时数据目录、用户目录、workspace 和 Electron `userData`，启动启用了确定性测试模型的 Runtime，等待健康检查，执行 Runtime 契约与崩溃恢复测试，再运行固定版本的官方 MCP conformance `initialize` / `tools_call` / `sse-retry` 场景，最后启动 Vite 和真实 Electron 窗口执行 Playwright。当前一次完整运行包含 109 条 live Runtime black-box test、4 条真实进程恢复 test、3 组官方 MCP conformance 场景和 17 条 Electron critical flow。所有 conformance 调用都经过生产 `_MCPServerSupervisor` 的 Streamable HTTP、目录发现和 Tool adapter，不使用已知失败 baseline。脚本结束时关闭所有进程并清理数据。失败时会打印 Runtime 日志，并把 Playwright 截图、trace、Runtime 日志、完整 diagnostics JSON 和逐行 SSE 事件保留在 `.tmp/e2e-artifacts`；事件行包含 run ID、command ID、seq、event type 和 payload。它不读取真实用户配置、Skill、MCP 或密钥，也不访问模型供应商网络。
+随后脚本会创建临时数据目录、用户目录、workspace 和 Electron `userData`，启动启用了确定性测试模型的 Runtime，等待健康检查，执行 Runtime 契约与崩溃恢复测试，再运行固定版本的官方 MCP conformance `initialize` / `tools_call` / `sse-retry` 场景，最后启动 Vite 和真实 Electron 窗口执行 Playwright。所有 conformance 调用都经过生产 `_MCPServerSupervisor` 的 Streamable HTTP、目录发现和 Tool adapter，不使用已知失败 baseline。脚本结束时关闭所有进程并清理数据。失败时会打印 Runtime 日志，并把 Playwright 截图、trace、Runtime 日志、完整 diagnostics JSON 和逐行 SSE 事件保留在 `.tmp/e2e-artifacts`；事件行包含 run ID、command ID、seq、event type 和 payload。它不读取真实用户配置、Skill、MCP 或密钥，也不访问外部模型服务网络。
 
 ## 真实 LLM 正常流程矩阵
 
@@ -63,7 +63,7 @@ curl -fsS \
 | P7/P10 恢复与等待 | 权限等待持久化后 SIGKILL Runtime、复用同一 data dir 重启并恢复；Tool 已产生副作用且 receipt 为 running 时 SIGKILL，租约过期后 quarantine 为 `outcome_unknown` 且绝不重放；首个 `llm.delta` 后 SIGKILL，按 durable cursor 重连并安全收敛到唯一 `run.cleanup_required`，diagnostics 与 thread snapshot 一致 |
 | P10 工具与等待 | 每个公开 Runtime Tool、附件 PDF 的只读虚拟路径、工作区读写、权限批准/拒绝/幂等重放、混合 Tool 批次整批暂停、结构化用户提问和取消运行 |
 | P11-P12 结算 | 完成和取消终态、事件持久化、线程投影、定时任务、记忆清理 |
-| 可配置资源 | 模型供应商、Skill 和 MCP 的创建、读取、修改、删除；Skill 在 Run 接纳时绑定完整发现树指纹，等待期间修改后旧 Run 安全失败、fork 继续继承旧绑定、新 Run 才读取新版本；真实本地 stdio MCP 的 opaque cursor 分页目录、搜索、普通/structured output、单调 progress、用户取消与旧进程回收、成功、失败、超时/崩溃后自动新 PID、reconciliation、等待批准时配置漂移的安全失效；真实 Streamable HTTP session 404 后重新 initialize 并由新 Run 恢复；官方 conformance `initialize`、`tools/list`、`tools/call`、SSE retry timing/Last-Event-ID；秘密不回传 |
+| 可配置资源 | 模型服务、Skill 和 MCP 的创建、读取、修改、删除；Skill 在 Run 接纳时绑定完整发现树指纹，等待期间修改后旧 Run 安全失败、fork 继续继承旧绑定、新 Run 才读取新版本；真实本地 stdio MCP 的 opaque cursor 分页目录、搜索、普通/structured output、单调 progress、用户取消与旧进程回收、成功、失败、超时/崩溃后自动新 PID、reconciliation、等待批准时配置漂移的安全失效；真实 Streamable HTTP session 404 后重新 initialize 并由新 Run 恢复；官方 conformance `initialize`、`tools/list`、`tools/call`、SSE retry timing/Last-Event-ID；秘密不回传 |
 | 固定插件 | Browser QA 真实 Chromium 操作与截图；Computer Use 真实桥接子进程、状态约束和回收；OCR adapter/Artifact 全链路及有资产时的真实 RapidOCR 质量门禁 |
 | Plugin 纵向流 | 打包真实 WASI fixture、公开命令安装/启用、不可用 capability 的结构化拒绝、guest 结构化失败与确定性 fuel trap 均形成 `tool.failed` 且 Run 继续、零错误 Artifact、下一次健康调用成功、读取 Artifact 原始字节、审批等待期间冻结 Plugin 版本、移除 package |
 | Client 用户流 | Electron 启动与 Runtime 握手、发送/流式完成、窗口重启后会话持久、真实 SSE 帧中途 half-close 后不重载按 cursor 自动续流、目录选择与 workspace 绑定、Tool 批准/拒绝、`user.ask` 回答与恢复、瞬态模型失败 CTA 与同任务 retry、validation 失败 CTA 启动携带 repair 元数据的新 Run 并完成修复、Markdown 外链通过 Electron Main allowlist 调用系统 handler、危险协议零调用且系统错误被归一化、真实 OS clipboard 写入与权限拒绝可见失败、授权 workspace 中真实 PPTX 从回答文件按钮打开 Runtime outline 预览并验证系统打开成功/权限错误、无 workspace 写入失败后从 CTA 选择/授权目录并自动 retry、设置页在 Run 等待期间关闭子代理后旧 Run 继续使用接纳快照而新 Run 禁止 `task`、真实 Runtime SIGKILL 后无需重载即主动显示离线并以同一 data dir 重启恢复、打开 `cleanup_required` 诊断面板并从 Electron Main 下载/解析 JSON、恢复后继续新任务、故障窗口外控制台零错误 |
@@ -135,7 +135,7 @@ Tool case 在测试输出中按 `filesystem`、`runtime-context`、`network`、`
 
 当前仍未完成的黑盒层包括：尚未开放平台的 Managed Worker guest/Registry，以及真实 Developer ID/公证 release runner 的最终结果。macOS arm64 的当前源码 `--dir` 包已真实完成 Runtime preflight、packaged lifecycle 和 14-mode VM gate，macOS x64/Windows lifecycle 与 Linux arm64 Runtime confinement 也已进入各自原生 release job；但没有对应 runner 的一次实际成功记录时，不能把 workflow wiring 冒充已经发布。Runtime Skill 已覆盖等待、恢复、fresh Run 与 checkpoint fork 的配置漂移，但这里采用的是“接纳内容指纹 + 恢复前失败关闭”，不是把 Skill 文件复制到每个 Run 的私有归档；因此旧 Run 保留安全性，但修改后需要创建新 Run，不能继续执行旧版本。当前 HTTP session 测试覆盖 404 失效，不冒充 auth、elicitation 或全部 transport 错误已支持。官方 conformance 当前只声明并验证 Runtime 实际使用的 client 场景 `initialize`、`tools_call` 与 `sse-retry`。当前 17 条 Electron critical flows 已完成。执行顺序与验收表见研究文档。
 
-真实模型供应商、第三方 MCP 和操作系统凭据库具有网络、账户或平台依赖，不进入每次提交都运行的确定性套件。发布前应运行一次 `make test-e2e-real MODEL=...` 完整正常路径矩阵；供应商网络或账户故障应与代码回归分开诊断，不能把未执行的真实门禁写成已通过。
+真实模型服务、第三方 MCP 和操作系统凭据库具有网络、账户或平台依赖，不进入每次提交都运行的确定性套件。发布前应运行一次 `make test-e2e-real MODEL=...` 完整正常路径矩阵；外部服务网络或账户故障应与代码回归分开诊断，不能把未执行的真实门禁写成已通过。
 
 ## 新增功能时
 

@@ -181,12 +181,12 @@ EventSource API 也能用，但不能传 Authorization 头；fetch + ReadableStr
 | `POST /v1/runs/:id/fork` | `{command_id, client_message_id, assistant_message_id, thread_id, protocol_version, required_capabilities, checkpoint_id, ...}` | 创建分支后开 stream → `run.started` |
 | `GET /v1/runs/:id/stream` | — | （本协议） |
 | `POST /v1/commands` | Run/HITL 命令，以及 `plugin.install`、`plugin.runtime_asset.install`、`plugin.enable/disable/update/rollback/remove`、`plugin.model.bind`、`plugin.setup.advance` 的严格联合类型 | Run 命令产生对应状态事件；插件命令写入幂等 Command 日志并返回收据。`plugin.setup.advance` 只接受固定 Computer Use 能力和当前 revision，且不会由 Client 后台自动重试系统授权动作 |
-| `GET /v1/plugins` / `GET /v1/plugins/:id` | — | 返回当前 principal 可见的安装、版本、Action、Command、签名、能力与安全模型绑定摘要，不返回密钥、credential ref 或 provider base URL |
+| `GET /v1/plugins` / `GET /v1/plugins/:id` | — | 返回当前 principal 可见的安装、版本、Action、Command、签名、能力与安全模型绑定摘要，不返回密钥、credential ref 或模型服务地址 |
 | `GET /v1/plugins/:id/readiness` | — | 返回固定 Computer Use 能力的只读准备状态、当前单步动作和 revision；读取不会触发系统授权 |
 | `GET /v1/artifacts/:id` | — | 返回授权后的 Artifact 元数据；旧的小型文本可内联，文件 Artifact 只返回 `storage_kind=blob`、大小和摘要 |
 | `GET /v1/artifacts/:id/content` | — | 按所属 Run 授权并流式返回正文；支持 HTTP Range，不暴露内部存储路径 |
 
-`plugin.model.bind` 只接受具体的 `local:<provider>:<model>`，并要求目标 Managed Worker 已声明 `model.vision.invoke`、模型已启用且声明 `image_inputs`。绑定时冻结 provider version；Run 接纳时再复制为 Run-owned binding，后续重绑只影响新 Run。Worker 调用时 Runtime 再核验该版本并从系统凭据库读取密钥，公开收据和插件详情只返回 `binding_id`、请求模型、provider/model ID 与 provider version。
+`plugin.model.bind` 只接受具体的 `local:<connection>:<model>`，并要求目标 Managed Worker 已声明 `model.vision.invoke`、模型已启用且声明 `image_inputs`。绑定时冻结 connection version；Run 接纳时再复制为 Run-owned binding，后续重绑只影响新 Run。Worker 调用时 Runtime 再核验该版本并从系统凭据库读取密钥，公开收据和插件详情只返回 `binding_id`、请求模型、connection/model ID 与 connection version。
 
 权限批准的 happy path：
 

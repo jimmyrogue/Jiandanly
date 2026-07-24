@@ -19,7 +19,7 @@ export type RuntimeModelSpec = `local:${string}:${string}`
 /** Validate untrusted storage or catalog data before it becomes a model selection. */
 export function parseRuntimeModelSpec(value: string): RuntimeModelSpec | undefined {
   const trimmed = value.trim()
-  return trimmed.length <= 128 && /^local:[^:\s]+:\S+$/.test(trimmed)
+  return trimmed.length <= 256 && /^local:[^:\s]+:\S+$/.test(trimmed)
     ? trimmed as RuntimeModelSpec
     : undefined
 }
@@ -33,12 +33,14 @@ export type LocalThreadSnapshot = Schemas['LocalThreadSnapshot']
 export type RuntimeInfo = Schemas['RuntimeInfo']
 export type RuntimeSettings = Schemas['RuntimeSettingsResponse']
 export type UpdateRuntimeSettingsRequest = Schemas['UpdateRuntimeSettingsRequest']
-export type LocalModelProvider = Schemas['LocalModelProvider']
-export type LocalModelProfile = Schemas['LocalModelProfile']
-export type DiscoverLocalModelsRequest = Schemas['DiscoverLocalModelsRequest']
-export type DiscoveredLocalModel = Schemas['DiscoveredLocalModel']
+export type ModelServicePreset = Schemas['ModelServicePreset']
+export type ModelServiceConnection = Schemas['ModelServiceConnection']
+export type ModelServiceModel = Schemas['ModelServiceModel']
+export type ConnectModelServiceRequest = Schemas['ConnectModelServiceRequest']
+export type ReconnectModelServiceRequest = Schemas['ReconnectModelServiceRequest']
+export type ImportModelServiceRequest = Schemas['ImportModelServiceRequest']
+export type AddModelServiceModelRequest = Schemas['AddModelServiceModelRequest']
 export type LocalRuntimeModel = Schemas['LocalRuntimeModel']
-export type UpsertLocalModelProviderRequest = Schemas['UpsertLocalModelProviderRequest']
 export type LocalScheduledRun = Schemas['LocalScheduledRun']
 export type LocalArtifact = Schemas['LocalArtifact']
 export type LocalWorkspaceAuthorization = Schemas['LocalWorkspaceAuthorization']
@@ -209,55 +211,123 @@ export async function updateRuntimeSettings(
   return decodeLocalResponse<RuntimeSettings>(response)
 }
 
-export async function listLocalModelProviders(
+export async function listModelServicePresets(
   config: RuntimeClientConfig,
   fetcher: Fetcher = fetch,
-): Promise<LocalModelProvider[]> {
-  const response = await fetcher(`${normalizeBaseURL(config.baseURL)}/v1/model-providers`, {
+): Promise<ModelServicePreset[]> {
+  const response = await fetcher(`${normalizeBaseURL(config.baseURL)}/v1/model-services/presets`, {
     headers: localHeaders(config, false),
   })
-  const body = await decodeLocalResponse<{ providers?: LocalModelProvider[] }>(response)
-  return body.providers ?? []
+  const body = await decodeLocalResponse<{ services?: ModelServicePreset[] }>(response)
+  return body.services ?? []
 }
 
-export async function discoverLocalModels(
-  input: DiscoverLocalModelsRequest,
+export async function listModelServices(
   config: RuntimeClientConfig,
   fetcher: Fetcher = fetch,
-): Promise<DiscoveredLocalModel[]> {
-  const response = await fetcher(`${normalizeBaseURL(config.baseURL)}/v1/model-providers/discover-models`, {
+): Promise<ModelServiceConnection[]> {
+  const response = await fetcher(`${normalizeBaseURL(config.baseURL)}/v1/model-services`, {
+    headers: localHeaders(config, false),
+  })
+  const body = await decodeLocalResponse<{ services?: ModelServiceConnection[] }>(response)
+  return body.services ?? []
+}
+
+export async function connectModelService(
+  input: ConnectModelServiceRequest,
+  config: RuntimeClientConfig,
+  fetcher: Fetcher = fetch,
+): Promise<ModelServiceConnection> {
+  const response = await fetcher(`${normalizeBaseURL(config.baseURL)}/v1/model-services`, {
     method: 'POST',
     headers: localHeaders(config, true),
     body: JSON.stringify(input),
   })
-  const body = await decodeLocalResponse<{ models?: DiscoveredLocalModel[] }>(response)
-  return body.models ?? []
+  return decodeLocalResponse<ModelServiceConnection>(response)
 }
 
-export async function upsertLocalModelProvider(
-  providerID: string,
-  input: UpsertLocalModelProviderRequest,
+export async function refreshModelService(
+  connectionID: string,
   config: RuntimeClientConfig,
   fetcher: Fetcher = fetch,
-): Promise<LocalModelProvider> {
-  const response = await fetcher(`${normalizeBaseURL(config.baseURL)}/v1/model-providers/${encodeURIComponent(providerID)}`, {
-    method: 'PUT',
+): Promise<ModelServiceConnection> {
+  const response = await fetcher(`${normalizeBaseURL(config.baseURL)}/v1/model-services/${encodeURIComponent(connectionID)}/refresh`, {
+    method: 'POST',
+    headers: localHeaders(config, false),
+  })
+  return decodeLocalResponse<ModelServiceConnection>(response)
+}
+
+export async function reconnectModelService(
+  connectionID: string,
+  input: ReconnectModelServiceRequest,
+  config: RuntimeClientConfig,
+  fetcher: Fetcher = fetch,
+): Promise<ModelServiceConnection> {
+  const response = await fetcher(
+    `${normalizeBaseURL(config.baseURL)}/v1/model-services/${encodeURIComponent(connectionID)}/credential`,
+    {
+      method: 'PUT',
+      headers: localHeaders(config, true),
+      body: JSON.stringify(input),
+    },
+  )
+  return decodeLocalResponse<ModelServiceConnection>(response)
+}
+
+export async function importModelService(
+  input: ImportModelServiceRequest,
+  config: RuntimeClientConfig,
+  fetcher: Fetcher = fetch,
+): Promise<ModelServiceConnection> {
+  const response = await fetcher(`${normalizeBaseURL(config.baseURL)}/v1/model-services/import`, {
+    method: 'POST',
     headers: localHeaders(config, true),
     body: JSON.stringify(input),
   })
-  return decodeLocalResponse<LocalModelProvider>(response)
+  return decodeLocalResponse<ModelServiceConnection>(response)
 }
 
-export async function deleteLocalModelProvider(
-  providerID: string,
+export async function addModelServiceModel(
+  connectionID: string,
+  input: AddModelServiceModelRequest,
   config: RuntimeClientConfig,
   fetcher: Fetcher = fetch,
-): Promise<LocalModelProvider> {
-  const response = await fetcher(`${normalizeBaseURL(config.baseURL)}/v1/model-providers/${encodeURIComponent(providerID)}`, {
+): Promise<ModelServiceModel> {
+  const response = await fetcher(`${normalizeBaseURL(config.baseURL)}/v1/model-services/${encodeURIComponent(connectionID)}/models`, {
+    method: 'POST',
+    headers: localHeaders(config, true),
+    body: JSON.stringify(input),
+  })
+  return decodeLocalResponse<ModelServiceModel>(response)
+}
+
+export async function verifyModelServiceModel(
+  connectionID: string,
+  modelID: string,
+  config: RuntimeClientConfig,
+  fetcher: Fetcher = fetch,
+): Promise<ModelServiceModel> {
+  const response = await fetcher(
+    `${normalizeBaseURL(config.baseURL)}/v1/model-services/${encodeURIComponent(connectionID)}/models/${encodeURIComponent(modelID)}/verify`,
+    {
+      method: 'POST',
+      headers: localHeaders(config, false),
+    },
+  )
+  return decodeLocalResponse<ModelServiceModel>(response)
+}
+
+export async function deleteModelService(
+  connectionID: string,
+  config: RuntimeClientConfig,
+  fetcher: Fetcher = fetch,
+): Promise<void> {
+  const response = await fetcher(`${normalizeBaseURL(config.baseURL)}/v1/model-services/${encodeURIComponent(connectionID)}`, {
     method: 'DELETE',
     headers: localHeaders(config, false),
   })
-  return decodeLocalResponse<LocalModelProvider>(response)
+  if (!response.ok) await decodeLocalResponse(response)
 }
 
 export async function listLocalRuntimeModels(
@@ -1829,6 +1899,48 @@ export class SheJaneRuntimeClient {
 
   updateSettings(input: UpdateRuntimeSettingsRequest): Promise<RuntimeSettings> {
     return updateRuntimeSettings(input, this.config, this.fetcher)
+  }
+
+  listModelServicePresets(): Promise<ModelServicePreset[]> {
+    return listModelServicePresets(this.config, this.fetcher)
+  }
+
+  listModelServices(): Promise<ModelServiceConnection[]> {
+    return listModelServices(this.config, this.fetcher)
+  }
+
+  connectModelService(input: ConnectModelServiceRequest): Promise<ModelServiceConnection> {
+    return connectModelService(input, this.config, this.fetcher)
+  }
+
+  refreshModelService(connectionID: string): Promise<ModelServiceConnection> {
+    return refreshModelService(connectionID, this.config, this.fetcher)
+  }
+
+  reconnectModelService(
+    connectionID: string,
+    input: ReconnectModelServiceRequest,
+  ): Promise<ModelServiceConnection> {
+    return reconnectModelService(connectionID, input, this.config, this.fetcher)
+  }
+
+  importModelService(input: ImportModelServiceRequest): Promise<ModelServiceConnection> {
+    return importModelService(input, this.config, this.fetcher)
+  }
+
+  addModelServiceModel(
+    connectionID: string,
+    input: AddModelServiceModelRequest,
+  ): Promise<ModelServiceModel> {
+    return addModelServiceModel(connectionID, input, this.config, this.fetcher)
+  }
+
+  verifyModelServiceModel(connectionID: string, modelID: string): Promise<ModelServiceModel> {
+    return verifyModelServiceModel(connectionID, modelID, this.config, this.fetcher)
+  }
+
+  deleteModelService(connectionID: string): Promise<void> {
+    return deleteModelService(connectionID, this.config, this.fetcher)
   }
 
   createRun(input: CreateLocalRunInput): Promise<LocalRun> {

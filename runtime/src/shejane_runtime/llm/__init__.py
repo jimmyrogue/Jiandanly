@@ -1,5 +1,5 @@
 """Model-provider adapters used by the local Runtime."""
 
-from .errors import ModelProviderError
+from .errors import ModelServiceError
 
-__all__ = ["ModelProviderError"]
+__all__ = ["ModelServiceError"]

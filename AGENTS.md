@@ -58,9 +58,9 @@ make test-contract
 
 ## Runtime Model Rules
 
-- Client reads enabled models from Runtime and submits concrete `local:<provider>:<model>` selections.
-- Do not add automatic model selection or silent provider fallback in Client or Runtime.
-- Runtime provider configuration lives in SQLite; provider secrets live in the operating-system credential store.
+- Client reads enabled models from Runtime and submits concrete `local:<connection>:<model>` selections.
+- Do not add automatic model selection or silent model-service fallback in Client or Runtime.
+- Runtime model-service connections live in SQLite; API keys live in the operating-system credential store.
 
 ## Frontend Rules
 

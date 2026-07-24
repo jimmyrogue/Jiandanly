@@ -42,7 +42,7 @@ def _install_test_streaming_model(monkeypatch: pytest.MonkeyPatch) -> None:
         **kwargs: Any,
     ) -> Any:
         model_binding = kwargs.get("model_binding")
-        if isinstance(model_binding, dict) and model_binding.get("provider") == "openai_compatible":
+        if isinstance(model_binding, dict) and model_binding.get("adapter_id") == "openai_chat":
             return original_build_chat_model(settings, run_id, mode, **kwargs)
         if settings.fake_llm:
             return FakeBackendChatModel(
@@ -81,7 +81,7 @@ def _install_test_streaming_model(monkeypatch: pytest.MonkeyPatch) -> None:
         if mode in {"auto", "local:test:model"}:
             return (
                 {
-                    "provider": "test_stream",
+                    "adapter_id": "test_stream",
                     "model_id": "test-model",
                     "credential_ref": "tests:streaming_model",
                     "requested_model": mode,
@@ -105,17 +105,17 @@ def _install_test_streaming_model(monkeypatch: pytest.MonkeyPatch) -> None:
         coordinator: Any,
         *,
         principal_id: str,
-        provider_id: str,
+        connection_id: str,
         model_id: str,
         requested_model: str,
         required_capabilities: tuple[str, ...] = ("streaming", "tool_calling"),
     ) -> tuple[dict[str, Any], Any]:
-        if provider_id == "test" and model_id == "model":
+        if connection_id == "test" and model_id == "model":
             return await _model_binding(coordinator, principal_id, requested_model)
         return await original_local_model_binding(
             coordinator,
             principal_id=principal_id,
-            provider_id=provider_id,
+            connection_id=connection_id,
             model_id=model_id,
             requested_model=requested_model,
             required_capabilities=required_capabilities,
@@ -129,7 +129,7 @@ def _install_test_streaming_model(monkeypatch: pytest.MonkeyPatch) -> None:
         settings_snapshot: dict[str, Any],
     ) -> tuple[str | None, str | None]:
         binding = settings_snapshot.get("_model_binding")
-        if isinstance(binding, dict) and binding.get("provider") == "test_stream":
+        if isinstance(binding, dict) and binding.get("adapter_id") == "test_stream":
             return None, None
         return await original_model_binding_error(coordinator, principal_id, settings_snapshot)
 

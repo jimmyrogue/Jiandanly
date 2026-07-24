@@ -17,7 +17,7 @@ Tables in this file:
 - `local_steering`    — user instructions queued into an active run
 - `local_plan_approvals` — pending / resolved plan-mode approvals
 - `local_scheduled_runs` — local-only delayed run requests
-- `local_model_providers` — non-secret BYOK provider configuration
+- `model_connections` — non-secret model-service connection configuration
 - `local_runtime_settings` — persisted defaults for future runs
 - `local_mcp_catalog` — credential-free MCP tool metadata and refresh state
 - `plugin_versions` — immutable content-addressed plugin package metadata
@@ -45,6 +45,7 @@ from typing import Any
 import aiosqlite
 
 from ..auth import LOCAL_OWNER_PRINCIPAL_ID
+from ..model_credentials import delete_legacy_model_api_key
 from ..permission_policy import require_allowed_permission_scope
 from ..plugins.identity import plugin_action_catalog_hash
 
@@ -96,16 +97,18 @@ CREATE TABLE IF NOT EXISTS local_workspaces (
     UNIQUE (principal_id, path)
 );
 
-CREATE TABLE IF NOT EXISTS local_model_providers (
+CREATE TABLE IF NOT EXISTS model_connections (
     principal_id TEXT NOT NULL,
     id TEXT NOT NULL,
+    preset_id TEXT NOT NULL,
     name TEXT NOT NULL,
-    kind TEXT NOT NULL CHECK (kind IN ('openai_compatible', 'anthropic')),
+    region TEXT NOT NULL CHECK (region IN ('cn', 'intl', 'custom')),
+    adapter_id TEXT NOT NULL CHECK (adapter_id IN ('openai_chat', 'anthropic_messages')),
     base_url TEXT NOT NULL,
     requires_api_key INTEGER NOT NULL DEFAULT 1,
     credential_ref TEXT NOT NULL,
     models_json TEXT NOT NULL,
-    enabled INTEGER NOT NULL DEFAULT 1,
+    catalog_status TEXT NOT NULL CHECK (catalog_status IN ('ready', 'stale', 'unavailable')),
     version INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -785,6 +788,7 @@ class LocalStore:
             await _configure_connection(conn)
             await conn.executescript(SCHEMA)
             await cls._ensure_plugin_execution_kinds(conn)
+            await cls._delete_legacy_model_provider_credentials(conn)
             await conn.execute("BEGIN IMMEDIATE")
             await cls._ensure_columns(conn)
             await conn.commit()
@@ -798,12 +802,33 @@ class LocalStore:
             raise
 
     @staticmethod
+    async def _delete_legacy_model_provider_credentials(
+        conn: aiosqlite.Connection,
+    ) -> None:
+        table = await (
+            await conn.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'local_model_providers'"
+            )
+        ).fetchone()
+        if table is None:
+            return
+        rows = await (await conn.execute("SELECT * FROM local_model_providers")).fetchall()
+        for row in rows:
+            record = dict(row)
+            await delete_legacy_model_api_key(
+                str(record.get("principal_id") or LOCAL_OWNER_PRINCIPAL_ID),
+                str(record["id"]),
+                str(record["credential_ref"]) if record.get("credential_ref") else None,
+            )
+
+    @staticmethod
     async def _ensure_columns(conn: aiosqlite.Connection) -> None:
         """Additive migrations for DBs created before a column existed.
         `CREATE TABLE IF NOT EXISTS` never alters an existing table, so a new
         column has to be added explicitly. SQLite ADD COLUMN is cheap + safe."""
         await LocalStore._ensure_principal_scoped_workspaces(conn)
-        await LocalStore._ensure_model_provider_kinds(conn)
+        await conn.execute("DROP TABLE IF EXISTS local_model_providers")
         cursor = await conn.execute("PRAGMA table_info(local_runs)")
         columns = {row[1] for row in await cursor.fetchall()}
         if "mode" not in columns:
@@ -995,41 +1020,6 @@ class LocalStore:
             raise
         finally:
             await conn.execute("PRAGMA foreign_keys = ON")
-
-    @staticmethod
-    async def _ensure_model_provider_kinds(conn: aiosqlite.Connection) -> None:
-        schema = await (
-            await conn.execute(
-                "SELECT sql FROM sqlite_master "
-                "WHERE type = 'table' AND name = 'local_model_providers'"
-            )
-        ).fetchone()
-        if schema is not None and "anthropic" in str(schema[0]).lower():
-            return
-        await conn.execute("SAVEPOINT model_provider_kinds")
-        try:
-            await conn.execute(
-                "CREATE TABLE local_model_providers_v2 ("
-                "principal_id TEXT NOT NULL, id TEXT NOT NULL, name TEXT NOT NULL, "
-                "kind TEXT NOT NULL CHECK (kind IN ('openai_compatible', 'anthropic')), "
-                "base_url TEXT NOT NULL, requires_api_key INTEGER NOT NULL DEFAULT 1, "
-                "credential_ref TEXT NOT NULL, models_json TEXT NOT NULL, "
-                "enabled INTEGER NOT NULL DEFAULT 1, version INTEGER NOT NULL DEFAULT 1, "
-                "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, "
-                "PRIMARY KEY (principal_id, id))"
-            )
-            await conn.execute(
-                "INSERT INTO local_model_providers_v2 SELECT * FROM local_model_providers"
-            )
-            await conn.execute("DROP TABLE local_model_providers")
-            await conn.execute(
-                "ALTER TABLE local_model_providers_v2 RENAME TO local_model_providers"
-            )
-            await conn.execute("RELEASE model_provider_kinds")
-        except BaseException:
-            await conn.execute("ROLLBACK TO model_provider_kinds")
-            await conn.execute("RELEASE model_provider_kinds")
-            raise
 
     @staticmethod
     async def _ensure_permission_identity_columns(conn: aiosqlite.Connection) -> None:
@@ -1529,7 +1519,7 @@ class LocalStore:
                 await conn.rollback()
                 raise
 
-    # --- model providers ---
+    # --- model services ---
 
     async def reserve_model_call(
         self,
@@ -2217,41 +2207,43 @@ class LocalStore:
             (server_name,),
         )
 
-    async def list_model_providers(self, *, principal_id: str) -> list[dict[str, Any]]:
+    async def list_model_connections(self, *, principal_id: str) -> list[dict[str, Any]]:
         rows = await (
             await self._conn.execute(
-                "SELECT * FROM local_model_providers WHERE principal_id = ? ORDER BY name, id",
+                "SELECT * FROM model_connections WHERE principal_id = ? ORDER BY created_at, id",
                 (principal_id,),
             )
         ).fetchall()
         return [dict(row) for row in rows]
 
-    async def get_model_provider(
+    async def get_model_connection(
         self,
         *,
         principal_id: str,
-        provider_id: str,
+        connection_id: str,
     ) -> dict[str, Any] | None:
         row = await (
             await self._conn.execute(
-                "SELECT * FROM local_model_providers WHERE principal_id = ? AND id = ?",
-                (principal_id, provider_id),
+                "SELECT * FROM model_connections WHERE principal_id = ? AND id = ?",
+                (principal_id, connection_id),
             )
         ).fetchone()
         return dict(row) if row is not None else None
 
-    async def upsert_model_provider(
+    async def create_model_connection(
         self,
         *,
         principal_id: str,
-        provider_id: str,
+        connection_id: str,
+        preset_id: str,
         name: str,
-        kind: str,
+        region: str,
+        adapter_id: str,
         base_url: str,
         requires_api_key: bool,
         credential_ref: str,
         models: list[dict[str, Any]],
-        enabled: bool,
+        catalog_status: str,
     ) -> dict[str, Any]:
         now = _now()
         models_json = json.dumps(
@@ -2261,61 +2253,128 @@ class LocalStore:
             separators=(",", ":"),
         )
         await self._conn.execute(
-            "INSERT INTO local_model_providers "
-            "(principal_id, id, name, kind, base_url, requires_api_key, credential_ref, "
-            " models_json, enabled, version, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?) "
-            "ON CONFLICT(principal_id, id) DO UPDATE SET "
-            "name = excluded.name, kind = excluded.kind, base_url = excluded.base_url, "
-            "requires_api_key = excluded.requires_api_key, "
-            "credential_ref = excluded.credential_ref, models_json = excluded.models_json, "
-            "enabled = excluded.enabled, version = local_model_providers.version + 1, "
-            "updated_at = excluded.updated_at "
-            "WHERE local_model_providers.name IS NOT excluded.name "
-            "OR local_model_providers.kind IS NOT excluded.kind "
-            "OR local_model_providers.base_url IS NOT excluded.base_url "
-            "OR local_model_providers.requires_api_key IS NOT excluded.requires_api_key "
-            "OR local_model_providers.credential_ref IS NOT excluded.credential_ref "
-            "OR local_model_providers.models_json IS NOT excluded.models_json "
-            "OR local_model_providers.enabled IS NOT excluded.enabled",
+            "INSERT INTO model_connections "
+            "(principal_id, id, preset_id, name, region, adapter_id, base_url, "
+            " requires_api_key, credential_ref, models_json, catalog_status, version, "
+            " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
             (
                 principal_id,
-                provider_id,
+                connection_id,
+                preset_id,
                 name,
-                kind,
+                region,
+                adapter_id,
                 base_url,
                 int(requires_api_key),
                 credential_ref,
                 models_json,
-                int(enabled),
+                catalog_status,
                 now,
                 now,
             ),
         )
-        provider = await self.get_model_provider(
+        connection = await self.get_model_connection(
             principal_id=principal_id,
-            provider_id=provider_id,
+            connection_id=connection_id,
         )
-        assert provider is not None
-        return provider
+        assert connection is not None
+        return connection
 
-    async def delete_model_provider(
+    async def delete_model_connection(
         self,
         *,
         principal_id: str,
-        provider_id: str,
+        connection_id: str,
     ) -> dict[str, Any] | None:
-        provider = await self.get_model_provider(
+        connection = await self.get_model_connection(
             principal_id=principal_id,
-            provider_id=provider_id,
+            connection_id=connection_id,
         )
-        if provider is None:
+        if connection is None:
             return None
         await self._conn.execute(
-            "DELETE FROM local_model_providers WHERE principal_id = ? AND id = ?",
-            (principal_id, provider_id),
+            "DELETE FROM model_connections WHERE principal_id = ? AND id = ?",
+            (principal_id, connection_id),
         )
-        return provider
+        return connection
+
+    async def update_model_connection_catalog(
+        self,
+        *,
+        principal_id: str,
+        connection_id: str,
+        models: list[dict[str, Any]],
+        catalog_status: str,
+    ) -> dict[str, Any] | None:
+        connection = await self.get_model_connection(
+            principal_id=principal_id,
+            connection_id=connection_id,
+        )
+        if connection is None:
+            return None
+        models_json = json.dumps(
+            models,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        if (
+            connection["models_json"] == models_json
+            and connection["catalog_status"] == catalog_status
+        ):
+            return connection
+        cursor = await self._conn.execute(
+            "UPDATE model_connections SET models_json = ?, catalog_status = ?, "
+            "updated_at = ? "
+            "WHERE principal_id = ? AND id = ?",
+            (
+                models_json,
+                catalog_status,
+                _now(),
+                principal_id,
+                connection_id,
+            ),
+        )
+        if cursor.rowcount == 0:
+            return None
+        return await self.get_model_connection(
+            principal_id=principal_id,
+            connection_id=connection_id,
+        )
+
+    async def replace_model_connection_credential(
+        self,
+        *,
+        principal_id: str,
+        connection_id: str,
+        credential_ref: str,
+        models: list[dict[str, Any]],
+        catalog_status: str,
+    ) -> dict[str, Any] | None:
+        cursor = await self._conn.execute(
+            "UPDATE model_connections SET credential_ref = ?, models_json = ?, "
+            "catalog_status = ?, version = version + 1, updated_at = ? "
+            "WHERE principal_id = ? AND id = ?",
+            (
+                credential_ref,
+                json.dumps(
+                    models,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                catalog_status,
+                _now(),
+                principal_id,
+                connection_id,
+            ),
+        )
+        if cursor.rowcount == 0:
+            return None
+        return await self.get_model_connection(
+            principal_id=principal_id,
+            connection_id=connection_id,
+        )
 
     # --- workspaces ---
 
@@ -3299,8 +3358,8 @@ class LocalStore:
                 summary = {
                     "id": binding_id,
                     "requested_model": requested_model,
-                    "provider_id": str(model_binding["provider_id"]),
-                    "provider_version": int(model_binding["provider_version"]),
+                    "connection_id": str(model_binding["connection_id"]),
+                    "connection_version": int(model_binding["connection_version"]),
                     "model_id": str(model_binding["model_id"]),
                 }
                 receipt = {

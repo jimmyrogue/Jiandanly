@@ -22,7 +22,6 @@ import {
 } from '../src/runtime/client'
 
 const clientDir = path.resolve(import.meta.dirname, '..')
-const clientProviderID = 'e2e-client'
 const realLLMModel = process.env.SHEJANE_E2E_REAL_LLM_MODEL
 
 function realPrompt(fakePrompt: string, livePrompt: string): string {
@@ -87,46 +86,6 @@ function requiredEnv(name: string): string {
   return value
 }
 
-async function configureClientModel(): Promise<void> {
-  const response = await fetch(
-    `${requiredEnv('SHEJANE_E2E_RUNTIME_URL')}/v1/model-providers/${clientProviderID}`,
-    {
-      method: 'PUT',
-      headers: {
-        Authorization: `Bearer ${requiredEnv('SHEJANE_E2E_RUNTIME_TOKEN')}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        name: 'E2E Client Provider',
-        kind: 'openai_compatible',
-        base_url: 'http://127.0.0.1:9/v1',
-        requires_api_key: false,
-        models: [{
-          model_id: 'client-model',
-          display_name: 'E2E Client Model',
-          tool_calling: true,
-          streaming: true,
-          image_inputs: false,
-        }],
-        enabled: true,
-      }),
-    },
-  )
-  if (!response.ok) {
-    throw new Error(`failed to configure the Client E2E model: ${response.status}`)
-  }
-}
-
-async function removeClientModel(): Promise<void> {
-  await fetch(
-    `${requiredEnv('SHEJANE_E2E_RUNTIME_URL')}/v1/model-providers/${clientProviderID}`,
-    {
-      method: 'DELETE',
-      headers: { Authorization: `Bearer ${requiredEnv('SHEJANE_E2E_RUNTIME_TOKEN')}` },
-    },
-  )
-}
-
 function createPptxFixture(filePath: string): void {
   const script = `
 import sys
@@ -151,7 +110,6 @@ test.describe.serial('flow:P2-P12 > Electron critical path', () => {
 
   test.beforeAll(async () => {
     suiteStartedAt = new Date().toISOString()
-    if (!realLLMModel) await configureClientModel()
     faultProxy = await startRuntimeFaultProxy(requiredEnv('SHEJANE_E2E_RUNTIME_URL'))
     harness = await launchClient(undefined, faultProxy.baseURL)
   })
@@ -166,7 +124,6 @@ test.describe.serial('flow:P2-P12 > Electron critical path', () => {
       await harness.app.close()
       fs.rmSync(harness.root, { recursive: true, force: true })
     }
-    if (!realLLMModel) await removeClientModel().catch(() => undefined)
     if (replacementRuntime?.exitCode === null && replacementRuntime.signalCode === null) {
       const exited = once(replacementRuntime, 'exit')
       if (process.platform !== 'win32' && replacementRuntime.pid) {
@@ -189,7 +146,10 @@ test.describe.serial('flow:P2-P12 > Electron critical path', () => {
     const composer = page.getByRole('textbox', {
       name: /交给石间|Hand it to SheJane|Describe a task/,
     })
-    await expect(page.getByRole('button', { name: /选择模型|Pick model/ })).toBeVisible()
+    const modelPicker = page.getByRole('button', { name: /选择模型|Pick model/ })
+    await expect(modelPicker).toBeVisible()
+    await modelPicker.click()
+    await page.locator('.composer-mode-model-item').first().click()
     const prompt = realPrompt(
       'desktop window E2E',
       'Reply with exactly DESKTOP_REAL_LLM_OK. Do not call any tool.',

@@ -41,14 +41,14 @@ corepack enable && pnpm install
 make dev           # Runtime + Vite + Electron, with log tail
 ```
 
-Configure an OpenAI-compatible provider from Client after startup. Runtime
-stores provider secrets in the operating-system credential store.
+Connect a model service from Client after startup. Runtime stores its API Key
+in the operating-system credential store.
 
 If anything looks wrong, `make doctor` is the first stop.
 
 ## The four invariants (don't break these)
 
-1. **Runtime provider keys never come from process env.** BYOK keys live in the Runtime credential store. Enforced by `scripts/check.sh`.
+1. **Model-service API Keys never come from process env.** BYOK keys live in the Runtime credential store. Enforced by `scripts/check.sh`.
 2. **The Runtime's Pydantic models are the source of truth for the HTTP shape.** After editing `api_schemas.py` or a handler's `response_model`, run `make schemas` and commit the regenerated `openapi.json` and `runtime/sdk/src/generated.ts`.
 3. **The SSE wire envelope is fixed.** See `docs/runtime-protocol.md` before touching streaming.
 4. **Runtime owns accepted commands, conversations, task state, checkpoints, and tool receipts.** Client stores only pending commands and a disposable projection.
@@ -56,7 +56,7 @@ If anything looks wrong, `make doctor` is the first stop.
 ## Workflow
 
 1. Branch off `main` (`feat/…`, `fix/…`, `chore/…`, `docs/…`).
-2. Make your change with a focused test where practical (we lean TDD for Runtime state, permissions, SSE/chat-store, providers, and import/export).
+2. Make your change with a focused test where practical (we lean TDD for Runtime state, permissions, SSE/chat-store, model services, and import/export).
 3. Run the checks below until green.
 4. Open a PR against `main` and include this statement in the description:
 
@@ -72,7 +72,7 @@ If anything looks wrong, `make doctor` is the first stop.
 make lint                   # ruff + project guards
 make test                   # Runtime + Client + Runtime SDK
 make test-e2e               # Runtime 黑盒 + 崩溃恢复 + Playwright Electron E2E
-make test-e2e-real MODEL=local:provider:model  # 正常 Agent/Tool/Client 流程 + 真实 BYOK LLM
+make test-e2e-real MODEL=local:connection:model  # 正常 Agent/Tool/Client 流程 + 真实 BYOK LLM
 
 # focused:
 make test-runtime           # uv run python -m pytest

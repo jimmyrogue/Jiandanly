@@ -43,7 +43,7 @@ Runtime 默认不要求用户环境变量。
 
 - Client Main 启动托管 Runtime 时，通过命令行传入本机地址、随机端口和配对 Token。
 - Client 不提供 Runtime 连接设置。开发者接入外部 loopback Runtime 时，地址与 Token 由 Electron Main 配置和保存，不回传明文 Token 给 Renderer。
-- 模型供应商、模型资料和高级默认设置通过 Runtime API 保存。
+- 模型服务连接、模型资料和高级默认设置通过 Runtime API 保存。
 - 新 Run 默认最多使用 100 次主执行模型调用；单次最多派发 5 个子 Agent，每个子 Agent 最多使用 50 次模型调用。Runtime 为主 Agent 保留最后 5 次调用，researcher 单次最多执行 10 次网页搜索和 10 次 `web.fetch`，且不能调用 shell 或写文件。这些都是代码强制的上限，不依赖提示词自律。
 - `web.fetch` 保持 DNS 固定和 SSRF 私网拦截；当系统代理使用 RFC 2544 `198.18.0.0/15` fake-IP DNS 时，仅 HTTPS 请求可通过该代理网段，TLS 仍校验原始主机名。HTTP fake-IP 与其他私网、回环、链路本地地址继续拒绝。
 - BYOK 密钥写入操作系统凭据库，不写入 SQLite、Run 快照或环境变量。
@@ -51,15 +51,15 @@ Runtime 默认不要求用户环境变量。
 
 开发和测试可以使用 `SHEJANE_FAKE_LLM`、tracing 变量以及 Skills/MCP 路径覆盖，但这些不是用户安装配置，也不提供公开 `.env.example`。
 
-## 添加 BYOK 供应商
+## 连接 BYOK 模型服务
 
-Client 的模型供应商设置会调用 Runtime 的 `/v1/model-providers` 接口。当前生产适配器支持 OpenAI 兼容接口和 Anthropic 原生接口。
+Client 的“模型服务”设置调用 Runtime 的 `/v1/model-services` 接口。API Key 只写入操作系统凭据库；连接配置和缓存模型目录写入 Runtime SQLite。
 
-Client 提供 OpenAI、OpenRouter、DeepSeek、Anthropic、自定义 OpenAI 和自定义 Anthropic 入口。填写 API Key 后，Runtime 会从供应商的模型目录读取模型；目录返回的上下文、工具调用和输入模态会自动进入模型资料，标准供应商缺失的字段由 Models.dev 元数据和 Runtime 已知限制补齐。Client 会显示可搜索的列表，并允许为同一个供应商勾选多个模型。手动模型 ID 和高级上下文上限仅作为自定义供应商或目录信息缺失时的后备入口。
+首版入口包括 DeepSeek、Kimi、千问、GLM、MiniMax、硅基流动和“连接已有服务”。官方服务的地址与接口格式由 Runtime 固定，用户只选择区域并填写 API Key；已有服务会先自动识别 OpenAI Chat 或 Anthropic Messages 格式，失败后才显示高级选择。
 
-图片、工具和上下文能力由 Runtime 管理，Client 只在模型列表中以只读信息展示，不要求用户逐个判断或勾选。无法从可信元数据确认图片输入时，模型会保守地视为仅文本；文本模型读取图片时，Runtime 会返回明确的能力限制，不把图片内容交给模型猜测。
+Runtime 立即返回缓存模型目录，不在 Client 启动时逐个访问外部服务。官方推荐模型使用内置能力资料；发现或手动添加的模型必须通过轻量工具调用测试后，才能用于 Agent Run。`/models` 失败不会阻止官方服务连接，Runtime 会保留内置或最近缓存目录。
 
-任务使用明确的 `local:<供应商编号>:<模型编号>`。Runtime 不自动选择模型或静默切换供应商。
+任务使用明确的 `local:<连接编号>:<模型编号>`。Runtime 不自动选择模型，也不会在连接之间静默切换。API Key 失效时，可在原连接上更新，不需要删除连接。
 
 ## 自动审批
 
@@ -137,7 +137,7 @@ OCR 的固定 macOS arm64 与 Windows AMD64 路径使用各平台原生、内容
 
 Speech 现在有真实 `linux/arm64` 候选：`speech.transcribe` 固定 `whisper.cpp 1.8.6`、`large-v3-turbo Q5_0`、CPU 单线程 greedy，并复用精确 FFmpeg 资产做 16 kHz 单声道 PCM 归一化。官方 checkpoint 转换/量化模型 SHA-256 固定为 `39422170...a7e2`；两份 525 MiB Asset 完全一致（archive `883900b6...5cdd`，canonical asset `sha256:dc6ec9da...4f11`）。生产 VM 已通过重复转写/Artifact hash、显式中英文、带背景噪声/双音干扰和四秒停顿的日文 `auto`、66.7 秒且 45% 音量的印度英语技术长文、hostile 音频、取消清理、300 秒双运行预算，以及真实 Media→Speech 文件 Artifact 组合；引擎报告 7,200,001ms 会在 Artifact 创建前拒绝。专名仍可能误识别，`initial_prompt` 不提供词典保证；真实音乐、混合语种/拉丁文字、真实编码两小时边界及过量输出仍待补。最终 `.app` 动态 Gate 已保留给 self-hosted Mac，但真实签名/公证 runner 尚未运行，因此不得宣称为已发布能力。详见 `docs/plugins/phase6-speech-research.md`。
 
-Cloud Vision 已形成 `linux/arm64` release candidate：管理员先配置明确支持 `image_inputs` 的 Runtime 模型，再通过幂等 `plugin.model.bind` 把具体 `local:<provider>:<model>` 绑定到 `org.shejane.vision.cloud`；未绑定时拒绝启用。绑定在 Run 接纳时冻结；冻结 onedir Worker 只能对授权图片发起一次有界 `model.vision.invoke`，不获得密钥、base URL 或网络。Worker 双构建一致、确定性包已检查（digest `sha256:33ff82dc...381f8`），并在生产 VM 中通过 host-call bridge；Runtime adapter 测试覆盖图片身份/预算、凭据脱敏、具体模型和规范化 usage。最终 `.app` 动态 Gate 已保留给 self-hosted Mac，但真实签名/公证 runner 尚未运行，所以 Registry 继续关闭。Local Vision 仍保持拒绝：`llama.cpp b10025 + SmolVLM2 500M Q8_0` 虽可复现，但质量 Gate 仅 3/5，中文与图表失败；不得发布、不得回退到聊天模型。详见 `docs/plugins/phase6-vision-research.md`。
+Cloud Vision 已形成 `linux/arm64` release candidate：管理员先配置明确支持 `image_inputs` 的 Runtime 模型，再通过幂等 `plugin.model.bind` 把具体 `local:<connection>:<model>` 绑定到 `org.shejane.vision.cloud`；未绑定时拒绝启用。绑定在 Run 接纳时冻结；冻结 onedir Worker 只能对授权图片发起一次有界 `model.vision.invoke`，不获得密钥、服务地址或网络。Worker 双构建一致、确定性包已检查（digest `sha256:33ff82dc...381f8`），并在生产 VM 中通过 host-call bridge；Runtime adapter 测试覆盖图片身份/预算、凭据脱敏、具体模型和规范化 usage。最终 `.app` 动态 Gate 已保留给 self-hosted Mac，但真实签名/公证 runner 尚未运行，所以 Registry 继续关闭。Local Vision 仍保持拒绝：`llama.cpp b10025 + SmolVLM2 500M Q8_0` 虽可复现，但质量 Gate 仅 3/5，中文与图表失败；不得发布、不得回退到聊天模型。详见 `docs/plugins/phase6-vision-research.md`。
 
 插件大文件不会写进 SQLite。Run 接纳附件时把正文流式导入：
 
@@ -221,4 +221,4 @@ git diff --check
 - Runtime 只监听 loopback；远程连接必须经过未来的独立网关，不能直接暴露 Runtime。
 - 不要打印或提交任何 `.env`、Token 或 BYOK 密钥。
 - 不要增加产品私有的会话、模型或工具网关。
-- 外部能力通过标准模型供应商或 MCP 接入。
+- 外部能力通过标准模型服务或 MCP 接入。

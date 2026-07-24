@@ -20,11 +20,11 @@ def _bounded_integer(value: Any, *, minimum: int, maximum: int) -> int | None:
 def apply_known_model_profile_defaults(
     profile: dict[str, Any],
     *,
-    provider_base_url: str,
+    service_base_url: str,
 ) -> dict[str, Any]:
-    """Fill published limits without overriding explicit provider settings."""
+    """Fill published limits without overriding explicit model-service settings."""
     normalized = dict(profile)
-    if urlparse(provider_base_url).hostname != "api.deepseek.com":
+    if urlparse(service_base_url).hostname != "api.deepseek.com":
         return normalized
     limits = _DEEPSEEK_V4_LIMITS.get(str(normalized.get("model_id")))
     if limits is None:
@@ -42,7 +42,7 @@ def discovered_model_profile(
     *,
     model_id: str,
     display_name: str,
-    provider_base_url: str,
+    service_base_url: str,
     catalog_model: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Normalize optional capability metadata exposed by model-list APIs."""
@@ -110,5 +110,5 @@ def discovered_model_profile(
         )
     return apply_known_model_profile_defaults(
         profile,
-        provider_base_url=provider_base_url,
+        service_base_url=service_base_url,
     )

@@ -7,7 +7,7 @@ import type { ChatMode } from '@/shared/local-data/types'
 import { ModeSelector, type ModelOption } from './ModeSelector'
 
 const MODELS: ModelOption[] = [
-  { id: 'local:openai:gpt-4o', label: 'GPT-4o', vendor: 'OpenAI', imageInputs: true },
+  { id: 'local:openai:gpt-4o', label: 'GPT-4o', vendor: 'OpenAI', imageInputs: true, recommended: true },
   { id: 'local:ollama:qwen3', label: 'Qwen 3', vendor: 'Ollama', imageInputs: false },
 ]
 
@@ -50,10 +50,32 @@ describe('ModeSelector (Runtime catalog)', () => {
   })
 
   it('selects a concrete model', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
     const onChange = renderSelector('local:openai:gpt-4o')
     openMenu()
     fireEvent.click(await screen.findByText('Qwen 3'))
     expect(onChange).toHaveBeenCalledWith('local:ollama:qwen3')
+    expect(window.confirm).toHaveBeenCalledOnce()
+  })
+
+  it('separates recommended and more models', async () => {
+    renderSelector('local:openai:gpt-4o')
+    openMenu()
+    expect(await screen.findByText('更多模型')).toBeInTheDocument()
+  })
+
+  it('refreshes only when the model menu opens', () => {
+    const onRefreshCurrent = vi.fn()
+    render(withProviders(
+      <ModeSelector
+        mode="local:openai:gpt-4o"
+        models={MODELS}
+        onChange={vi.fn()}
+        onRefreshCurrent={onRefreshCurrent}
+      />,
+    ))
+    openMenu()
+    expect(onRefreshCurrent).toHaveBeenCalledOnce()
   })
 
 })

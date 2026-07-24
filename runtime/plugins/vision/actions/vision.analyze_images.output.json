@@ -29,8 +29,8 @@
       "properties": {
         "binding_id": {"type": "string", "minLength": 1, "maxLength": 100},
         "model_id": {"type": "string", "minLength": 1, "maxLength": 200},
-        "provider_id": {"type": "string", "minLength": 1, "maxLength": 100},
-        "provider_version": {"type": "integer", "minimum": 1},
+        "connection_id": {"type": "string", "minLength": 1, "maxLength": 100},
+        "connection_version": {"type": "integer", "minimum": 1},
         "runtime_asset_id": {"type": "string", "minLength": 3, "maxLength": 200},
         "runtime_asset_version": {"type": "string", "minLength": 1, "maxLength": 100},
         "runtime_asset_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}

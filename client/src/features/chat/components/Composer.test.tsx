@@ -122,6 +122,11 @@ function Harness({
         listMcpServers={listMcpServers}
         listPlugins={listPlugins}
         mode="local:test:model"
+        models={[{
+          id: 'local:test:model',
+          label: 'Test model',
+          imageInputs: false,
+        }]}
         onModeChange={vi.fn()}
         permissionMode={permissionMode}
         onPermissionModeChange={onPermissionModeChange}
@@ -537,6 +542,27 @@ describe('Composer (Lexical skill editor)', () => {
     render(<Harness />)
     // Stop button uses aria-label "停止生成" (i18n key composer.stop).
     expect(screen.queryByRole('button', { name: '停止生成' })).not.toBeInTheDocument()
+  })
+
+  it('does not send before a connected model is selected', () => {
+    const onSend = vi.fn()
+    render(
+      <I18nProvider>
+        <Composer
+          draft="hello"
+          onDraftChange={vi.fn()}
+          isSending={false}
+          onSend={onSend}
+          listSkills={vi.fn().mockResolvedValue([])}
+          mode=""
+          models={[]}
+          onModeChange={vi.fn()}
+        />
+      </I18nProvider>,
+    )
+
+    expect(screen.getByRole('button', { name: '发送' })).toBeDisabled()
+    expect(onSend).not.toHaveBeenCalled()
   })
 
   it('lets the user choose automatic approval before starting a run', async () => {

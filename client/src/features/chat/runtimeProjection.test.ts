@@ -10,6 +10,7 @@ describe('Runtime thread projection', () => {
         title: 'Visible title',
         metadata: {
           pinned: true,
+          model: 'local:conn_1:deepseek-v4-flash',
           workspace: { path: '/tmp/project', label: 'project', authorized: true },
         },
         version: 2,
@@ -109,6 +110,7 @@ describe('Runtime thread projection', () => {
       id: 'conversation-1',
       title: 'Visible title',
       pinned: true,
+      model: 'local:conn_1:deepseek-v4-flash',
       workspace: { path: '/tmp/project' },
     })
     expect(conversation.messages).toMatchObject([

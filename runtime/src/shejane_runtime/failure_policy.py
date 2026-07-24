@@ -58,7 +58,7 @@ def classify_failure_payload(event_type: str, payload: dict[str, Any]) -> dict[s
     ):
         category = "quota"
         recoverable = True
-        suggested_action = "Check the provider quota or choose another Runtime model."
+        suggested_action = "Check the model-service quota or choose another Runtime model."
     elif _contains_any(
         haystack,
         "unauthorized",
@@ -70,11 +70,11 @@ def classify_failure_payload(event_type: str, payload: dict[str, Any]) -> dict[s
     ):
         category = "auth"
         recoverable = True
-        suggested_action = "Check the Runtime provider credential, then retry."
+        suggested_action = "Check the Runtime model-service API Key, then retry."
     elif _contains_any(haystack, "not_configured", "missing_api_key", "api key", "configuration"):
         category = "configuration"
         recoverable = True
-        suggested_action = "Configure the missing provider or key in Runtime settings, then retry."
+        suggested_action = "Connect the missing model service or API Key, then retry."
     elif _contains_any(
         haystack,
         "timeout",
@@ -96,7 +96,7 @@ def classify_failure_payload(event_type: str, payload: dict[str, Any]) -> dict[s
         recoverable = True
         retryable = True
         suggested_action = (
-            "Retry after a short backoff; if it repeats, inspect provider or network status."
+            "Retry after a short backoff; if it repeats, inspect model-service or network status."
         )
     elif _contains_any(
         haystack, "path_outside_workspace", "workspace", "not inside any authorized"
@@ -149,9 +149,7 @@ def classify_failure_payload(event_type: str, payload: dict[str, Any]) -> dict[s
                 recoverable = True
             if category == "unknown":
                 category = "transient"
-            suggested_action = (
-                "Retry after a short backoff; if it repeats, inspect provider or network status."
-            )
+            suggested_action = "Retry after a short backoff; if it repeats, inspect model-service or network status."
         elif not explicit_retryable and category == "transient":
             retryable = False
             suggested_action = "Resolve the reported transient failure before retrying."

@@ -359,16 +359,16 @@ def cloud_inference(
             "host_protocol_violation", "Vision host response is invalid"
         )
     model = result["model"]
-    if set(model) != {"provider_id", "provider_version", "model_id"}:
+    if set(model) != {"connection_id", "connection_version", "model_id"}:
         raise VisionActionError(
             "host_protocol_violation", "Vision model identity is invalid"
         )
     if (
-        not isinstance(model["provider_id"], str)
-        or not model["provider_id"]
-        or isinstance(model["provider_version"], bool)
-        or not isinstance(model["provider_version"], int)
-        or model["provider_version"] < 1
+        not isinstance(model["connection_id"], str)
+        or not model["connection_id"]
+        or isinstance(model["connection_version"], bool)
+        or not isinstance(model["connection_version"], int)
+        or model["connection_version"] < 1
         or not isinstance(model["model_id"], str)
         or not model["model_id"]
     ):

@@ -37,7 +37,7 @@ Never use `run-loop.md` to invent target phase numbers, and never describe unimp
 
 These are not arbitrary style rules. Each one corresponds to a class of bug that has caused real failures in this repository.
 
-1. **Runtime provider keys MUST live in the Runtime credential store, never process env.** Runtime has no private platform Gateway path. Enforced by `scripts/check.sh`.
+1. **Model-service API keys MUST live in the Runtime credential store, never process env.** Runtime has no private platform Gateway path. Enforced by `scripts/check.sh`.
 
 2. **The Runtime's Pydantic models in `runtime/src/shejane_runtime/api_schemas.py` are the single source of truth for the HTTP shape.** FastAPI emits `openapi.json` from them; `openapi-typescript` regenerates `runtime/sdk/src/generated.ts`; `client.ts` re-exports the generated types as aliases. Whenever you edit a model or a handler's `response_model=` annotation, run `make schemas` and commit both `openapi.json` and `generated.ts`. The CI lint job fails if they drift.
 
@@ -47,7 +47,7 @@ These are not arbitrary style rules. Each one corresponds to a class of bug that
 
 5. **Configuration has one owner.** There is no root `.env`. Client, Runtime, and Runtime SDK require zero user env by default.
 
-6. **Runtime model selection is BYOK-owned.** Client reads models from Runtime and submits a concrete `local:<provider>:<model>` selection. Runtime does not silently choose another model or provider.
+6. **Runtime model selection is BYOK-owned.** Client reads models from Runtime and submits a concrete `local:<connection>:<model>` selection. Runtime does not silently choose another model or connection.
 
 7. **Product-specific connectors do not belong in the Runtime core.** Business-platform integrations use standard tools or MCP, not private Runtime routes, tables, or client state.
 
@@ -87,7 +87,7 @@ make logs-client
 | Runtime packaging and local operations | `docs/operations.md` |
 | Plugin architecture, package contracts, isolation, and developer workflow | `docs/adr/0001-runtime-plugin-platform.md`, `docs/plugins/`, `runtime/src/shejane_runtime/plugins/`, `runtime/plugins/` |
 | Current priorities | `docs/roadmap.md` |
-| Runtime model providers | `runtime/src/shejane_runtime/server.py`, `runtime/src/shejane_runtime/runs.py`, `runtime/src/shejane_runtime/llm/`, `client/src/features/settings/ModelProvidersSettings.tsx` |
+| Runtime model services | `runtime/src/shejane_runtime/model_services.py`, `runtime/src/shejane_runtime/server.py`, `runtime/src/shejane_runtime/runs.py`, `runtime/src/shejane_runtime/llm/`, `client/src/features/settings/ModelServicesSettings.tsx` |
 | Runtime code | `runtime/src/shejane_runtime/`: `server.py` exposes the local API; `runs.py` owns job leases, execution, cleanup, and settlement; `agent/builder.py` assembles reusable Agent definitions; `agent/subagents.py` defines Deep Agents subagents; `middleware/` owns input observation, output policy, tool visibility, human approval, tool receipts, and the single completion route; `tools/` contains tool implementations; `store/sqlite.py` persists Runtime state and jobs |
 | Client code | `client/src/`: `App.tsx` is the chat shell, `features/` contains chat, MCP, Skill, plugin, and settings features, and `runtime/client.ts` adapts `@shejane/runtime-sdk` to Electron |
 | Client visual system | `docs/ui/shejane-design-system.md`: June 2026 SheJane design tokens, brand mark, app-shell rules, and attachment and artifact glyph language |
@@ -142,9 +142,9 @@ If anything is wrong, `make doctor` checks Runtime, Client ports, workspace depe
 
 ## Things to never do
 
-- Don't read provider keys from Runtime env or restore a private platform Gateway adapter. Use the Runtime credential store and standard provider/MCP interfaces.
+- Don't read model-service keys from Runtime env or restore a private platform Gateway adapter. Use the Runtime credential store and standard model-service/MCP interfaces.
 - Don't hand-edit `runtime/sdk/src/generated.ts` or `runtime/sdk/openapi.json`. They're build artifacts of `make schemas`.
 - Don't `pkill -f 'shejane-runtime'` and assume the process died. Uvicorn traps SIGTERM. Use `make restart-runtime` (or `lsof -ti :17371 | xargs kill -9`). The `runtime-restart` Skill encapsulates this.
 - Don't change SSE event names without checking `chatStore.ts` and `App.tsx` for switch cases that match. The whole pipeline silently no-ops on a typo'd event name.
 - Don't return raw `dict[str, Any]` from a new endpoint. Declare a Pydantic response model. Otherwise, `openapi.json` says `additionalProperties: true`, and the schema pipeline has nothing from which to generate types.
-- Don't add automatic model selection or silent provider fallback. Use concrete Runtime BYOK model selections.
+- Don't add automatic model selection or silent model-service fallback. Use concrete Runtime BYOK model selections.

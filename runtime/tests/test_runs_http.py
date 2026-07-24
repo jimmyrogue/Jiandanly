@@ -712,7 +712,7 @@ def test_run_admission_rejects_protocol_and_capability_mismatch(
     assert client.get("/v1/runs", headers=headers).json() == {"runs": []}
 
 
-def test_run_admission_requires_a_configured_model_provider(tmp_path: Path) -> None:
+def test_run_admission_requires_a_configured_model_service(tmp_path: Path) -> None:
     settings = reset_settings_for_tests(
         SHEJANE_RUNTIME_TOKEN="tok",
         SHEJANE_FAKE_LLM=False,
@@ -726,19 +726,19 @@ def test_run_admission_requires_a_configured_model_provider(tmp_path: Path) -> N
         )
 
         assert response.status_code == 409
-        assert response.json()["detail"]["code"] == "model_provider_missing"
+        assert response.json()["detail"]["code"] == "model_service_missing"
         runtime = local_client.get(
             "/v1/runtime",
             headers={"Authorization": "Bearer tok"},
         )
-        assert runtime.json()["model_provider_configured"] is False
+        assert runtime.json()["model_service_configured"] is False
         assert local_client.get(
             "/v1/runs",
             headers={"Authorization": "Bearer tok"},
         ).json() == {"runs": []}
 
 
-def test_runtime_discovery_matches_missing_model_provider_admission(
+def test_runtime_discovery_matches_missing_model_service_admission(
     tmp_path: Path,
 ) -> None:
     settings = reset_settings_for_tests(
@@ -754,9 +754,9 @@ def test_runtime_discovery_matches_missing_model_provider_admission(
             json=run_command("hello", model="local:missing:model"),
         )
 
-        assert runtime.json()["model_provider_configured"] is False
+        assert runtime.json()["model_service_configured"] is False
         assert response.status_code == 409
-    assert response.json()["detail"]["code"] == "model_provider_missing"
+    assert response.json()["detail"]["code"] == "model_service_missing"
 
 
 def test_idempotent_replay_returns_the_original_run(
@@ -2477,7 +2477,7 @@ def test_run_diagnostics_classifies_quota_failures(client: TestClient) -> None:
     assert failure["retryable"] is False
     assert failure["action_kind"] == "user_action"
     assert failure["recovery_action"] == "diagnostics"
-    assert "provider quota" in failure["suggested_action"]
+    assert "model-service quota" in failure["suggested_action"]
 
 
 def test_run_diagnostics_reports_latest_task_verification_pass(
@@ -2695,7 +2695,7 @@ def test_run_diagnostics_classifies_auth_failures(client: TestClient) -> None:
     assert failure["recoverable"] is True
     assert failure["retryable"] is False
     assert failure["action_kind"] == "user_action"
-    assert "provider credential" in failure["suggested_action"]
+    assert "model-service API Key" in failure["suggested_action"]
 
 
 def test_run_diagnostics_classifies_transient_failures(client: TestClient) -> None:
@@ -2734,7 +2734,7 @@ def test_run_diagnostics_classifies_transient_failures(client: TestClient) -> No
     assert "Retry" in failure["suggested_action"]
 
 
-def test_model_provider_error_becomes_structured_run_failure(monkeypatch) -> None:
+def test_model_service_error_becomes_structured_run_failure(monkeypatch) -> None:
     tmp = Path(tempfile.mkdtemp(prefix="jdl-runs-model-error-"))
     os.environ["SHEJANE_RUNTIME_TOKEN"] = "tok"
     monkeypatch.delenv("SHEJANE_RUNTIME_MCP_SERVERS", raising=False)
@@ -2792,7 +2792,7 @@ def test_model_provider_error_becomes_structured_run_failure(monkeypatch) -> Non
         assert failed_payload["error"] == "rate limit exceeded"
         assert failed_payload["error_code"] == "rate_limit"
         assert failed_payload["request_id"] == "req-rate"
-        assert failed_payload["provider"] == "anthropic"
+        assert failed_payload["service"] == "anthropic"
         assert failed_payload["recoverable"] is True
         assert failed_payload["retryable"] is True
         assert failed_payload["category"] == "transient"

@@ -51,12 +51,12 @@ from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResu
 from langchain_core.tools import BaseTool
 from pydantic import Field
 
-from shejane_runtime.llm.errors import ModelProviderError
+from shejane_runtime.llm.errors import ModelServiceError
 
 log = logging.getLogger("tests.streaming_model")
 
 
-TestProviderError = ModelProviderError
+TestServiceError = ModelServiceError
 
 
 class TestStreamingChatModel(BaseChatModel):
@@ -260,7 +260,7 @@ class TestStreamingChatModel(BaseChatModel):
 
                 async for event, data in _parse_sse_stream(resp):
                     if event == "llm.error":
-                        raise TestProviderError.from_payload(data)
+                        raise TestServiceError.from_payload(data)
                     chunk = _event_to_chunk(event, data, capture_meta)
                     if chunk is not None:
                         yield chunk

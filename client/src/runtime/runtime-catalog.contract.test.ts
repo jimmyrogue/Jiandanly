@@ -9,7 +9,6 @@ import {
   createLocalSkill,
   createMcpServer,
   createLocalRun,
-  deleteLocalModelProvider,
   deleteLocalSkill,
   deleteMcpServer,
   getLocalArtifactContent,
@@ -20,7 +19,8 @@ import {
   getRuntimeSettings,
   installLocalPluginCommand,
   listInstalledSkills,
-  listLocalModelProviders,
+  listModelServicePresets,
+  listModelServices,
   listLocalPlugins,
   listLocalRuntimeModels,
   listMcpServers,
@@ -32,7 +32,6 @@ import {
   updateLocalPluginCommand,
   updateMcpServer,
   updateRuntimeSettings,
-  upsertLocalModelProvider,
 } from './client'
 
 const BASE_URL = process.env.VITE_TEST_RUNTIME_URL
@@ -93,42 +92,20 @@ describe.skipIf(!BASE_URL)('flow:P1-P6 > contract: Runtime catalogs (live runtim
     ]))
   })
 
-  it('creates, lists, exposes, and deletes a no-key model provider', async () => {
-    const providerID = 'e2e-provider'
-    await deleteLocalModelProvider(providerID, config).catch(() => undefined)
-    try {
-      const saved = await upsertLocalModelProvider(providerID, {
-        name: 'E2E Provider',
-        kind: 'openai_compatible',
-        base_url: 'http://127.0.0.1:9/v1',
-        requires_api_key: false,
-        models: [{
-          model_id: 'e2e-model',
-          display_name: 'E2E Model',
-          tool_calling: true,
-          streaming: true,
-          image_inputs: true,
-        }],
-        enabled: true,
-      }, config)
-      expect(saved).toMatchObject({ id: providerID, credential_configured: true })
-
-      const providers = await listLocalModelProviders(config)
-      expect(providers).toEqual(expect.arrayContaining([
-        expect.objectContaining({ id: providerID, name: 'E2E Provider' }),
-      ]))
-      const models = await listLocalRuntimeModels(config)
-      expect(models).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          spec: `local:${providerID}:e2e-model`,
-          available: true,
-          image_inputs: true,
-        }),
-      ]))
-    } finally {
-      await deleteLocalModelProvider(providerID, config).catch(() => undefined)
-    }
-    expect((await listLocalModelProviders(config)).some((item) => item.id === providerID)).toBe(false)
+  it('publishes China-first model service presets and cached connections', async () => {
+    const presets = await listModelServicePresets(config)
+    expect(presets.map((preset) => preset.id)).toEqual([
+      'deepseek',
+      'kimi',
+      'qwen',
+      'glm',
+      'minimax',
+      'siliconflow',
+      'custom',
+    ])
+    expect(presets[0]?.regions[0]).toMatchObject({ id: 'cn', default: true })
+    await expect(listModelServices(config)).resolves.toEqual(expect.any(Array))
+    await expect(listLocalRuntimeModels(config)).resolves.toEqual(expect.any(Array))
   })
 
   it('manages a Skill inside the isolated Runtime Skill root', async () => {

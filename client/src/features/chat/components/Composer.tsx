@@ -47,6 +47,7 @@ export function Composer({
   permissionMode = 'auto',
   onPermissionModeChange,
   onConfigureModels,
+  onRefreshCurrentModel,
   projectName,
   onSelectProject,
   onRemoveProject,
@@ -75,6 +76,7 @@ export function Composer({
   permissionMode?: PermissionMode
   onPermissionModeChange?: (mode: PermissionMode) => void
   onConfigureModels?: () => void
+  onRefreshCurrentModel?: () => void
   projectName?: string
   onSelectProject?: () => void
   onRemoveProject?: () => void
@@ -88,6 +90,7 @@ export function Composer({
   const { t } = useI18n()
   const canStop = (isSending || hasActiveRun) && Boolean(onStop)
   const steeringMode = hasActiveRun && Boolean(onAppendInstruction)
+  const modelAvailable = models.some((model) => model.id === mode)
   const sendLabel = steeringMode ? t('composer.appendInstruction') : t('composer.send')
   const sendTitle = steeringMode ? t('composer.appendInstruction') : t('composer.kbdHint')
   const handleSend = steeringMode ? onAppendInstruction : onSend
@@ -152,7 +155,13 @@ export function Composer({
         <SkillEditor
           draft={draft}
           onDraftChange={onDraftChange}
-          onSend={() => handleSend?.()}
+          onSend={() => {
+            if (!steeringMode && !modelAvailable) {
+              onConfigureModels?.()
+              return
+            }
+            handleSend?.()
+          }}
           listSkills={listSkills}
           listMcpServers={listMcpServers}
           listPlugins={listPlugins}
@@ -226,6 +235,7 @@ export function Composer({
           models={models}
           onChange={onModeChange}
           onConfigureModels={onConfigureModels}
+          onRefreshCurrent={onRefreshCurrentModel}
           disabled={isSending || steeringMode}
         />
 
@@ -247,7 +257,11 @@ export function Composer({
             type="button"
             className="composer-send"
             aria-label={sendLabel}
-            disabled={steeringMode ? !draft.trim() : isSending || !draft.trim()}
+            disabled={
+              steeringMode
+                ? !draft.trim()
+                : isSending || !draft.trim() || !modelAvailable
+            }
             title={sendTitle}
             onClick={() => handleSend?.()}
           >

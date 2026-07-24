@@ -43,6 +43,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 MAX_LOCAL_REQUEST_BODY_BYTES = 1_048_576
 RUNTIME_MODEL_PATTERN = r"^local:[^:\s]+:\S+$"
+MAX_RUNTIME_MODEL_SPEC_LENGTH = 256
 
 # ---------------------------------------------------------------------------
 # Health
@@ -70,7 +71,7 @@ class RuntimeInfo(BaseModel):
     protocol_version: int
     runtime_version: str
     capabilities: list[str]
-    model_provider_configured: bool
+    model_service_configured: bool
 
 
 class RuntimeSettingsResponse(BaseModel):
@@ -110,7 +111,7 @@ class UpdateRuntimeSettingsRequest(BaseModel):
     pii_redact: str | None = Field(default=None, max_length=200)
 
 
-class LocalModelProfile(BaseModel):
+class ModelCapabilityProfile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     model_id: str = Field(min_length=1, max_length=200, pattern=r"^\S+$")
@@ -122,65 +123,17 @@ class LocalModelProfile(BaseModel):
     max_output_tokens: int | None = Field(default=None, ge=128, le=1_000_000)
 
 
-ModelProviderKind = Literal["openai_compatible", "anthropic"]
-
-
-class LocalModelProvider(BaseModel):
-    id: str
-    name: str
-    kind: ModelProviderKind
-    base_url: str
-    requires_api_key: bool
-    credential_configured: bool
-    models: list[LocalModelProfile]
-    enabled: bool
-    version: int
-    created_at: str
-    updated_at: str
-
-
-class ListLocalModelProvidersResponse(BaseModel):
-    providers: list[LocalModelProvider]
-
-
-class DiscoverLocalModelsRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    kind: ModelProviderKind = "openai_compatible"
-    provider_id: str | None = Field(default=None, min_length=1, max_length=32)
-    base_url: str = Field(min_length=1, max_length=2048)
-    api_key: str | None = Field(default=None, min_length=1, max_length=8192)
-
-
-class DiscoveredLocalModel(LocalModelProfile):
-    pass
-
-
-class DiscoverLocalModelsResponse(BaseModel):
-    models: list[DiscoveredLocalModel]
-
-
-class UpsertLocalModelProviderRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    name: str = Field(min_length=1, max_length=100)
-    kind: ModelProviderKind = "openai_compatible"
-    base_url: str = Field(min_length=1, max_length=2048)
-    requires_api_key: bool = True
-    api_key: str | None = Field(default=None, min_length=1, max_length=8192)
-    models: list[LocalModelProfile] = Field(min_length=1, max_length=100)
-    enabled: bool = True
-
-
 class LocalRuntimeModel(BaseModel):
     spec: str
     model_id: str
     display_name: str
-    provider_id: str
-    provider_name: str
+    connection_id: str
+    service_name: str
     tool_calling: bool
     streaming: bool
     image_inputs: bool
+    verification: Literal["verified", "unverified"]
+    recommended: bool
     max_input_tokens: int | None = None
     max_output_tokens: int | None = None
     available: bool
@@ -188,6 +141,92 @@ class LocalRuntimeModel(BaseModel):
 
 class LocalRuntimeModelCatalog(BaseModel):
     models: list[LocalRuntimeModel]
+
+
+class ModelServiceRegion(BaseModel):
+    id: Literal["cn", "intl"]
+    name: str
+    default: bool
+
+
+class ModelServicePreset(BaseModel):
+    id: str
+    name: str
+    description: str
+    api_key_url: str | None
+    billing_url: str | None
+    regions: list[ModelServiceRegion]
+
+
+class ModelServicePresetCatalog(BaseModel):
+    services: list[ModelServicePreset]
+
+
+ModelAdapterID = Literal["openai_chat", "anthropic_messages"]
+ModelCatalogStatus = Literal["ready", "stale", "unavailable"]
+ModelVerification = Literal["verified", "unverified"]
+ModelSource = Literal["bundled", "discovered", "manual"]
+
+
+class ModelServiceModel(ModelCapabilityProfile):
+    source: ModelSource
+    verification: ModelVerification
+    recommended: bool = False
+
+
+class ModelServiceConnection(BaseModel):
+    id: str
+    preset_id: str
+    name: str
+    region: Literal["cn", "intl", "custom"]
+    adapter_id: ModelAdapterID
+    base_url: str
+    credential_configured: bool
+    catalog_status: ModelCatalogStatus
+    models: list[ModelServiceModel]
+    version: int
+    created_at: str
+    updated_at: str
+
+
+class ListModelServiceConnectionsResponse(BaseModel):
+    services: list[ModelServiceConnection]
+
+
+class ConnectModelServiceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    preset_id: str = Field(min_length=1, max_length=32)
+    region: Literal["cn", "intl", "custom"] | None = None
+    api_key: str = Field(min_length=1, max_length=8192)
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    base_url: str | None = Field(default=None, min_length=1, max_length=2048)
+    adapter_id: ModelAdapterID | None = None
+
+
+class ReconnectModelServiceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    api_key: str = Field(min_length=1, max_length=8192)
+
+
+class ImportModelServiceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(pattern=r"^conn_[a-f0-9]{32}$")
+    preset_id: str = Field(min_length=1, max_length=32)
+    name: str = Field(min_length=1, max_length=100)
+    region: Literal["cn", "intl", "custom"]
+    adapter_id: ModelAdapterID
+    base_url: str = Field(min_length=1, max_length=2048)
+    models: list[ModelServiceModel] = Field(default_factory=list, max_length=1000)
+
+
+class AddModelServiceModelRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model_id: str = Field(min_length=1, max_length=200, pattern=r"^\S+$")
+    display_name: str | None = Field(default=None, min_length=1, max_length=100)
 
 
 # ---------------------------------------------------------------------------
@@ -439,8 +478,12 @@ class CreateRunRequest(BaseModel):
     )
     workspace_path: str | None = Field(default=None, max_length=4096)
     attachment_paths: list[str] = Field(default_factory=list, max_length=10)
-    # Runtime model selection, normally `local:<provider>:<model>`.
-    model: str = Field(min_length=1, max_length=128, pattern=RUNTIME_MODEL_PATTERN)
+    # Runtime model selection, normally `local:<connection>:<model>`.
+    model: str = Field(
+        min_length=1,
+        max_length=MAX_RUNTIME_MODEL_SPEC_LENGTH,
+        pattern=RUNTIME_MODEL_PATTERN,
+    )
     permission_mode: PermissionMode = "ask"
     history: list[dict[str, str]] | None = Field(default=None, max_length=256)
     parent_run_id: str | None = Field(default=None, max_length=128)
@@ -516,7 +559,11 @@ class CreateScheduledRunRequest(BaseModel):
     goal: str
     run_at: str
     workspace_path: str | None = None
-    model: str = Field(min_length=1, max_length=128, pattern=RUNTIME_MODEL_PATTERN)
+    model: str = Field(
+        min_length=1,
+        max_length=MAX_RUNTIME_MODEL_SPEC_LENGTH,
+        pattern=RUNTIME_MODEL_PATTERN,
+    )
     permission_mode: PermissionMode = "ask"
     history: list[dict[str, str]] | None = None
     settings: dict[str, Any] | None = None
@@ -1148,7 +1195,11 @@ class PluginModelBindCommand(_PluginStateCommand):
         max_length=100,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
     )
-    model: str = Field(min_length=1, max_length=128, pattern=RUNTIME_MODEL_PATTERN)
+    model: str = Field(
+        min_length=1,
+        max_length=MAX_RUNTIME_MODEL_SPEC_LENGTH,
+        pattern=RUNTIME_MODEL_PATTERN,
+    )
 
 
 class PluginStateCommandReceipt(BaseModel):
@@ -1239,8 +1290,8 @@ class PluginModelBindingSummary(BaseModel):
 
     id: str
     requested_model: str
-    provider_id: str
-    provider_version: int
+    connection_id: str
+    connection_version: int
     model_id: str
 
 

@@ -115,8 +115,13 @@ async def test_agent_definition_cache_reuses_only_matching_structure(
     saver, stack = await open_checkpointer(settings)
     cache: dict[str, object] = {}
     lock = asyncio.Lock()
-    for name in ("one", "two", "three"):
+    for name in ("one", "two", "three", "four"):
         (tmp_path / name).mkdir()
+    skills_root = tmp_path / "skills"
+    skill_file = skills_root / "example" / "SKILL.md"
+    skill_file.parent.mkdir(parents=True)
+    skill_file.write_text("# Example\n\nVersion one.\n")
+    monkeypatch.setenv("SHEJANE_RUNTIME_SKILLS_PATH", str(skills_root))
     try:
         first = await build_agent(
             store=store,
@@ -140,21 +145,34 @@ async def test_agent_definition_cache_reuses_only_matching_structure(
             definition_cache=cache,
             definition_cache_lock=lock,
         )
-        changed = await build_agent(
+        skill_file.write_text("# Example\n\nVersion two.\n")
+        skill_changed = await build_agent(
             store=store,
             checkpointer=saver,
             workspace_root=str(tmp_path / "three"),
             run_id="run_three",
-            settings=settings.model_copy(update={"max_tool_retries": 5}),
+            settings=settings,
             mcp_enabled=False,
             runtime_context=RuntimeContext(run_id="run_three", store=store),
             definition_cache=cache,
             definition_cache_lock=lock,
         )
+        changed = await build_agent(
+            store=store,
+            checkpointer=saver,
+            workspace_root=str(tmp_path / "four"),
+            run_id="run_four",
+            settings=settings.model_copy(update={"max_tool_retries": 5}),
+            mcp_enabled=False,
+            runtime_context=RuntimeContext(run_id="run_four", store=store),
+            definition_cache=cache,
+            definition_cache_lock=lock,
+        )
 
         assert first is second
-        assert changed is not first
-        assert len(compiled) == 2
+        assert skill_changed is not first
+        assert changed is not skill_changed
+        assert len(compiled) == 3
         assert all(isinstance(backend, BackendProtocol) for backend in backends)
     finally:
         await store.close()
@@ -585,6 +603,7 @@ def test_model_budget_changes_agent_definition_fingerprint() -> None:
             tools=[],
             subagents=[],
             skills=[],
+            skill_catalog_hash=None,
             memory=[],
             plugin_catalog_hash=None,
         )

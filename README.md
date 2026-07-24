@@ -51,7 +51,7 @@ Runtime is independently runnable and testable. The SDK and plugins live below i
 | Runtime | LangGraph and Deep Agents loop, streaming events, checkpoints, recovery, planning, verification, memory, and human approval |
 | Local tools | Workspace files, read-only-workspace/no-network sandboxed shell execution, Office operations, web fetch, clipboard approval, and scheduled runs |
 | Extensions | Skills, MCP servers, deterministic WASI/Managed Worker plugins, fixed macOS Computer Use, macOS/Windows Browser QA and OCR capabilities, subagents, and configurable middleware |
-| Client | Electron and React UI, local Runtime conversation projection, previews, provider settings, and workspace controls |
+| Client | Electron and React UI, local Runtime conversation projection, previews, model-service settings, and workspace controls |
 | Runtime SDK | Public TypeScript client for commands, SSE, snapshots, errors, and generated protocol types |
 
 Business-platform connectors are not built into the Runtime. Future integrations should use standard tools or MCP.
@@ -68,7 +68,7 @@ corepack enable && pnpm install
 make dev
 ```
 
-No root `.env` is required. Start Client, add an OpenAI-compatible or Anthropic provider in Runtime settings, then select one of its models. Use `make doctor` when the local stack does not start cleanly.
+No root `.env` is required. Start Client, connect a supported model service in Runtime settings, then select one of its models. Use `make doctor` when the local stack does not start cleanly.
 
 ## Development
 

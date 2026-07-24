@@ -89,16 +89,19 @@ import {
   listLocalThreads,
   listLocalThreadChanges,
   listLocalRuntimeModels,
+  listModelServices,
   listLocalSchedules,
   listMcpServers,
   LocalStreamCursorResetRequiredError,
   markLocalScheduleNotified,
+  importModelService,
   injectLocalRunInstruction,
   parseRuntimeModelSpec,
   probeRuntime,
   resolveLocalPlanCommand,
   resolveLocalPermissionCommand,
   reconcileLocalToolCommand,
+  refreshModelService,
   streamLocalRun,
   updateLocalSkill,
   updateLocalThread,
@@ -135,6 +138,7 @@ import {
   type LocalScheduledRun,
   type LocalWorkspaceDiagnosis,
   type LocalWorkspaceAuthorization,
+  type ImportModelServiceRequest,
 } from './runtime/client'
 import { filePreviewKind } from './shared/files/filePreview'
 import { downloadFile } from './shared/files/downloadFile'
@@ -379,13 +383,21 @@ function useAppContentViewModel() {
   )
   const [activeID, setActiveID] = useState<string>()
   const [draft, setDraft] = useState('')
-  // Concrete Runtime model selection persisted in localStorage.
+  // Visible selection. Only successful runs update the cross-conversation default.
   const [mode, setMode] = useState<ChatMode>(readChatMode)
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('auto')
   function changeMode(next: ChatMode): void {
     setMode(next)
+    if (activeIDRef.current) {
+      void updateConversationMetadata(
+        activeIDRef.current,
+        (conversation) => {
+          conversation.model = next
+        },
+        { touch: false },
+      )
+    }
   }
-  useEffect(() => writeChatMode(mode), [mode])
   const [isSending, setIsSending] = useState(false)
   const [pendingDeleteMessageID, setPendingDeleteMessageID] = useState<string>()
   const [pendingDiagnosticsRunID, setPendingDiagnosticsRunID] = useState<string>()
@@ -587,16 +599,13 @@ function useAppContentViewModel() {
             id: spec,
             label: model.display_name,
             imageInputs: Boolean(model.image_inputs),
-            description: t('settings.models.localDescription'),
-            vendor: model.provider_name,
-            vendor_info: t('settings.models.localVendorInfo'),
+            description: t('settings.modelServices.localDescription'),
+            vendor: model.service_name,
+            vendor_info: t('settings.modelServices.localVendorInfo'),
+            recommended: model.recommended,
           }]
         })
         setModels(catalog)
-        setMode((current) => {
-          if (catalog.some((m) => m.id === current)) return current
-          return catalog[0]?.id ?? ''
-        })
       }).catch(() => setModels([]))
     return () => {
       cancelled = true
@@ -1230,6 +1239,15 @@ function useAppContentViewModel() {
   function setActiveConversationID(nextActiveID: string | undefined) {
     activeIDRef.current = nextActiveID
     setActiveID(nextActiveID)
+    if (!nextActiveID) {
+      setMode(readChatMode())
+      return
+    }
+    void localData.get(nextActiveID).then((conversation) => {
+      if (activeIDRef.current === nextActiveID) {
+        setMode(conversation?.model ?? readChatMode())
+      }
+    })
   }
 
   function createConversationRenderContext(): ConversationRenderContext {
@@ -1765,6 +1783,7 @@ function useAppContentViewModel() {
       threadMetadata: {
         archived: conversation.archived,
         pinned: conversation.pinned ?? false,
+        model: selectedMode,
         project: conversation.project,
         workspace: conversation.workspace,
       },
@@ -1841,6 +1860,10 @@ function useAppContentViewModel() {
         () => scheduleConversationRender(conversation, context),
       )
       finalizeLocalRunStatus(assistantMessage)
+      conversation.model = selectedMode
+      if (assistantMessage.status === 'done') {
+        writeChatMode(selectedMode)
+      }
       scheduleConversationRender(conversation, context)
       // OS-level notification when the user has switched away — the
       // main process suppresses it if the window is still focused, so
@@ -2674,6 +2697,7 @@ function useAppContentViewModel() {
             archived: conversation.archived,
             metadata: {
               pinned: conversation.pinned ?? false,
+              model: conversation.model,
               project: conversation.project,
               workspace: conversation.workspace,
             },
@@ -2772,13 +2796,35 @@ function useAppContentViewModel() {
     if (!file) {
       return
     }
-    await localData.importAll(await file.text())
+    const modelServices = await localData.importAll(await file.text())
+    if (runtimeConnection && modelServices.length > 0) {
+      const existing = new Set(
+        (await listModelServices(runtimeConnection)).map((service) => service.id),
+      )
+      for (const service of modelServices) {
+        if (service.preset_id !== 'custom' && !existing.has(service.id)) {
+          await importModelService(service, runtimeConnection)
+        }
+      }
+      setModelCatalogVersion((current) => current + 1)
+    }
     await refreshConversations()
     setNotice(t('app.notice.localDataImported'))
   }
 
   async function exportLocalData() {
-    const conversationExport = await localData.exportAll()
+    const modelServices: ImportModelServiceRequest[] = runtimeConnection
+      ? (await listModelServices(runtimeConnection)).map((service) => ({
+          id: service.id,
+          preset_id: service.preset_id,
+          name: service.name,
+          region: service.region,
+          adapter_id: service.adapter_id,
+          base_url: service.base_url,
+          models: service.models,
+        }))
+      : []
+    const conversationExport = await localData.exportAll(modelServices)
     const payload = {
       ...conversationExport,
       settings: {
@@ -2794,6 +2840,18 @@ function useAppContentViewModel() {
     link.click()
     URL.revokeObjectURL(url)
     setNotice(t('app.notice.localDataExported'))
+  }
+
+  async function refreshCurrentModel() {
+    const selected = parseRuntimeModelSpec(mode)
+    const connectionID = selected?.split(':', 3)[1]
+    if (!runtimeConnection || !connectionID) return
+    try {
+      await refreshModelService(connectionID, runtimeConnection)
+      setModelCatalogVersion((current) => current + 1)
+    } catch {
+      // Cached models remain visible; settings exposes the actionable error.
+    }
   }
 
   // The renderer is always hosted by Electron; Runtime is its only execution backend.
@@ -2921,6 +2979,7 @@ function useAppContentViewModel() {
     pluginsTab,
     removeAttachment,
     removeProjectFromActiveConversation,
+    refreshCurrentModel,
     renameConversation,
     runtime,
     runtimeConnection,
@@ -3181,7 +3240,7 @@ function AppContentView({ view }: { view: AppContentViewModel }) {
               agentSettings={agentSettings}
               advancedSettingsReady={runtimeSettingsConfig === runtimeConnection && Boolean(runtime?.online)}
               runtimeConnection={runtimeConnection}
-              onModelProvidersChange={() => setModelCatalogVersion((version) => version + 1)}
+              onModelServicesChange={() => setModelCatalogVersion((version) => version + 1)}
               onAgentSettingsChange={(next) => {
                 changeAgentSettings(next)
               }}
@@ -3274,6 +3333,7 @@ function AppChatWorkspace({ view }: { view: AppContentViewModel }) {
     permissionMode,
     removeAttachment,
     removeProjectFromActiveConversation,
+    refreshCurrentModel,
     runtime,
     runtimeConnection,
     selectAttachments,
@@ -3473,6 +3533,7 @@ function AppChatWorkspace({ view }: { view: AppContentViewModel }) {
           permissionMode={permissionMode}
           onPermissionModeChange={setPermissionMode}
           onConfigureModels={() => setMainView('settings')}
+          onRefreshCurrentModel={() => void refreshCurrentModel()}
           projectName={activeConversation?.project?.name ?? pendingProject?.name}
           onSelectProject={() => void selectProjectForActiveConversation()}
           onRemoveProject={() => void removeProjectFromActiveConversation()}

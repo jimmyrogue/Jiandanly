@@ -55,7 +55,7 @@ for command in pbcopy pbpaste xclip open xdg-open; do
   ln -s "$(type -P true)" "$BIN_DIR/$command"
 done
 
-uv run --project "$ROOT_DIR/runtime" python -m shejane_runtime.eval.seed_provider \
+uv run --project "$ROOT_DIR/runtime" python -m shejane_runtime.eval.seed_service \
   --source-dir "$SOURCE_DATA_DIR" --destination-dir "$DATA_DIR" --model "$MODEL"
 
 env -i \

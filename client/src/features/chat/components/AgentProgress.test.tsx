@@ -295,10 +295,10 @@ describe('AgentProgress', () => {
 
     expect(screen.getByText('供应商凭据')).toBeInTheDocument()
     expect(screen.queryByText('provider credential rejected')).not.toBeInTheDocument()
-    expect(screen.queryByText('请检查 Runtime 中的模型供应商凭据，然后重试。')).not.toBeInTheDocument()
+    expect(screen.queryByText('请检查 Runtime 中的模型服务 API Key，然后重试。')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '展开详情' }))
     expect(screen.getByText('provider credential rejected')).toBeInTheDocument()
-    expect(screen.getByText('请检查 Runtime 中的模型供应商凭据，然后重试。')).toBeInTheDocument()
+    expect(screen.getByText('请检查 Runtime 中的模型服务 API Key，然后重试。')).toBeInTheDocument()
   })
 
   it('does not duplicate footer diagnostics beside an expandable failure card', () => {
@@ -308,7 +308,7 @@ describe('AgentProgress', () => {
       agentEvents: [
         {
           type: 'run.failed',
-          label: 'model provider is not configured (missing API key or base URL): missing API key or base URL · 需要你处理',
+          label: 'model service is not configured (missing API key or service address): missing API key or service address · 需要你处理',
           failureCategory: 'configuration',
           failureActionKind: 'user_action',
         },
@@ -325,10 +325,10 @@ describe('AgentProgress', () => {
     )
 
     expect(screen.getByText('配置缺失')).toBeInTheDocument()
-    expect(screen.queryByText('model provider is not configured (missing API key or base URL): missing API key or base URL')).not.toBeInTheDocument()
+    expect(screen.queryByText('model service is not configured (missing API key or service address): missing API key or service address')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '查看诊断' })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '展开详情' }))
-    expect(screen.getByText('model provider is not configured (missing API key or base URL): missing API key or base URL')).toBeInTheDocument()
+    expect(screen.getByText('model service is not configured (missing API key or service address): missing API key or service address')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '查看诊断' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '诊断' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '展开步骤' })).not.toBeInTheDocument()

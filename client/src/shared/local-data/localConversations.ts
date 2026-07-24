@@ -1,3 +1,4 @@
+import type { ImportModelServiceRequest } from '../../runtime/client'
 import type { Conversation, ConversationExport } from './types'
 import type { PendingRuntimeCommand, PendingRunStartCommand } from '../../runtime/client'
 
@@ -148,21 +149,23 @@ export class LocalConversationStore {
     await transactionToPromise(transaction)
   }
 
-  async exportAll(): Promise<ConversationExport> {
+  async exportAll(modelServices: ImportModelServiceRequest[] = []): Promise<ConversationExport> {
     return {
       version: 1,
       exportedAt: new Date().toISOString(),
       conversations: await this.list(),
+      modelServices,
     }
   }
 
-  async importAll(payload: ConversationExport | string): Promise<void> {
+  async importAll(payload: ConversationExport | string): Promise<ImportModelServiceRequest[]> {
     const parsed = typeof payload === 'string' ? (JSON.parse(payload) as ConversationExport) : payload
     if (parsed.version !== 1 || !Array.isArray(parsed.conversations)) {
       throw new Error('Unsupported SheJane conversation export')
     }
     const store = await this.objectStore('readwrite')
     await Promise.all(parsed.conversations.map((conversation) => requestToPromise(store.put(conversation))))
+    return Array.isArray(parsed.modelServices) ? parsed.modelServices : []
   }
 
   private async objectStore(mode: IDBTransactionMode): Promise<IDBObjectStore> {

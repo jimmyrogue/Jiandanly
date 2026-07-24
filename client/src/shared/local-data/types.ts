@@ -1,8 +1,8 @@
-import type { RuntimeModelSpec } from '@shejane/runtime-sdk'
+import type { ImportModelServiceRequest, RuntimeModelSpec } from '@shejane/runtime-sdk'
 import type { FilePreviewKind } from '../files/filePreview'
 
 export type MessageRole = 'system' | 'user' | 'assistant'
-/** Concrete Runtime model selection (`local:<provider>:<model>`). */
+/** Concrete Runtime model selection (`local:<connection>:<model>`). */
 export type ChatMode = RuntimeModelSpec | ''
 export type MessageStatus = 'pending' | 'streaming' | 'waiting_permission' | 'waiting_input' | 'done' | 'error'
 
@@ -257,6 +257,7 @@ export interface Conversation {
   pinned?: boolean
   createdAt: string
   updatedAt: string
+  model?: ChatMode
   project?: ConversationProject
   workspace?: ConversationWorkspace
   messages: ChatMessage[]
@@ -266,4 +267,5 @@ export interface ConversationExport {
   version: 1
   exportedAt: string
   conversations: Conversation[]
+  modelServices?: ImportModelServiceRequest[]
 }

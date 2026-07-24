@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import {
   IconCheck,
   IconChevronDown,
@@ -24,6 +24,7 @@ export interface ModelOption {
   vendor?: string
   vendor_info?: string
   imageInputs: boolean
+  recommended?: boolean
 }
 
 /**
@@ -34,25 +35,46 @@ export function ModeSelector({
   models,
   onChange,
   onConfigureModels,
+  onRefreshCurrent,
   disabled = false,
 }: {
   mode: ChatMode
   models: ModelOption[]
   onChange: (next: ChatMode) => void
   onConfigureModels?: () => void
+  onRefreshCurrent?: () => void
   disabled?: boolean
 }) {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
+  const confirmedServiceChange = useRef(false)
   const selectedModel = models.find((model) => model.id === mode)
   const groupedModels = useMemo(() => groupModelsByVendor(models), [models])
+  const recommendedGroups = groupedModels
+    .map((group) => ({ ...group, models: group.models.filter((model) => model.recommended) }))
+    .filter((group) => group.models.length > 0)
+  const moreGroups = groupedModels
+    .map((group) => ({ ...group, models: group.models.filter((model) => !model.recommended) }))
+    .filter((group) => group.models.length > 0)
   const selectedLabel = selectedModel?.label ?? t('composer.mode.chooseModel')
 
   const handleOpenChange = (nextOpen: boolean) => {
     setOpen(nextOpen)
+    if (nextOpen) onRefreshCurrent?.()
   }
 
   const selectModel = (model: ModelOption) => {
+    const currentConnection = connectionID(mode)
+    const nextConnection = connectionID(model.id)
+    if (
+      currentConnection
+      && nextConnection
+      && currentConnection !== nextConnection
+      && !confirmedServiceChange.current
+    ) {
+      if (!window.confirm(t('composer.mode.serviceChangeConfirm'))) return
+      confirmedServiceChange.current = true
+    }
     onChange(model.id)
   }
 
@@ -100,6 +122,34 @@ export function ModeSelector({
     )
   }
 
+  const renderGroup = (group: (typeof groupedModels)[number]) => (
+    <div key={`${group.models[0]?.recommended ? 'recommended' : 'more'}:${group.vendor}`}>
+      <div className="composer-mode-group-heading">
+        <span className="composer-mode-group-line" />
+        <span className="composer-mode-group-label">
+          {group.vendor}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                className="composer-mode-vendor-info-trigger"
+                aria-label={group.vendorInfo}
+                title={group.vendorInfo}
+                tabIndex={0}
+              >
+                <IconInfoCircle size={12} strokeWidth={1.8} aria-hidden="true" />
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top" sideOffset={6}>
+              {group.vendorInfo}
+            </TooltipContent>
+          </Tooltip>
+        </span>
+        <span className="composer-mode-group-line" />
+      </div>
+      {group.models.map(renderModel)}
+    </div>
+  )
+
   return (
     <DropdownMenu open={open} onOpenChange={handleOpenChange}>
       <DropdownMenuTrigger asChild disabled={disabled}>
@@ -117,37 +167,19 @@ export function ModeSelector({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" alignOffset={4} sideOffset={8} className="composer-mode-menu">
         <div className="composer-mode-model-list">
-          {groupedModels.map((group) => (
-            <div key={group.vendor}>
-              <div className="composer-mode-group-heading">
-                <span className="composer-mode-group-line" />
-                <span className="composer-mode-group-label">
-                  {group.vendor}
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span
-                        className="composer-mode-vendor-info-trigger"
-                        aria-label={group.vendorInfo}
-                        title={group.vendorInfo}
-                        tabIndex={0}
-                      >
-                        <IconInfoCircle size={12} strokeWidth={1.8} aria-hidden="true" />
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent side="top" sideOffset={6}>
-                      {group.vendorInfo}
-                    </TooltipContent>
-                  </Tooltip>
-                </span>
-                <span className="composer-mode-group-line" />
-              </div>
-              {group.models.map(renderModel)}
-            </div>
-          ))}
+          {recommendedGroups.map(renderGroup)}
+          {recommendedGroups.length > 0 && moreGroups.length > 0 && (
+            <div className="composer-mode-more-label">{t('composer.mode.moreModels')}</div>
+          )}
+          {moreGroups.map(renderGroup)}
         </div>
       </DropdownMenuContent>
     </DropdownMenu>
   )
+}
+
+function connectionID(mode: ChatMode): string | undefined {
+  return mode ? mode.split(':', 3)[1] : undefined
 }
 
 function groupModelsByVendor(models: ModelOption[]): Array<{ vendor: string; vendorInfo: string; models: ModelOption[] }> {
