@@ -6,7 +6,6 @@ import asyncio
 import io
 import os
 import re
-import signal
 import subprocess
 import tempfile
 from pathlib import Path
@@ -34,6 +33,7 @@ from langgraph.runtime import get_runtime
 from markitdown import MarkItDown
 
 from ..plugins.sandbox_runtime import prepare_agent_shell_command
+from ..processes import kill_process_tree
 
 MODEL_FILE_READ_MAX_MB = 20
 PDF_FILE_READ_MAX_MB = 200
@@ -275,32 +275,7 @@ class RuntimeLocalShellBackend(_BoundedReadMixin, LocalShellBackend):
 
 
 async def _kill_shell_process_tree(process: asyncio.subprocess.Process) -> None:
-    """Hard-stop one command tree and reap its direct process."""
-    if process.returncode is not None:
-        return
-    if os.name == "nt":
-        try:
-            killer = await asyncio.create_subprocess_exec(
-                "taskkill",
-                "/PID",
-                str(process.pid),
-                "/T",
-                "/F",
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            await killer.wait()
-        except (FileNotFoundError, ProcessLookupError):
-            process.kill()
-    else:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-    try:
-        await process.wait()
-    except ProcessLookupError:
-        pass
+    await kill_process_tree(process)
 
 
 class RuntimeBackend(SandboxBackendProtocol):

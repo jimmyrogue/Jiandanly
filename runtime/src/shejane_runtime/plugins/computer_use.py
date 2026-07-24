@@ -9,6 +9,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Protocol
 
+from ..processes import kill_process_tree
 from .executor import ActionExecutor
 
 MAX_FRAME_BYTES = 24 * 1024 * 1024
@@ -302,12 +303,14 @@ class ComputerUseService:
         process, self._process = self._process, None
         stderr_task, self._stderr_task = self._stderr_task, None
         if process is not None and process.returncode is None:
-            process.terminate()
-            try:
-                await asyncio.wait_for(process.wait(), timeout=1)
-            except TimeoutError:
-                process.kill()
-                await process.wait()
+            if os.name == "nt":
+                await kill_process_tree(process)
+            else:
+                process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=1)
+                except TimeoutError:
+                    await kill_process_tree(process)
         if stderr_task is not None:
             await asyncio.gather(stderr_task, return_exceptions=True)
 

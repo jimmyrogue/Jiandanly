@@ -6,7 +6,6 @@ import asyncio
 import contextlib
 import os
 import shutil
-import signal
 import tempfile
 from pathlib import Path
 from typing import Any, Protocol
@@ -32,9 +31,35 @@ def windows_extended_path(path: Path | str, *, platform_name: str = os.name) -> 
     return "\\\\?\\" + value
 
 
-def _runtime_alias_matches(marker: Path, digest: str) -> bool:
+def _runtime_alias_matches(source: Path, destination: Path, digest: str) -> bool:
+    marker = destination / ".shejane-runtime-digest"
     try:
-        return marker.read_text(encoding="utf-8").strip() == digest
+        if (
+            destination.is_symlink()
+            or not destination.is_dir()
+            or marker.is_symlink()
+            or marker.read_text(encoding="utf-8").strip() != digest
+        ):
+            return False
+        expected: set[Path] = set()
+        for item in source.rglob("*"):
+            relative = item.relative_to(source)
+            expected.add(relative)
+            alias = destination / relative
+            if item.is_symlink() or alias.is_symlink():
+                return False
+            if item.is_dir():
+                if not alias.is_dir():
+                    return False
+            elif item.is_file():
+                if not alias.is_file() or not alias.samefile(item):
+                    return False
+            else:
+                return False
+        actual = {
+            item.relative_to(destination) for item in destination.rglob("*") if item != marker
+        }
+        return actual == expected
     except OSError:
         return False
 
@@ -50,12 +75,15 @@ def prepare_browser_runtime(
         return source.resolve(strict=False)
     source = source.resolve(strict=True)
     identity = digest.removeprefix("sha256:")
-    if len(identity) != 64:
+    if (
+        digest != f"sha256:{identity}"
+        or len(identity) != 64
+        or any(character not in "0123456789abcdef" for character in identity)
+    ):
         raise BrowserQAError("Browser QA Runtime Asset identity is invalid")
     destination = alias_root / identity[:RUNTIME_ALIAS_DIGEST_CHARS]
-    marker = destination / ".shejane-runtime-digest"
     if destination.exists():
-        if not _runtime_alias_matches(marker, digest):
+        if not _runtime_alias_matches(source, destination, digest):
             raise BrowserQAError("Browser QA Runtime alias identity changed")
         return destination
 
@@ -73,11 +101,11 @@ def prepare_browser_runtime(
                 os.link(item, target)
             else:
                 raise BrowserQAError("Browser QA Runtime Asset contains an invalid entry")
-        (staging / marker.name).write_text(digest + "\n", encoding="utf-8")
+        (staging / ".shejane-runtime-digest").write_text(digest + "\n", encoding="utf-8")
         try:
             staging.rename(destination)
         except OSError:
-            if not destination.is_dir() or not _runtime_alias_matches(marker, digest):
+            if not _runtime_alias_matches(source, destination, digest):
                 raise BrowserQAError("Browser QA Runtime alias identity changed") from None
         return destination
     finally:
@@ -257,11 +285,7 @@ class BrowserQAService(ComputerUseService):
         }
 
     async def aclose(self) -> None:
-        process = self._process
         await super().aclose()
-        if process is not None and os.name != "nt":
-            with contextlib.suppress(ProcessLookupError, PermissionError):
-                os.killpg(process.pid, signal.SIGKILL)
         await self._proxy.aclose()
 
 

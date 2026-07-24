@@ -12,7 +12,6 @@ import math
 import os
 import re
 import shutil
-import signal
 import stat
 import tempfile
 import time
@@ -20,6 +19,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
+from ..processes import kill_process_tree
 from .linux_cgroup import LinuxCgroupResources, prepare_linux_cgroup_command
 from .sandbox_contract import SandboxLimits
 from .sandbox_runtime import prepare_srt_command
@@ -644,14 +644,7 @@ async def _terminate_process_tree(
             return
         except TimeoutError:
             pass
-    if os.name == "posix":
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-    else:  # ponytail: direct-child fallback until the Windows Job Object spike lands.
-        process.kill()
-    await process.wait()
+    await kill_process_tree(process)
 
 
 def _validate_result_identity(result: Any, invocation: dict[str, Any]) -> None:

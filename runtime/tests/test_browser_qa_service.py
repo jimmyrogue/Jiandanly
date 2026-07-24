@@ -90,6 +90,22 @@ def test_browser_qa_prepares_short_hardlinked_runtime_on_windows(tmp_path: Path)
     )
 
 
+def test_browser_qa_rejects_tampered_windows_runtime_alias(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    executable = source / "chromium-1228" / "chrome-win64" / "chrome.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"browser")
+    digest = "sha256:" + "a" * 64
+    alias_root = tmp_path / "browser-runtime"
+    prepared = prepare_browser_runtime(source, alias_root, digest, platform_name="nt")
+    linked = prepared / executable.relative_to(source)
+    linked.unlink()
+    linked.write_bytes(b"tampered")
+
+    with pytest.raises(BrowserQAError, match="alias identity changed"):
+        prepare_browser_runtime(source, alias_root, digest, platform_name="nt")
+
+
 @pytest.mark.asyncio
 async def test_browser_qa_action_rejects_private_navigation_before_launch(tmp_path: Path) -> None:
     class UnexpectedService:
