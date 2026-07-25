@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import platform
 import shutil
 import socket
 import subprocess
@@ -143,6 +144,95 @@ def test_agent_shell_policy_is_read_only_outside_private_scratch(tmp_path: Path)
     assert policy["network"]["allowLocalBinding"] is False
     assert policy["network"]["allowAllUnixSockets"] is False
     assert policy["allowAppleEvents"] is False
+
+
+def _write_seccomp_launcher(root: Path, architecture: str = "x64") -> tuple[str, ...]:
+    """Lay out a node + sandbox-runtime launcher that ships an apply-seccomp helper."""
+
+    node = root / "node"
+    node.write_bytes(b"node")
+    package = root / "node_modules" / "@anthropic-ai" / "sandbox-runtime"
+    cli = package / "dist" / "cli.js"
+    cli.parent.mkdir(parents=True)
+    cli.write_text("cli")
+    helper = package / "vendor" / "seccomp" / architecture / "apply-seccomp"
+    helper.parent.mkdir(parents=True)
+    helper.write_bytes(b"apply-seccomp")
+    return (str(node), str(cli))
+
+
+def test_agent_shell_policy_allows_the_launcher_seccomp_helper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(platform, "machine", lambda: "x86_64")
+    workspace = tmp_path / "workspace"
+    scratch = tmp_path / "scratch"
+    workspace.mkdir()
+    scratch.mkdir()
+    launcher = _write_seccomp_launcher(tmp_path)
+
+    prepare_agent_shell_command(
+        launcher=launcher,
+        command="make test",
+        workspace_root=workspace,
+        scratch_root=scratch,
+    )
+
+    policy = json.loads((scratch / "sandbox-settings.json").read_text())
+    helper_root = Path(launcher[1]).parents[1] / "vendor" / "seccomp" / "x64"
+    assert str(helper_root.resolve()) in policy["filesystem"]["allowRead"]
+
+
+def test_srt_policy_allows_the_launcher_seccomp_helper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(platform, "machine", lambda: "x86_64")
+    package_root = tmp_path / "package"
+    input_root = tmp_path / "input"
+    output_root = tmp_path / "output"
+    package_root.mkdir()
+    input_root.mkdir()
+    output_root.mkdir()
+    entrypoint = package_root / "worker"
+    entrypoint.write_bytes(b"worker")
+    launcher = _write_seccomp_launcher(tmp_path)
+
+    prepare_srt_command(
+        launcher=launcher,
+        worker_command=[str(entrypoint)],
+        package_root=package_root,
+        input_root=input_root,
+        output_root=output_root,
+    )
+
+    policy = json.loads((tmp_path / "sandbox-settings.json").read_text())
+    helper_root = Path(launcher[1]).parents[1] / "vendor" / "seccomp" / "x64"
+    assert str(helper_root.resolve()) in policy["filesystem"]["allowRead"]
+
+
+def test_agent_shell_policy_keeps_the_seccomp_helper_off_non_linux_hosts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "platform", "darwin")
+    workspace = tmp_path / "workspace"
+    scratch = tmp_path / "scratch"
+    workspace.mkdir()
+    scratch.mkdir()
+    launcher = _write_seccomp_launcher(tmp_path)
+
+    prepare_agent_shell_command(
+        launcher=launcher,
+        command="make test",
+        workspace_root=workspace,
+        scratch_root=scratch,
+    )
+
+    policy = json.loads((scratch / "sandbox-settings.json").read_text())
+    assert not any(
+        "apply-seccomp" in path or "vendor" in path for path in policy["filesystem"]["allowRead"]
+    )
 
 
 def test_srt_policy_rejects_worker_outside_package(tmp_path: Path) -> None:

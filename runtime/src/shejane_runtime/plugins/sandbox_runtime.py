@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -149,6 +150,40 @@ def configured_srt_launcher() -> tuple[str, ...] | None:
     return tuple(value)
 
 
+_SECCOMP_ARCHITECTURES = {
+    "aarch64": "arm64",
+    "amd64": "x64",
+    "arm64": "arm64",
+    "x86_64": "x64",
+}
+
+
+def _seccomp_helper_roots(launcher: tuple[str, ...]) -> tuple[Path, ...]:
+    """Return the launcher's ``apply-seccomp`` directory, when it ships one.
+
+    On Linux the launcher re-executes ``apply-seccomp`` from its own package
+    *inside* the bwrap namespace, and that namespace only contains what
+    ``allowRead`` binds back over the deny-read tmpfs. The helper lives under
+    the launcher's package rather than a system prefix, so without this the
+    wrapped command dies with ENOENT before it ever runs.
+    """
+
+    if not sys.platform.startswith("linux"):
+        return ()
+    architecture = _SECCOMP_ARCHITECTURES.get(platform.machine().lower())
+    if architecture is None:
+        return ()
+    for part in launcher:
+        candidate = Path(part)
+        if not candidate.is_absolute():
+            continue
+        for parent in candidate.parents:
+            helper_root = parent / "vendor" / "seccomp" / architecture
+            if (helper_root / "apply-seccomp").is_file():
+                return (helper_root.resolve(strict=True),)
+    return ()
+
+
 def prepare_srt_command(
     *,
     launcher: tuple[str, ...],
@@ -191,6 +226,7 @@ def prepare_srt_command(
             "allowRead": sorted(
                 {
                     *(str(path) for path in _system_read_roots()),
+                    *(str(path) for path in _seccomp_helper_roots(launcher)),
                     str(package_root),
                     str(input_root),
                     str(output_root),
@@ -250,6 +286,7 @@ def prepare_agent_shell_command(
             "allowRead": sorted(
                 {
                     *(str(path) for path in _system_read_roots()),
+                    *(str(path) for path in _seccomp_helper_roots(launcher)),
                     str(workspace_root),
                     str(scratch_root),
                     *(str(path) for path in readable_executables),
