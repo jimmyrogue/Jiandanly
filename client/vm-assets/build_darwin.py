@@ -414,6 +414,16 @@ def build_mke2fs(
 
 
 def verify_toolchain(lock: dict[str, Any]) -> dict[str, str]:
+    """Pin the tools whose versions can change the produced assets.
+
+    rpm is deliberately absent. It never touches an output byte: the kernel
+    payloads are unpacked with bsdtar, and rpm/rpmkeys only verify signatures
+    and query identity of inputs this lock already pins by URL and digest.
+    Locking its version made every unrelated homebrew-core bump fail a release
+    while adding no reproducibility -- require_rpm_signature() and the identity
+    comparison are what actually guard those inputs.
+    """
+
     expected = lock["toolchain"]
     xcode = run(["/usr/bin/xcodebuild", "-version"], capture=True).stdout.splitlines()
     actual = {
@@ -428,7 +438,6 @@ def verify_toolchain(lock: dict[str, Any]) -> dict[str, str]:
         ).stdout.strip(),
         "make_version": run(["/usr/bin/make", "--version"], capture=True).stdout.splitlines()[0],
         "python_version": platform.python_version(),
-        "rpm_version": run(["rpm", "--version"], capture=True).stdout.strip(),
         "zstandard_python_version": zstandard.__version__,
         "zstd_version": run(["zstd", "--version"], capture=True).stdout.strip(),
     }
