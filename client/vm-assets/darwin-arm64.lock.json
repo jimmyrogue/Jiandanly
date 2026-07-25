@@ -444,7 +444,7 @@
     "sdk_version": "26.5",
     "make_version": "GNU Make 3.81",
     "python_version": "3.12.10",
-    "rpm_version": "RPM version 6.0.2",
+    "rpm_version": "RPM version 4.20.1",
     "zstandard_python_version": "0.25.0",
     "zstd_version": "*** Zstandard CLI (64-bit) v1.5.7, by Yann Collet ***"
   }
