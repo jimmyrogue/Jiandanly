@@ -475,6 +475,24 @@ def _wait_for_process_marker(
     raise AssertionError(f"timed out waiting for shell marker {marker}")
 
 
+def _describe_process(pid: int) -> str:
+    """Identify a process well enough to triage which layer of the sandbox it is.
+
+    The sandbox wraps the command in several processes that all carry the
+    marker in their argv, and a `Z` state distinguishes "never reaped" from
+    "still running" -- both of which the bare pid hides.
+    """
+
+    result = subprocess.run(
+        ["ps", "-o", "pid=,ppid=,pgid=,stat=,args=", "-p", str(pid)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    described = result.stdout.strip()
+    return described or f"pid {pid} answered kill(0) but is absent from ps"
+
+
 def _wait_for_process_exit(pid: int) -> None:
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
@@ -483,7 +501,7 @@ def _wait_for_process_exit(pid: int) -> None:
         except ProcessLookupError:
             return
         time.sleep(0.05)
-    raise AssertionError(f"Tool child process {pid} did not exit")
+    raise AssertionError(f"Tool child process did not exit: {_describe_process(pid)}")
 
 
 def _free_port() -> int:
