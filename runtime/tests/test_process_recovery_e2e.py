@@ -109,7 +109,13 @@ def test_runtime_killed_during_sandboxed_command_quarantines_without_replay(
     workspace.mkdir()
     headers = {"Authorization": f"Bearer {token}"}
     marker = f"shejane-process-kill-{time.time_ns()}"
-    command = f"/bin/sh -c 'sleep 30' {marker}"
+    # `exit 0` is load-bearing: given a single simple command, the shell execs it
+    # in place, so `sh -c 'sleep 30' MARKER` becomes a bare `sleep 30` and the
+    # marker disappears from every live process. A second command forces the
+    # shell to stay, which is what keeps the sandboxed process identifiable.
+    command = f"/bin/sh -c 'sleep 30; exit 0' {marker}"
+    # The same command as ps renders it, once the shell has stripped the quotes.
+    sandboxed_argv = f"/bin/sh -c sleep 30; exit 0 {marker}"
     goal = _encoded_tool_goal("execute", {"command": command})
 
     with _runtime_process(tmp_path, port=port, token=token, data_dir=data_dir) as process:
@@ -155,7 +161,7 @@ def test_runtime_killed_during_sandboxed_command_quarantines_without_replay(
                 },
             )
             assert resolved.status_code == 200, resolved.text
-            child_pids = _wait_for_process_marker(marker, process)
+            child_pids = _wait_for_sandboxed_command(marker, sandboxed_argv, process)
             process.kill()
             process.wait(timeout=10)
 
@@ -452,27 +458,61 @@ def _encoded_tool_goal(name: str, args: dict[str, Any]) -> str:
     return f"[[e2e:tool:{encoded}]]"
 
 
-def _wait_for_process_marker(
+def _marker_processes(marker: str) -> dict[int, str]:
+    """Map every pid whose argv carries the marker to that argv."""
+
+    matched = subprocess.run(
+        ["pgrep", "-f", marker],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    pids = [value for value in matched.stdout.split() if value.isdigit()]
+    if not pids:
+        return {}
+    described = subprocess.run(
+        ["ps", "-ww", "-o", "pid=,args=", "-p", ",".join(pids)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    table: dict[int, str] = {}
+    for line in described.stdout.splitlines():
+        pid, _, args = line.strip().partition(" ")
+        if pid.isdigit():
+            table[int(pid)] = args.strip()
+    return table
+
+
+def _wait_for_sandboxed_command(
     marker: str,
+    command: str,
     process: subprocess.Popen[bytes],
 ) -> list[int]:
-    deadline = time.monotonic() + 15
+    """Wait until the sandboxed command itself runs, then snapshot the whole tree.
+
+    The Runtime passes the command to the sandbox launcher as an argument, so
+    the launcher's own argv carries the marker from the instant it is spawned.
+    Returning on any marker match therefore races: it hands back the launcher
+    before the sandbox is built and before the command exists, so the kill
+    lands on a sandbox that was never running. Waiting for a process whose argv
+    is exactly the command is what makes this test observe the real thing.
+    """
+
+    deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         if process.poll() is not None:
             raise AssertionError(
                 f"Runtime exited before shell marker appeared: {process.returncode}"
             )
-        result = subprocess.run(
-            ["pgrep", "-f", marker],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        pids = [int(value) for value in result.stdout.split() if value.isdigit()]
-        if pids:
-            return pids
+        table = _marker_processes(marker)
+        if any(args == command for args in table.values()):
+            return sorted(table)
         time.sleep(0.05)
-    raise AssertionError(f"timed out waiting for shell marker {marker}")
+    raise AssertionError(
+        f"timed out waiting for the sandboxed command {command!r}; "
+        f"marker matched only {sorted(_marker_processes(marker).values())}"
+    )
 
 
 def _describe_process(pid: int) -> str:
@@ -484,7 +524,7 @@ def _describe_process(pid: int) -> str:
     """
 
     result = subprocess.run(
-        ["ps", "-o", "pid=,ppid=,pgid=,stat=,args=", "-p", str(pid)],
+        ["ps", "-ww", "-o", "pid=,ppid=,pgid=,stat=,args=", "-p", str(pid)],
         check=False,
         capture_output=True,
         text=True,
