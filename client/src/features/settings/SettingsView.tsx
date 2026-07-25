@@ -103,6 +103,8 @@ function useSettingsViewModel({
   onImportLocalData,
   onExportLocalData,
   runtimeConnection,
+  openModelServiceAdd,
+  onModelServiceAddOpened,
   onModelServicesChange,
 }: {
   isDesktop?: boolean
@@ -113,6 +115,8 @@ function useSettingsViewModel({
   onImportLocalData: (file?: File) => void
   onExportLocalData?: () => void
   runtimeConnection?: RuntimeConnection | null
+  openModelServiceAdd?: boolean
+  onModelServiceAddOpened?: () => void
   onModelServicesChange?: () => void
 }) {
   const { t, locale, setLocale } = useI18n()
@@ -243,7 +247,7 @@ function useSettingsViewModel({
     }
   }
 
-  return { activeSection, adv, advancedSettingsReady, agentSettings, clearMemoryConfirmOpen, clearingMemory, importInputRef, isDesktop, locale, memoryEnabled, navItems, onAgentSettingsChange, onClearMemory, onExportLocalData, onImportLocalData, onModelServicesChange, runtimeConnection, selectSection, setAdv, setClearMemoryConfirmOpen, setClearingMemory, setClientUpdate, setLocale, settingsScrollRef, t, updateAction, updateActiveSectionFromScroll, updateHint, updateStatus }
+  return { activeSection, adv, advancedSettingsReady, agentSettings, clearMemoryConfirmOpen, clearingMemory, importInputRef, isDesktop, locale, memoryEnabled, navItems, onAgentSettingsChange, onClearMemory, onExportLocalData, onImportLocalData, onModelServiceAddOpened, onModelServicesChange, openModelServiceAdd, runtimeConnection, selectSection, setAdv, setClearMemoryConfirmOpen, setClearingMemory, setClientUpdate, setLocale, settingsScrollRef, t, updateAction, updateActiveSectionFromScroll, updateHint, updateStatus }
 }
 
 export function SettingsView(props: Parameters<typeof useSettingsViewModel>[0]) {
@@ -251,7 +255,7 @@ export function SettingsView(props: Parameters<typeof useSettingsViewModel>[0]) 
 }
 
 function SettingsViewContent({ view }: { view: ReturnType<typeof useSettingsViewModel> }) {
-  const { activeSection, adv, advancedSettingsReady, agentSettings, clearMemoryConfirmOpen, clearingMemory, importInputRef, isDesktop, locale, memoryEnabled, navItems, onAgentSettingsChange, onClearMemory, onExportLocalData, onImportLocalData, onModelServicesChange, runtimeConnection, selectSection, setAdv, setClearMemoryConfirmOpen, setClearingMemory, setClientUpdate, setLocale, settingsScrollRef, t, updateAction, updateActiveSectionFromScroll, updateHint, updateStatus } = view
+  const { activeSection, adv, advancedSettingsReady, agentSettings, clearMemoryConfirmOpen, clearingMemory, importInputRef, isDesktop, locale, memoryEnabled, navItems, onAgentSettingsChange, onClearMemory, onExportLocalData, onImportLocalData, onModelServiceAddOpened, onModelServicesChange, openModelServiceAdd, runtimeConnection, selectSection, setAdv, setClearMemoryConfirmOpen, setClearingMemory, setClientUpdate, setLocale, settingsScrollRef, t, updateAction, updateActiveSectionFromScroll, updateHint, updateStatus } = view
   return (
     <section className="workspace">
       <header className="topbar topbar-page">
@@ -279,16 +283,12 @@ function SettingsViewContent({ view }: { view: ReturnType<typeof useSettingsView
           <div className="settings-main-scroll">
             <div className="settings-main">
               {isDesktop ? (
-                <SettingsSection
-                  id="models"
-                  title={t('settings.group.models')}
-                  note={t('settings.modelServices.note')}
-                >
                 <ModelServicesSettings
-                    config={runtimeConnection}
-                    onChanged={onModelServicesChange}
-                  />
-                </SettingsSection>
+                  config={runtimeConnection}
+                  openAdd={openModelServiceAdd}
+                  onOpenAdd={onModelServiceAddOpened}
+                  onChanged={onModelServicesChange}
+                />
               ) : null}
 
               <SettingsSection id="agent" title={t('settings.group.agent')}>

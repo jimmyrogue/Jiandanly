@@ -544,8 +544,9 @@ describe('Composer (Lexical skill editor)', () => {
     expect(screen.queryByRole('button', { name: '停止生成' })).not.toBeInTheDocument()
   })
 
-  it('does not send before a connected model is selected', () => {
+  it('asks for a model before sending without one', () => {
     const onSend = vi.fn()
+    const onModelRequired = vi.fn()
     render(
       <I18nProvider>
         <Composer
@@ -557,11 +558,14 @@ describe('Composer (Lexical skill editor)', () => {
           mode=""
           models={[]}
           onModeChange={vi.fn()}
+          onModelRequired={onModelRequired}
         />
       </I18nProvider>,
     )
 
-    expect(screen.getByRole('button', { name: '发送' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+
+    expect(onModelRequired).toHaveBeenCalledTimes(1)
     expect(onSend).not.toHaveBeenCalled()
   })
 

@@ -2348,15 +2348,17 @@ class LocalStore:
         principal_id: str,
         connection_id: str,
         credential_ref: str,
+        base_url: str,
         models: list[dict[str, Any]],
         catalog_status: str,
     ) -> dict[str, Any] | None:
         cursor = await self._conn.execute(
-            "UPDATE model_connections SET credential_ref = ?, models_json = ?, "
+            "UPDATE model_connections SET credential_ref = ?, base_url = ?, models_json = ?, "
             "catalog_status = ?, version = version + 1, updated_at = ? "
             "WHERE principal_id = ? AND id = ?",
             (
                 credential_ref,
+                base_url,
                 json.dumps(
                     models,
                     ensure_ascii=False,

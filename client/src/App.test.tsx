@@ -211,14 +211,30 @@ describe('desktop shell', () => {
     expect(screen.getByRole('button', { name: '展开侧栏' })).toBeInTheDocument()
   })
 
-  it('opens model settings from the empty composer model state', async () => {
+  it('opens the model-service picker from the empty composer model state', async () => {
     render(<App />)
 
     const configureModels = await screen.findByRole('button', { name: '配置模型' })
     expect(configureModels).not.toHaveAttribute('aria-haspopup')
     fireEvent.click(configureModels)
 
-    expect(await screen.findByRole('heading', { name: '模型服务' })).toBeInTheDocument()
+    expect(await screen.findByRole('dialog')).toHaveTextContent('添加模型服务')
+  })
+
+  it('asks before opening model settings when a message has no model', async () => {
+    render(<App />)
+
+    const editor = await screen.findByRole('textbox')
+    editor.textContent = '你好'
+    fireEvent.input(editor)
+    fireEvent.keyDown(editor, { key: 'Enter', code: 'Enter' })
+
+    expect(await screen.findByRole('alertdialog')).toHaveTextContent('需要先连接模型服务')
+    expect(screen.queryByRole('heading', { name: '模型服务' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '前往设置' }))
+
+    expect(await screen.findByRole('dialog')).toHaveTextContent('添加模型服务')
   })
 
   it('lets an unsent chat clear its selected workspace', async () => {

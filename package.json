@@ -5,5 +5,8 @@
   "devDependencies": {
     "@modelcontextprotocol/conformance": "0.1.16",
     "esbuild": "0.28.1"
+  },
+  "scripts": {
+    "doctor": "npx react-doctor@latest"
   }
 }

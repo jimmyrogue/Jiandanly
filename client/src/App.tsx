@@ -1,4 +1,4 @@
-import { IconDownload, IconLayoutSidebarLeftExpand, IconTrash, IconX } from '@tabler/icons-react'
+import { IconDownload, IconLayoutSidebarLeftExpand, IconSparkles, IconTrash, IconX } from '@tabler/icons-react'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { toast } from 'sonner'
 import {
@@ -410,6 +410,8 @@ function useAppContentViewModel() {
   const [pluginsTab, setPluginsTab] = useState<PluginsHubTab>('plugins')
   const [isResizingSidebar, setIsResizingSidebar] = useState(false)
   const [keyboardHelpOpen, setKeyboardHelpOpen] = useState(false)
+  const [modelRequiredOpen, setModelRequiredOpen] = useState(false)
+  const [modelServiceAddRequested, setModelServiceAddRequested] = useState(false)
   // Runtime model catalog feeding the composer picker.
   const [models, setModels] = useState<ModelOption[]>([])
   const [modelCatalogVersion, setModelCatalogVersion] = useState(0)
@@ -2964,6 +2966,8 @@ function useAppContentViewModel() {
     listPluginsForView,
     mainView,
     mode,
+    modelRequiredOpen,
+    modelServiceAddRequested,
     models,
     openLocalArtifact,
     openLocalDocument,
@@ -2994,6 +2998,8 @@ function useAppContentViewModel() {
     setDraft,
     setKeyboardHelpOpen,
     setMainView,
+    setModelRequiredOpen,
+    setModelServiceAddRequested,
     setModelCatalogVersion,
     setPendingDeleteMessageID,
     setPendingDiagnosticsRunID,
@@ -3041,6 +3047,7 @@ function AppContentView({ view }: { view: AppContentViewModel }) {
     listMcpServersForView,
     listPluginsForView,
     mainView,
+    modelServiceAddRequested,
     pluginCatalogVersion,
     pluginsTab,
     renameConversation,
@@ -3051,6 +3058,7 @@ function AppContentView({ view }: { view: AppContentViewModel }) {
     setAgentSettings,
     setKeyboardHelpOpen,
     setMainView,
+    setModelServiceAddRequested,
     setModelCatalogVersion,
     setPluginsTab,
     shellClassName,
@@ -3240,6 +3248,8 @@ function AppContentView({ view }: { view: AppContentViewModel }) {
               agentSettings={agentSettings}
               advancedSettingsReady={runtimeSettingsConfig === runtimeConnection && Boolean(runtime?.online)}
               runtimeConnection={runtimeConnection}
+              openModelServiceAdd={modelServiceAddRequested}
+              onModelServiceAddOpened={() => setModelServiceAddRequested(false)}
               onModelServicesChange={() => setModelCatalogVersion((version) => version + 1)}
               onAgentSettingsChange={(next) => {
                 changeAgentSettings(next)
@@ -3320,6 +3330,7 @@ function AppChatWorkspace({ view }: { view: AppContentViewModel }) {
     isDesktop,
     isSending,
     mode,
+    modelRequiredOpen,
     models,
     openLocalArtifact,
     openLocalDocument,
@@ -3343,12 +3354,19 @@ function AppChatWorkspace({ view }: { view: AppContentViewModel }) {
     setArtifactPreview,
     setDraft,
     setMainView,
+    setModelRequiredOpen,
+    setModelServiceAddRequested,
     setPendingDeleteMessageID,
     setPendingDiagnosticsRunID,
     setPermissionMode,
     showLocalFileContextMenu,
     t,
   } = view
+
+  function openModelServiceSettings() {
+    setModelServiceAddRequested(true)
+    setMainView('settings')
+  }
 
   return (
     <section className="workspace">
@@ -3404,6 +3422,28 @@ function AppChatWorkspace({ view }: { view: AppContentViewModel }) {
           />
         </Suspense>
       ) : null}
+      <AlertDialog open={modelRequiredOpen} onOpenChange={setModelRequiredOpen}>
+        <AlertDialogContent className="conversation-delete-dialog">
+          <AlertDialogHeader className="conversation-delete-header">
+            <AlertDialogMedia className="conversation-delete-media">
+              <IconSparkles aria-hidden="true" />
+            </AlertDialogMedia>
+            <AlertDialogTitle>{t('composer.modelRequired.title')}</AlertDialogTitle>
+            <AlertDialogDescription>{t('composer.modelRequired.description')}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="conversation-delete-footer">
+            <AlertDialogCancel variant="outline" autoFocus>
+              <span className="conversation-delete-button-label">{t('composer.modelRequired.later')}</span>
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={openModelServiceSettings}
+            >
+              <span className="conversation-delete-button-label">{t('composer.modelRequired.openSettings')}</span>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <AlertDialog
         open={Boolean(pendingDiagnosticsRunID)}
         onOpenChange={(open) => !open && setPendingDiagnosticsRunID(undefined)}
@@ -3532,7 +3572,8 @@ function AppChatWorkspace({ view }: { view: AppContentViewModel }) {
           onModeChange={changeMode}
           permissionMode={permissionMode}
           onPermissionModeChange={setPermissionMode}
-          onConfigureModels={() => setMainView('settings')}
+          onModelRequired={() => setModelRequiredOpen(true)}
+          onConfigureModels={openModelServiceSettings}
           onRefreshCurrentModel={() => void refreshCurrentModel()}
           projectName={activeConversation?.project?.name ?? pendingProject?.name}
           onSelectProject={() => void selectProjectForActiveConversation()}

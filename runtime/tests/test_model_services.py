@@ -21,7 +21,7 @@ from shejane_runtime.server import create_app
 from shejane_runtime.store.sqlite import LocalStore
 
 
-def test_model_service_presets_prioritize_china_without_exposing_protocols() -> None:
+def test_model_service_presets_prioritize_china_and_expose_editable_addresses() -> None:
     presets = list_model_service_presets()
 
     assert [preset["id"] for preset in presets] == [
@@ -36,7 +36,7 @@ def test_model_service_presets_prioritize_china_without_exposing_protocols() -> 
     for preset in presets[:-1]:
         assert preset["regions"][0]["id"] == "cn"
         assert preset["regions"][0]["default"] is True
-        assert "base_url" not in preset["regions"][0]
+        assert preset["regions"][0]["base_url"].startswith("https://")
         assert "adapter_id" not in preset
 
 
@@ -123,7 +123,12 @@ def test_model_service_presets_are_runtime_owned(
         "description": "推理和通用任务，按 DeepSeek 官方价格计费。",
         "api_key_url": "https://platform.deepseek.com/api_keys",
         "billing_url": "https://platform.deepseek.com/usage",
-        "regions": [{"id": "cn", "name": "中国站", "default": True}],
+        "regions": [{
+            "id": "cn",
+            "name": "中国站",
+            "default": True,
+            "base_url": "https://api.deepseek.com/v1",
+        }],
     }
 
 
@@ -200,6 +205,7 @@ def test_official_model_service_connects_with_bundled_catalog_when_refresh_fails
                 "preset_id": "deepseek",
                 "region": "cn",
                 "api_key": "deepseek-secret",
+                "base_url": "https://gateway.example/v1",
             },
         )
         assert response.status_code == 201
@@ -217,6 +223,7 @@ def test_official_model_service_connects_with_bundled_catalog_when_refresh_fails
     assert connected["name"] == "DeepSeek"
     assert connected["region"] == "cn"
     assert connected["adapter_id"] == "openai_chat"
+    assert connected["base_url"] == "https://gateway.example/v1"
     assert connected["credential_configured"] is True
     assert connected["catalog_status"] == "stale"
     assert connected["models"][0]["model_id"] == "deepseek-v4-flash"
@@ -380,9 +387,11 @@ def test_model_service_can_replace_its_api_key(
     )
     monkeypatch.setattr(RunCoordinator, "start", lambda _self: None)
     seen_keys: list[str] = []
+    seen_base_urls: list[str] = []
 
     async def refresh(**kwargs):
         seen_keys.append(kwargs["api_key"])
+        seen_base_urls.append(kwargs["base_url"])
         return [dict(model) for model in kwargs["preset"]["models"]], "ready"
 
     monkeypatch.setattr(server_module, "_refresh_model_service_models", refresh)
@@ -396,13 +405,21 @@ def test_model_service_can_replace_its_api_key(
         replaced = client.put(
             f"/v1/model-services/{connection['id']}/credential",
             headers={"Authorization": "Bearer tok"},
-            json={"api_key": "new-secret"},
+            json={
+                "api_key": "new-secret",
+                "base_url": "https://gateway.example/v1",
+            },
         )
 
     assert replaced.status_code == 200
     assert replaced.json()["credential_configured"] is True
+    assert replaced.json()["base_url"] == "https://gateway.example/v1"
     assert replaced.json()["version"] == connection["version"] + 1
     assert seen_keys == ["old-secret", "new-secret"]
+    assert seen_base_urls == [
+        "https://api.deepseek.com/v1",
+        "https://gateway.example/v1",
+    ]
     assert list(credential_vault.values()) == ["new-secret"]
 
 
@@ -478,11 +495,19 @@ def test_model_service_keeps_old_api_key_when_new_key_cannot_be_verified(
         replaced = client.put(
             f"/v1/model-services/{connection['id']}/credential",
             headers={"Authorization": "Bearer tok"},
-            json={"api_key": "unverified-secret"},
+            json={
+                "api_key": "unverified-secret",
+                "base_url": "https://unverified.example/v1",
+            },
         )
+        listed = client.get(
+            "/v1/model-services",
+            headers={"Authorization": "Bearer tok"},
+        ).json()["services"][0]
 
     assert replaced.status_code == 503
     assert replaced.json()["detail"]["message"] == "暂时无法验证新的 API Key，旧 Key 已保留。"
+    assert listed["base_url"] == connection["base_url"]
     assert list(credential_vault.values()) == ["old-secret"]
 
 

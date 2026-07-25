@@ -2257,6 +2257,8 @@ export interface components {
         };
         /** ModelServiceRegion */
         ModelServiceRegion: {
+            /** Base Url */
+            base_url: string;
             /** Default */
             default: boolean;
             /**
@@ -2876,6 +2878,8 @@ export interface components {
         ReconnectModelServiceRequest: {
             /** Api Key */
             api_key: string;
+            /** Base Url */
+            base_url?: string | null;
         };
         /** ResolvePermissionCommand */
         ResolvePermissionCommand: {

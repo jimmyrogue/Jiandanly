@@ -220,7 +220,7 @@ _PRESETS: tuple[dict[str, Any], ...] = (
 
 
 def list_model_service_presets() -> list[dict[str, Any]]:
-    """Return the user-facing preset catalog without transport details."""
+    """Return the user-facing preset catalog with editable service addresses."""
     return [
         {
             "id": preset["id"],
@@ -233,6 +233,7 @@ def list_model_service_presets() -> list[dict[str, Any]]:
                     "id": region["id"],
                     "name": region["name"],
                     "default": region["default"],
+                    "base_url": region["base_url"],
                 }
                 for region in preset["regions"]
             ],

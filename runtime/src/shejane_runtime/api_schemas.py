@@ -147,6 +147,7 @@ class ModelServiceRegion(BaseModel):
     id: Literal["cn", "intl"]
     name: str
     default: bool
+    base_url: str
 
 
 class ModelServicePreset(BaseModel):
@@ -208,6 +209,7 @@ class ReconnectModelServiceRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     api_key: str = Field(min_length=1, max_length=8192)
+    base_url: str | None = Field(default=None, min_length=1, max_length=2048)
 
 
 class ImportModelServiceRequest(BaseModel):

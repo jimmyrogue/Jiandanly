@@ -1234,7 +1234,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise credential_error
             models, catalog_status = detected.get(adapter_id, ([], "unavailable"))
         else:
-            if body.name is not None or body.base_url is not None or body.adapter_id is not None:
+            if body.name is not None or body.adapter_id is not None:
                 raise HTTPException(
                     status_code=400,
                     detail="official model service transport cannot be overridden",
@@ -1252,7 +1252,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
             name = str(preset["name"])
             region = str(region_config["id"])
-            base_url = str(region_config["base_url"])
+            base_url = _model_service_base_url(
+                body.base_url or str(region_config["base_url"])
+            )
             adapter_id = str(preset["adapter_id"])
             models, catalog_status = await _refresh_model_service_models(
                 preset=preset,
@@ -1368,10 +1370,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         api_key = body.api_key.strip()
         if not api_key:
             raise HTTPException(status_code=400, detail="API key is required")
+        base_url = _model_service_base_url(body.base_url or str(row["base_url"]))
         preset = model_service_preset(str(row["preset_id"])) or {"models": ()}
         models, catalog_status = await _refresh_model_service_models(
             preset=preset,
-            base_url=str(row["base_url"]),
+            base_url=base_url,
             adapter_id=str(row["adapter_id"]),
             api_key=api_key,
         )
@@ -1408,6 +1411,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         principal_id=principal_id,
                         connection_id=connection_id,
                         credential_ref=next_credential_ref,
+                        base_url=base_url,
                         models=models,
                         catalog_status=catalog_status,
                     )
@@ -1424,6 +1428,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             principal_id=principal_id,
                             connection_id=connection_id,
                             credential_ref=previous_credential_ref,
+                            base_url=str(current["base_url"]),
                             models=_model_connection_models(current),
                             catalog_status=str(current["catalog_status"]),
                         )

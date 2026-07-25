@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { I18nProvider } from '@/shared/i18n/I18nProvider'
 import { ModelServicesSettings } from './ModelServicesSettings'
 
@@ -25,10 +25,17 @@ const deepseek = {
   description: '推理和通用任务',
   api_key_url: 'https://platform.deepseek.com/api_keys',
   billing_url: 'https://platform.deepseek.com/usage',
-  regions: [{ id: 'cn', name: '中国站', default: true }],
+  regions: [{
+    id: 'cn',
+    name: '中国站',
+    default: true,
+    base_url: 'https://api.deepseek.com/v1',
+  }],
 }
 
 describe('ModelServicesSettings', () => {
+  afterEach(cleanup)
+
   beforeEach(() => {
     vi.clearAllMocks()
     api.listModelServicePresets.mockResolvedValue([deepseek])
@@ -37,21 +44,108 @@ describe('ModelServicesSettings', () => {
     api.reconnectModelService.mockResolvedValue({})
   })
 
-  it('connects an official service with only an API key', async () => {
+  it('connects an official service with an editable API address', async () => {
     render(
       <I18nProvider>
         <ModelServicesSettings config={config} />
       </I18nProvider>,
     )
 
-    fireEvent.click(await screen.findByRole('button', { name: /DeepSeek/ }))
+    fireEvent.click(await screen.findByRole('button', { name: '添加模型服务' }))
+    fireEvent.click(screen.getByRole('button', { name: /DeepSeek/ }))
+    expect(screen.getByLabelText('API 地址')).toHaveValue('')
+    expect(screen.getByLabelText('API 地址')).toHaveAttribute(
+      'placeholder',
+      'https://api.deepseek.com/v1',
+    )
+    expect(screen.getByRole('button', { name: '获取 API Key' })).toHaveAttribute('data-size', 'lg')
+    expect(screen.getByRole('button', { name: '连接' })).toHaveClass('h-11')
+    fireEvent.change(screen.getByLabelText('API 地址'), {
+      target: { value: 'https://gateway.example/v1' },
+    })
     fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'secret' } })
     fireEvent.click(screen.getByRole('button', { name: '连接' }))
 
     await waitFor(() => expect(api.connectModelService).toHaveBeenCalledWith(
-      { preset_id: 'deepseek', region: 'cn', api_key: 'secret' },
+      {
+        preset_id: 'deepseek',
+        region: 'cn',
+        api_key: 'secret',
+        base_url: 'https://gateway.example/v1',
+      },
       config,
     ))
+  })
+
+  it('uses the first official API address as the visible and submitted fallback', async () => {
+    api.listModelServicePresets.mockResolvedValue([{
+      ...deepseek,
+      regions: [{ ...deepseek.regions[0], default: false }],
+    }])
+
+    render(
+      <I18nProvider>
+        <ModelServicesSettings config={config} />
+      </I18nProvider>,
+    )
+
+    fireEvent.click(await screen.findByRole('button', { name: '添加模型服务' }))
+    fireEvent.click(screen.getByRole('button', { name: /DeepSeek/ }))
+
+    expect(screen.getByLabelText('API 地址')).toHaveValue('')
+    expect(screen.getByLabelText('API 地址')).toHaveAttribute(
+      'placeholder',
+      'https://api.deepseek.com/v1',
+    )
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'secret' } })
+    fireEvent.click(screen.getByRole('button', { name: '连接' }))
+
+    await waitFor(() => expect(api.connectModelService).toHaveBeenCalledWith(
+      {
+        preset_id: 'deepseek',
+        region: 'cn',
+        api_key: 'secret',
+        base_url: 'https://api.deepseek.com/v1',
+      },
+      config,
+    ))
+  })
+
+  it('uses localized validation and can return to the service picker', async () => {
+    render(
+      <I18nProvider>
+        <ModelServicesSettings config={config} />
+      </I18nProvider>,
+    )
+
+    fireEvent.click(await screen.findByRole('button', { name: '添加模型服务' }))
+    fireEvent.click(screen.getByRole('button', { name: /DeepSeek/ }))
+    fireEvent.click(screen.getByRole('button', { name: '连接' }))
+
+    expect(screen.getByRole('alert')).toHaveTextContent('请输入 API Key')
+    expect(api.connectModelService).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: '返回选择模型服务' }))
+    expect(screen.getByRole('button', { name: /DeepSeek/ })).toBeInTheDocument()
+    expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument()
+  })
+
+  it('keeps the service catalog behind the add button', async () => {
+    const { container } = render(
+      <I18nProvider>
+        <ModelServicesSettings config={config} />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => expect(api.listModelServicePresets).toHaveBeenCalled())
+    expect(screen.queryByRole('button', { name: /DeepSeek/ })).not.toBeInTheDocument()
+    expect(container.querySelector('.settings-card')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '添加模型服务' }))
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /DeepSeek/ })).toBeInTheDocument()
+    expect(screen.queryByText('选择要连接的服务。')).not.toBeInTheDocument()
   })
 
   it('renders cached connections without opening an editor on row click', async () => {
@@ -113,14 +207,18 @@ describe('ModelServicesSettings', () => {
       </I18nProvider>,
     )
 
-    fireEvent.click(await screen.findByRole('button', { name: '更新 DeepSeek 的 API Key' }))
+    fireEvent.click(await screen.findByRole('button', { name: '编辑 DeepSeek 连接' }))
     expect(screen.getByText('需要 API Key')).toBeInTheDocument()
+    expect(screen.getByLabelText('API 地址')).toHaveValue('https://api.deepseek.com/v1')
+    fireEvent.change(screen.getByLabelText('API 地址'), {
+      target: { value: 'https://gateway.example/v1' },
+    })
     fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'new-secret' } })
     fireEvent.click(screen.getByRole('button', { name: '更新连接' }))
 
     await waitFor(() => expect(api.reconnectModelService).toHaveBeenCalledWith(
       'conn_1',
-      { api_key: 'new-secret' },
+      { api_key: 'new-secret', base_url: 'https://gateway.example/v1' },
       config,
     ))
   })

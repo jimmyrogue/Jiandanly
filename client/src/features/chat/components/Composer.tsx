@@ -46,6 +46,7 @@ export function Composer({
   onModeChange,
   permissionMode = 'auto',
   onPermissionModeChange,
+  onModelRequired,
   onConfigureModels,
   onRefreshCurrentModel,
   projectName,
@@ -75,6 +76,7 @@ export function Composer({
   onModeChange: (mode: ChatMode) => void
   permissionMode?: PermissionMode
   onPermissionModeChange?: (mode: PermissionMode) => void
+  onModelRequired?: () => void
   onConfigureModels?: () => void
   onRefreshCurrentModel?: () => void
   projectName?: string
@@ -94,9 +96,17 @@ export function Composer({
   const sendLabel = steeringMode ? t('composer.appendInstruction') : t('composer.send')
   const sendTitle = steeringMode ? t('composer.appendInstruction') : t('composer.kbdHint')
   const handleSend = steeringMode ? onAppendInstruction : onSend
+  const requestModel = onModelRequired ?? onConfigureModels
   const dragDepthRef = useRef(0)
   const [isDragging, setIsDragging] = useState(false)
   const canDropAttachments = isDesktop && !isSending && !hasActiveRun && Boolean(onDropAttachments)
+  const submit = () => {
+    if (!steeringMode && !modelAvailable) {
+      requestModel?.()
+      return
+    }
+    handleSend?.()
+  }
 
   function handleDragEnter(event: DragEvent<HTMLElement>) {
     if (!event.dataTransfer.types.includes('Files')) return
@@ -155,13 +165,7 @@ export function Composer({
         <SkillEditor
           draft={draft}
           onDraftChange={onDraftChange}
-          onSend={() => {
-            if (!steeringMode && !modelAvailable) {
-              onConfigureModels?.()
-              return
-            }
-            handleSend?.()
-          }}
+          onSend={submit}
           listSkills={listSkills}
           listMcpServers={listMcpServers}
           listPlugins={listPlugins}
@@ -260,10 +264,10 @@ export function Composer({
             disabled={
               steeringMode
                 ? !draft.trim()
-                : isSending || !draft.trim() || !modelAvailable
+                : isSending || !draft.trim()
             }
             title={sendTitle}
-            onClick={() => handleSend?.()}
+            onClick={submit}
           >
             <IconArrowUp size={16} aria-hidden="true" />
             <span className="sr-only">{sendLabel}</span>

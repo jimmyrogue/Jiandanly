@@ -3504,6 +3504,10 @@
       },
       "ModelServiceRegion": {
         "properties": {
+          "base_url": {
+            "title": "Base Url",
+            "type": "string"
+          },
           "default": {
             "title": "Default",
             "type": "boolean"
@@ -3524,7 +3528,8 @@
         "required": [
           "id",
           "name",
-          "default"
+          "default",
+          "base_url"
         ],
         "title": "ModelServiceRegion",
         "type": "object"
@@ -5085,6 +5090,19 @@
             "minLength": 1,
             "title": "Api Key",
             "type": "string"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
           }
         },
         "required": [
