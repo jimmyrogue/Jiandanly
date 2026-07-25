@@ -1252,9 +1252,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
             name = str(preset["name"])
             region = str(region_config["id"])
-            base_url = _model_service_base_url(
-                body.base_url or str(region_config["base_url"])
-            )
+            base_url = _model_service_base_url(body.base_url or str(region_config["base_url"]))
             adapter_id = str(preset["adapter_id"])
             models, catalog_status = await _refresh_model_service_models(
                 preset=preset,

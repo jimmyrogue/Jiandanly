@@ -123,12 +123,14 @@ def test_model_service_presets_are_runtime_owned(
         "description": "推理和通用任务，按 DeepSeek 官方价格计费。",
         "api_key_url": "https://platform.deepseek.com/api_keys",
         "billing_url": "https://platform.deepseek.com/usage",
-        "regions": [{
-            "id": "cn",
-            "name": "中国站",
-            "default": True,
-            "base_url": "https://api.deepseek.com/v1",
-        }],
+        "regions": [
+            {
+                "id": "cn",
+                "name": "中国站",
+                "default": True,
+                "base_url": "https://api.deepseek.com/v1",
+            }
+        ],
     }
 
 

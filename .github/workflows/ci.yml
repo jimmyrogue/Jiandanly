@@ -33,7 +33,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - uses: astral-sh/setup-uv@v3
+      - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
           cache-dependency-glob: runtime/uv.lock
@@ -102,7 +102,7 @@ jobs:
           cache: false
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
           cache-dependency-glob: runtime/uv.lock
@@ -225,10 +225,16 @@ jobs:
         with:
           python-version: '3.12'
 
-      - uses: astral-sh/setup-uv@v3
+      - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
           cache-dependency-glob: runtime/uv.lock
+
+      - name: Install Linux sandbox dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y bubblewrap ripgrep socat
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - name: Install workspace dependencies
         run: corepack enable && pnpm install --frozen-lockfile
