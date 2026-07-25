@@ -189,6 +189,7 @@ def verify_fedora_rpms(inputs: dict[str, Path], lock: dict[str, Any], work: Path
         require_rpm_signature(
             output.stdout + output.stderr,
             key_id=str(fedora["signing_key_id"]),
+            fingerprint=expected_fingerprint,
         )
         identity = run(
             [
@@ -206,14 +207,25 @@ def verify_fedora_rpms(inputs: dict[str, Path], lock: dict[str, Any], work: Path
             raise SystemExit(f"Fedora RPM identity changed: {name}")
 
 
-def require_rpm_signature(output: str, *, key_id: str) -> None:
-    required = (
+def require_rpm_signature(output: str, *, key_id: str, fingerprint: str) -> None:
+    """Assert the package is signed by the expected key, on rpm 4 or rpm 6.
+
+    rpm 6 rewrote this line: it added the OpenPGP prefix, lowercased
+    "signature", and replaced the ambiguous short key id with the full
+    lowercase fingerprint (followed by its own colon). Both spellings assert
+    the same thing, so accept either rather than pinning the rpm version --
+    homebrew-core moves it out from under the release without warning.
+    """
+
+    signatures = (
         f"Header V4 RSA/SHA256 Signature, key ID {key_id}: OK",
-        "Header SHA256 digest: OK",
-        "Payload SHA256 digest: OK",
+        f"Header OpenPGP V4 RSA/SHA256 signature, key fingerprint: {fingerprint.lower()}: OK",
     )
-    if any(item not in output for item in required):
-        raise SystemExit("Fedora RPM signature or digest is invalid")
+    if not any(signature in output for signature in signatures):
+        raise SystemExit("Fedora RPM is not signed by the expected key")
+    digests = ("Header SHA256 digest: OK", "Payload SHA256 digest: OK")
+    if any(digest not in output for digest in digests):
+        raise SystemExit("Fedora RPM digest is invalid")
 
 
 def verify_e2fs_source(inputs: dict[str, Path], lock: dict[str, Any], work: Path) -> Path:
@@ -680,10 +692,17 @@ def run(
     capture: bool = False,
     binary: bool = False,
 ) -> subprocess.CompletedProcess[Any]:
+    # Verification below matches these tools' human-readable output, and every
+    # one of them translates it. CI runs under C and passes; a developer on a
+    # localized machine gets "Fedora RPM is not signed by the expected key"
+    # from a package that is perfectly signed. Pin the parsed locale.
+    resolved_env = dict(env) if env is not None else dict(os.environ)
+    resolved_env["LC_ALL"] = "C"
+    resolved_env["LANG"] = "C"
     return subprocess.run(
         command,
         cwd=cwd,
-        env=env,
+        env=resolved_env,
         check=True,
         capture_output=capture or binary,
         text=not binary,
