@@ -64,6 +64,34 @@ describe('ModeSelector (Runtime catalog)', () => {
     expect(await screen.findByText('更多模型')).toBeInTheDocument()
   })
 
+  it('keeps recommended and additional models from one vendor together', async () => {
+    render(withProviders(
+      <ModeSelector
+        mode="local:deepseek:deepseek-v4-flash"
+        models={[
+          {
+            id: 'local:deepseek:deepseek-v4-flash',
+            label: 'DeepSeek V4 Flash',
+            vendor: 'DeepSeek',
+            imageInputs: false,
+            recommended: true,
+          },
+          {
+            id: 'local:deepseek:deepseek-v4-pro',
+            label: 'DeepSeek V4 Pro',
+            vendor: 'DeepSeek',
+            imageInputs: false,
+          },
+        ]}
+        onChange={vi.fn()}
+      />,
+    ))
+    openMenu()
+
+    expect(await screen.findByText('DeepSeek V4 Pro')).toBeInTheDocument()
+    expect(screen.getAllByText('DeepSeek')).toHaveLength(1)
+  })
+
   it('refreshes only when the model menu opens', () => {
     const onRefreshCurrent = vi.fn()
     render(withProviders(

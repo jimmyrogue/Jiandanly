@@ -228,11 +228,22 @@ def test_official_model_service_connects_with_bundled_catalog_when_refresh_fails
     assert connected["base_url"] == "https://gateway.example/v1"
     assert connected["credential_configured"] is True
     assert connected["catalog_status"] == "stale"
-    assert connected["models"][0]["model_id"] == "deepseek-v4-flash"
+    assert [model["model_id"] for model in connected["models"]] == [
+        "deepseek-v4-flash",
+        "deepseek-v4-pro",
+    ]
+    assert [model["verification"] for model in connected["models"]] == [
+        "verified",
+        "verified",
+    ]
     assert connected["models"][0]["recommended"] is True
+    assert connected["models"][1]["recommended"] is False
     assert "api_key" not in connected
     assert listed.json()["services"] == [connected]
-    assert models.json()["models"][0]["spec"] == (f"local:{connected['id']}:deepseek-v4-flash")
+    assert [model["spec"] for model in models.json()["models"]] == [
+        f"local:{connected['id']}:deepseek-v4-flash",
+        f"local:{connected['id']}:deepseek-v4-pro",
+    ]
     assert list(credential_vault.values()) == ["deepseek-secret"]
 
 

@@ -34,6 +34,16 @@ _PRESETS: tuple[dict[str, Any], ...] = (
                 "streaming": True,
                 "image_inputs": False,
             },
+            {
+                "model_id": "deepseek-v4-pro",
+                "display_name": "DeepSeek V4 Pro",
+                "source": "bundled",
+                "verification": "verified",
+                "recommended": False,
+                "tool_calling": True,
+                "streaming": True,
+                "image_inputs": False,
+            },
         ),
     },
     {

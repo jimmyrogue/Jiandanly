@@ -167,6 +167,15 @@ describe('ModelServicesSettings', () => {
         tool_calling: true,
         streaming: true,
         image_inputs: false,
+      }, {
+        model_id: 'deepseek-v4-pro',
+        display_name: 'DeepSeek V4 Pro',
+        source: 'bundled',
+        verification: 'verified',
+        recommended: false,
+        tool_calling: true,
+        streaming: true,
+        image_inputs: false,
       }],
       version: 1,
       created_at: 'now',
@@ -179,7 +188,7 @@ describe('ModelServicesSettings', () => {
       </I18nProvider>,
     )
 
-    expect(await screen.findByText('DeepSeek V4 Flash')).toBeInTheDocument()
+    expect(await screen.findByText('DeepSeek V4 Flash、DeepSeek V4 Pro')).toBeInTheDocument()
     expect(screen.getByText('中国站 · 可用')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '打开 DeepSeek 控制台' })).toBeInTheDocument()
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()

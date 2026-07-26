@@ -327,7 +327,7 @@ export function ModelServicesSettings({
                   <strong>{service.name}</strong>
                   <span>
                     {service.models
-                      .filter((model) => model.recommended)
+                      .filter((model) => model.verification === 'verified')
                       .map((model) => model.display_name)
                       .join('、') || t('settings.modelServices.noModels')}
                   </span>

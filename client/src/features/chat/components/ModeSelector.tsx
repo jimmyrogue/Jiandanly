@@ -51,11 +51,16 @@ export function ModeSelector({
   const selectedModel = models.find((model) => model.id === mode)
   const groupedModels = useMemo(() => groupModelsByVendor(models), [models])
   const recommendedGroups = groupedModels
-    .map((group) => ({ ...group, models: group.models.filter((model) => model.recommended) }))
-    .filter((group) => group.models.length > 0)
+    .filter((group) => group.models.some((model) => model.recommended))
+    .map((group) => ({
+      ...group,
+      models: [
+        ...group.models.filter((model) => model.recommended),
+        ...group.models.filter((model) => !model.recommended),
+      ],
+    }))
   const moreGroups = groupedModels
-    .map((group) => ({ ...group, models: group.models.filter((model) => !model.recommended) }))
-    .filter((group) => group.models.length > 0)
+    .filter((group) => group.models.every((model) => !model.recommended))
   const selectedLabel = selectedModel?.label ?? t('composer.mode.chooseModel')
 
   const handleOpenChange = (nextOpen: boolean) => {
