@@ -42,6 +42,7 @@ import shutil
 import tempfile
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AsyncExitStack
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlparse
@@ -337,18 +338,41 @@ def _workspace_route(path: Path, workspace_root: Path, *, directory: bool) -> st
     return route.rstrip("/") + "/" if directory else route
 
 
+@dataclass(frozen=True)
+class _StoreSandboxLedger:
+    """Bind sandbox process records to the attempt that owns them."""
+
+    store: LocalStore
+    run_id: str
+    execution_attempt_id: str
+
+    async def record(self, *, pid: int, process_started_at: str, settings_path: str) -> str:
+        return await self.store.record_sandbox_process(
+            run_id=self.run_id,
+            execution_attempt_id=self.execution_attempt_id,
+            pid=pid,
+            process_started_at=process_started_at,
+            settings_path=settings_path,
+        )
+
+    async def forget(self, record_id: str) -> None:
+        await self.store.forget_sandbox_process(record_id)
+
+
 def _build_agent_backend(
     *,
     effective_workspace: str,
     skills_dirs: list[Path],
     memory_sources: list[str] | None,
     attachment_bindings: list[dict[str, str]] | None = None,
+    sandbox_ledger: _StoreSandboxLedger | None = None,
 ):
     workspace_root = Path(effective_workspace).expanduser().resolve()
     default = RuntimeLocalShellBackend(
         root_dir=workspace_root,
         virtual_mode=True,
         sandbox_launcher=configured_srt_launcher(),
+        sandbox_ledger=sandbox_ledger,
         env={
             key: os.environ[key]
             for key in ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "SHELL", "USER")
@@ -1225,6 +1249,17 @@ async def build_agent(
         skills_dirs=skills_dirs,
         memory_sources=memory_arg,
         attachment_bindings=attachment_bindings,
+        # Without an attempt to own them, sandbox records have nothing to be
+        # reaped against, so untracked runs simply keep the old behaviour.
+        sandbox_ledger=(
+            _StoreSandboxLedger(
+                store=store,
+                run_id=run_id,
+                execution_attempt_id=execution_attempt_id,
+            )
+            if execution_attempt_id is not None
+            else None
+        ),
     )
 
     middleware = _custom_middleware(

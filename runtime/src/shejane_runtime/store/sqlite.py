@@ -379,6 +379,29 @@ CREATE INDEX IF NOT EXISTS idx_local_tool_receipts_run_status
 CREATE INDEX IF NOT EXISTS idx_local_model_calls_run
     ON local_model_calls(run_id, call_index);
 
+-- Sandbox launchers this Runtime spawned but cannot clean up if it is killed
+-- outright. The in-process paths (timeout, cancellation, failure) reap their
+-- own trees; a SIGKILLed Runtime runs no code at all, so the row left here is
+-- the only evidence the next Runtime has that a sandbox is still running.
+-- pid alone would be unsafe to act on, so each row also carries the identity
+-- needed to prove the pid was not recycled before anything is signalled.
+CREATE TABLE IF NOT EXISTS local_sandbox_processes (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    execution_attempt_id TEXT NOT NULL,
+    pid INTEGER NOT NULL,
+    process_started_at TEXT NOT NULL,
+    settings_path TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('running', 'orphaned', 'reaped', 'gone', 'stale')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (run_id) REFERENCES local_runs(id)
+);
+CREATE INDEX IF NOT EXISTS idx_local_sandbox_processes_attempt
+    ON local_sandbox_processes(run_id, execution_attempt_id, status);
+CREATE INDEX IF NOT EXISTS idx_local_sandbox_processes_status
+    ON local_sandbox_processes(status, created_at);
+
 CREATE TABLE IF NOT EXISTS local_assistant_drafts (
     run_id TEXT PRIMARY KEY,
     revision INTEGER NOT NULL,
@@ -1572,6 +1595,58 @@ class LocalStore:
                 record,
             )
         return record
+
+    async def record_sandbox_process(
+        self,
+        *,
+        run_id: str,
+        execution_attempt_id: str,
+        pid: int,
+        process_started_at: str,
+        settings_path: str,
+    ) -> str:
+        """Durably note a sandbox launcher this attempt is responsible for.
+
+        Written before the command can outlive us so that a Runtime killed mid
+        command leaves the next one something to act on. ``process_started_at``
+        and ``settings_path`` are what later prove the pid was not recycled.
+        """
+
+        now = _now()
+        record = {
+            "id": _new_id("sbx"),
+            "run_id": run_id,
+            "execution_attempt_id": execution_attempt_id,
+            "pid": int(pid),
+            "process_started_at": process_started_at,
+            "settings_path": settings_path,
+            "status": "running",
+            "created_at": now,
+            "updated_at": now,
+        }
+        async with aiosqlite.connect(str(self._db_path)) as conn:
+            await _configure_connection(conn)
+            await conn.execute(
+                "INSERT INTO local_sandbox_processes "
+                "(id, run_id, execution_attempt_id, pid, process_started_at, settings_path, "
+                "status, created_at, updated_at) "
+                "VALUES (:id, :run_id, :execution_attempt_id, :pid, :process_started_at, "
+                ":settings_path, :status, :created_at, :updated_at)",
+                record,
+            )
+            await conn.commit()
+        return str(record["id"])
+
+    async def forget_sandbox_process(self, sandbox_process_id: str) -> None:
+        """Drop the record for a launcher that exited under our supervision."""
+
+        async with aiosqlite.connect(str(self._db_path)) as conn:
+            await _configure_connection(conn)
+            await conn.execute(
+                "DELETE FROM local_sandbox_processes WHERE id = ?",
+                (sandbox_process_id,),
+            )
+            await conn.commit()
 
     async def list_model_calls_for_run(self, run_id: str) -> list[dict[str, Any]]:
         cursor = await self._conn.execute(

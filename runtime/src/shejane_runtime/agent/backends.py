@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 import os
 import re
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import yaml
 from deepagents.backends import FilesystemBackend, LocalShellBackend
@@ -32,8 +33,10 @@ from deepagents.backends.protocol import (
 from langgraph.runtime import get_runtime
 from markitdown import MarkItDown
 
-from ..plugins.sandbox_runtime import prepare_agent_shell_command
+from ..plugins.sandbox_runtime import prepare_agent_shell_command, read_process_start
 from ..processes import kill_process_tree
+
+log = logging.getLogger(__name__)
 
 MODEL_FILE_READ_MAX_MB = 20
 PDF_FILE_READ_MAX_MB = 200
@@ -126,6 +129,19 @@ class RuntimeFilesystemBackend(_BoundedReadMixin, FilesystemBackend):
         )
 
 
+class SandboxProcessLedger(Protocol):
+    """Durable record of sandbox launchers an execution attempt is running.
+
+    The in-process cleanup paths below reap their own trees. This exists only
+    for the path where no cleanup code runs at all -- the Runtime being killed
+    outright -- so that a later Runtime can finish the job.
+    """
+
+    async def record(self, *, pid: int, process_started_at: str, settings_path: str) -> str: ...
+
+    async def forget(self, record_id: str) -> None: ...
+
+
 class RuntimeLocalShellBackend(_BoundedReadMixin, LocalShellBackend):
     """Run async shell commands in a process group owned by the Run.
 
@@ -145,10 +161,12 @@ class RuntimeLocalShellBackend(_BoundedReadMixin, LocalShellBackend):
         max_file_size_mb: int = MODEL_FILE_READ_MAX_MB,
         pdf_max_file_size_mb: int = PDF_FILE_READ_MAX_MB,
         sandbox_launcher: tuple[str, ...] | None = None,
+        sandbox_ledger: SandboxProcessLedger | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         self._sandbox_launcher = sandbox_launcher
+        self._sandbox_ledger = sandbox_ledger
         self._configure_read_limits(
             default_max_mb=max_file_size_mb,
             pdf_max_mb=pdf_max_file_size_mb,
@@ -179,6 +197,7 @@ class RuntimeLocalShellBackend(_BoundedReadMixin, LocalShellBackend):
 
         process: asyncio.subprocess.Process | None = None
         communicate_task: asyncio.Task[tuple[bytes, bytes]] | None = None
+        sandbox_record_id: str | None = None
         try:
             executable_roots = tuple(
                 Path(part)
@@ -219,6 +238,10 @@ class RuntimeLocalShellBackend(_BoundedReadMixin, LocalShellBackend):
                     stderr=asyncio.subprocess.PIPE,
                     **platform_args,
                 )
+                sandbox_record_id = await self._record_sandbox_process(
+                    process.pid,
+                    scratch_root / "sandbox-settings.json",
+                )
                 communicate_task = asyncio.create_task(process.communicate())
                 try:
                     stdout, stderr = await asyncio.wait_for(
@@ -249,6 +272,41 @@ class RuntimeLocalShellBackend(_BoundedReadMixin, LocalShellBackend):
                 exit_code=1,
                 truncated=False,
             )
+        finally:
+            # Reached on every path that leaves this frame, which is exactly
+            # the set of endings where cleanup already ran. Whatever the record
+            # was protecting against did not happen.
+            if sandbox_record_id is not None:
+                await self._forget_sandbox_process(sandbox_record_id)
+
+    async def _record_sandbox_process(self, pid: int, settings_path: Path) -> str | None:
+        """Note the launcher durably, without letting bookkeeping break the run."""
+
+        if self._sandbox_ledger is None:
+            return None
+        started_at = read_process_start(pid)
+        if started_at is None:
+            # Already gone, so there is nothing a later Runtime could reap.
+            return None
+        try:
+            return await self._sandbox_ledger.record(
+                pid=pid,
+                process_started_at=started_at,
+                settings_path=str(settings_path),
+            )
+        except Exception:
+            log.warning("could not record sandbox process %s", pid, exc_info=True)
+            return None
+
+    async def _forget_sandbox_process(self, record_id: str) -> None:
+        if self._sandbox_ledger is None:
+            return
+        try:
+            await self._sandbox_ledger.forget(record_id)
+        except Exception:
+            # A leftover row is safe: the reaper verifies identity before it
+            # signals anything, so a stale record is skipped rather than acted on.
+            log.warning("could not clear sandbox process record %s", record_id, exc_info=True)
 
     def _execute_response(
         self,

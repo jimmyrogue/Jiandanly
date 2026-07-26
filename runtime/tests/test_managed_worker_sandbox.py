@@ -5,10 +5,13 @@ import json
 import os
 import platform
 import shutil
+import signal
 import socket
 import subprocess
 import sys
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,11 +22,16 @@ from shejane_runtime.plugins.linux_cgroup import LinuxCgroupResources
 from shejane_runtime.plugins.managed_worker import _create_vm_staging, _reap_stale_vm_staging
 from shejane_runtime.plugins.runtime_assets import RuntimeAssetHandle
 from shejane_runtime.plugins.sandbox_runtime import (
+    SandboxProcessIdentity,
     SandboxRuntimeError,
     configured_srt_launcher,
     managed_worker_release_gate,
     prepare_agent_shell_command,
     prepare_srt_command,
+    read_process_command,
+    read_process_start,
+    sandbox_process_matches,
+    terminate_sandbox_process,
 )
 from shejane_runtime.plugins.tools import PluginActionError, _executor_for_action
 
@@ -144,6 +152,114 @@ def test_agent_shell_policy_is_read_only_outside_private_scratch(tmp_path: Path)
     assert policy["network"]["allowLocalBinding"] is False
     assert policy["network"]["allowAllUnixSockets"] is False
     assert policy["allowAppleEvents"] is False
+
+
+@contextmanager
+def _sandbox_stand_in(marker: str) -> Iterator[subprocess.Popen[bytes]]:
+    """A session-leading process tree shaped like a real sandbox launcher.
+
+    ``& wait`` keeps the outer shell alive with the marker in its argv, so the
+    tree has a supervisor and a child exactly like launcher-over-command.
+    """
+
+    process = subprocess.Popen(
+        ["/bin/sh", "-c", "sleep 30 & wait", marker],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    try:
+        yield process
+    finally:
+        with suppress(ProcessLookupError, OSError):
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        with suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=5)
+
+
+def _identity_for(process: subprocess.Popen[bytes], marker: str) -> SandboxProcessIdentity:
+    started_at = read_process_start(process.pid)
+    assert started_at is not None
+    return SandboxProcessIdentity(pid=process.pid, started_at=started_at, settings_path=marker)
+
+
+def test_sandbox_identity_matches_the_process_it_recorded() -> None:
+    marker = f"shejane-identity-{uuid.uuid4().hex}"
+    with _sandbox_stand_in(marker) as process:
+        identity = _identity_for(process, marker)
+        assert marker in (read_process_command(process.pid) or "")
+        assert sandbox_process_matches(identity) is True
+
+
+def test_sandbox_identity_rejects_a_recycled_pid() -> None:
+    """A pid whose start time moved on is a different process wearing the number."""
+
+    marker = f"shejane-identity-{uuid.uuid4().hex}"
+    with _sandbox_stand_in(marker) as process:
+        recorded = _identity_for(process, marker)
+        recycled = SandboxProcessIdentity(
+            pid=recorded.pid,
+            started_at=recorded.started_at + "9",
+            settings_path=recorded.settings_path,
+        )
+        assert sandbox_process_matches(recycled) is False
+
+
+def test_sandbox_identity_rejects_an_unrelated_command() -> None:
+    marker = f"shejane-identity-{uuid.uuid4().hex}"
+    with _sandbox_stand_in(marker) as process:
+        recorded = _identity_for(process, marker)
+        impostor = SandboxProcessIdentity(
+            pid=recorded.pid,
+            started_at=recorded.started_at,
+            settings_path=f"shejane-identity-{uuid.uuid4().hex}",
+        )
+        assert sandbox_process_matches(impostor) is False
+
+
+def test_terminating_a_sandbox_process_takes_the_whole_group() -> None:
+    marker = f"shejane-identity-{uuid.uuid4().hex}"
+    with _sandbox_stand_in(marker) as process:
+        children = subprocess.run(
+            ["pgrep", "-P", str(process.pid)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        descendants = [int(value) for value in children.stdout.split() if value.isdigit()]
+        assert descendants, "stand-in never spawned the wrapped command"
+
+        assert terminate_sandbox_process(_identity_for(process, marker)) == "reaped"
+
+        assert read_process_start(process.pid) is None
+        for descendant in descendants:
+            assert read_process_start(descendant) is None, (
+                f"descendant {descendant} outlived the group kill"
+            )
+
+
+def test_terminating_refuses_a_stale_record_instead_of_killing_a_bystander() -> None:
+    """The guard that keeps a recycled pid from costing an unrelated process."""
+
+    marker = f"shejane-identity-{uuid.uuid4().hex}"
+    with _sandbox_stand_in(marker) as process:
+        recorded = _identity_for(process, marker)
+        stale = SandboxProcessIdentity(
+            pid=recorded.pid,
+            started_at=recorded.started_at + "9",
+            settings_path=recorded.settings_path,
+        )
+
+        assert terminate_sandbox_process(stale) == "stale"
+        assert read_process_start(process.pid) is not None, "bystander was signalled"
+
+
+def test_terminating_reports_an_already_finished_process_as_gone() -> None:
+    marker = f"shejane-identity-{uuid.uuid4().hex}"
+    with _sandbox_stand_in(marker) as process:
+        recorded = _identity_for(process, marker)
+    # Leaving the block killed the tree, so the record now names nothing.
+    assert terminate_sandbox_process(recorded) == "gone"
 
 
 def _write_seccomp_launcher(root: Path, architecture: str = "x64") -> tuple[str, ...]:
