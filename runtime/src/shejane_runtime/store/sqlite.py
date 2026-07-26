@@ -579,6 +579,25 @@ CREATE INDEX IF NOT EXISTS idx_local_plan_approvals_run_status
 """
 
 
+def _lease_expiry_error(cleanup_report: dict[str, Any]) -> str:
+    """Say what was actually established about the work this attempt left running.
+
+    The run is quarantined either way -- model calls may already have had
+    effects nothing can undo. What changes is whether the sandboxed commands
+    were confirmed stopped, which is the part a reader can act on.
+    """
+
+    if cleanup_report.get("status") == "completed":
+        return (
+            "The execution lease expired. Every sandboxed command this attempt started has "
+            "been stopped, but the run is quarantined and cannot be retried automatically."
+        )
+    return (
+        "The execution lease expired before the Runtime could prove that external work "
+        "stopped. This run is quarantined and cannot be retried automatically."
+    )
+
+
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -4365,6 +4384,38 @@ class LocalStore:
         row = await cursor.fetchone()
         return dict(row) if row else None
 
+    async def _sandbox_cleanup_report_uncommitted(
+        self,
+        conn: aiosqlite.Connection,
+        *,
+        run_id: str,
+        execution_attempt_id: str,
+    ) -> dict[str, Any]:
+        """Report whether this attempt's sandboxes are known to have stopped.
+
+        Confirmation requires evidence, so an attempt that recorded no sandbox
+        stays unconfirmed rather than claiming a clean exit it cannot show. A
+        record left stale is likewise unconfirmed: the pid was recycled, so
+        whatever it named was never proven to have stopped.
+        """
+
+        cursor = await conn.execute(
+            "SELECT status, COUNT(*) AS total FROM local_sandbox_processes "
+            "WHERE run_id = ? AND execution_attempt_id = ? GROUP BY status",
+            (run_id, execution_attempt_id),
+        )
+        counts = {str(row["status"]): int(row["total"]) for row in await cursor.fetchall()}
+        if not counts:
+            return {"status": "unconfirmed"}
+        stopped = counts.get("reaped", 0) + counts.get("gone", 0)
+        if stopped == sum(counts.values()):
+            return {"status": "completed", "sandboxes_stopped": stopped}
+        return {
+            "status": "unconfirmed",
+            "sandboxes_stopped": stopped,
+            "sandboxes_unaccounted": sum(counts.values()) - stopped,
+        }
+
     async def _requeue_expired_jobs_uncommitted(
         self,
         conn: aiosqlite.Connection,
@@ -4432,12 +4483,17 @@ class LocalStore:
                 "WHERE id = ?",
                 (now, job["run_id"]),
             )
+            cleanup_report = await self._sandbox_cleanup_report_uncommitted(
+                conn,
+                run_id=str(job["run_id"]),
+                execution_attempt_id=execution_attempt_id,
+            )
             cleanup_payload = {
-                "error": "The execution lease expired before the Runtime could prove that external work stopped. This run is quarantined and cannot be retried automatically.",
+                "error": _lease_expiry_error(cleanup_report),
                 "type": "ExecutionLeaseExpiredError",
                 "retryable": False,
                 "category": "execution_lease_expired",
-                "cleanup": {"status": "unconfirmed"},
+                "cleanup": cleanup_report,
             }
             event = await self._append_event_uncommitted(
                 conn,
@@ -4714,6 +4770,16 @@ class LocalStore:
                     "WHERE run_id = ? AND execution_attempt_id = ? AND status = 'running'",
                     (now, now, run_id, execution_attempt_id),
                 )
+                await conn.execute(
+                    "UPDATE local_sandbox_processes SET status = 'orphaned', updated_at = ? "
+                    "WHERE run_id = ? AND execution_attempt_id = ? AND status = 'running'",
+                    (now, run_id, execution_attempt_id),
+                )
+                lease_cleanup_report = await self._sandbox_cleanup_report_uncommitted(
+                    conn,
+                    run_id=run_id,
+                    execution_attempt_id=execution_attempt_id,
+                )
                 event: dict[str, Any] | None = None
                 if not already_quarantined:
                     await conn.execute(
@@ -4733,11 +4799,11 @@ class LocalStore:
                         "run.cleanup_required",
                         payload_json=_encode_payload(
                             {
-                                "error": "The execution lease expired before the Runtime could prove that external work stopped. This run is quarantined and cannot be retried automatically.",
+                                "error": _lease_expiry_error(lease_cleanup_report),
                                 "type": "ExecutionLeaseExpiredError",
                                 "retryable": False,
                                 "category": "execution_lease_expired",
-                                "cleanup": {"status": "unconfirmed"},
+                                "cleanup": lease_cleanup_report,
                             }
                         ),
                         created_at=now,
@@ -4748,11 +4814,11 @@ class LocalStore:
                         run_status="cleanup_required",
                         change_type="run.cleanup_required",
                         payload={
-                            "error": "The execution lease expired before the Runtime could prove that external work stopped. This run is quarantined and cannot be retried automatically.",
+                            "error": _lease_expiry_error(lease_cleanup_report),
                             "type": "ExecutionLeaseExpiredError",
                             "retryable": False,
                             "category": "execution_lease_expired",
-                            "cleanup": {"status": "unconfirmed"},
+                            "cleanup": lease_cleanup_report,
                         },
                         event_high_watermark=int(event["seq"]),
                         changed_at=now,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import signal
 import subprocess
@@ -185,6 +186,107 @@ async def test_expiring_a_lease_hands_its_sandboxes_to_the_reaper(tmp_path: Path
         assert await _statuses(store) == ["orphaned"], (
             "lease expiry must release the sandboxes that attempt was running"
         )
+    finally:
+        await store.close()
+
+
+async def _expire_lease_and_read_cleanup(store: LocalStore, command_id: str) -> dict:
+    """Drive one attempt to lease expiry and return the cleanup payload it emits."""
+
+    run, _created = await store.accept_run_command(
+        principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+        command_id=command_id,
+        client_message_id=f"msg_{command_id}",
+        command_payload={
+            "type": "run.start",
+            "goal": "inspect",
+            "workspace_path": None,
+            "model": "auto",
+        },
+        goal="inspect",
+        workspace_path=None,
+        mode="auto",
+    )
+    job = await store.claim_run_job(worker_id="worker-one", lease_seconds=0.0)
+    assert job is not None
+    return {
+        "run_id": str(run["id"]),
+        "attempt_id": f"{job['id']}:{job['lease_generation']}",
+    }
+
+
+async def _cleanup_payload(store: LocalStore, run_id: str) -> dict:
+    events = await store.events_since(run_id)
+    cleanup = [e for e in events if e["event_type"] == "run.cleanup_required"]
+    assert cleanup, "lease expiry did not report cleanup"
+    return json.loads(cleanup[-1]["payload_json"])
+
+
+@pytest.mark.asyncio
+async def test_cleanup_is_confirmed_once_every_sandbox_was_accounted_for(
+    tmp_path: Path,
+) -> None:
+    store = await LocalStore.open(tmp_path / "store.db")
+    try:
+        context = await _expire_lease_and_read_cleanup(store, "cmd_confirmed")
+        record_id = await store.record_sandbox_process(
+            run_id=context["run_id"],
+            execution_attempt_id=context["attempt_id"],
+            pid=999_001,
+            process_started_at="1",
+            settings_path="/tmp/gone/sandbox-settings.json",
+        )
+        # Boot order: the reaper settles records before the expiry is reported.
+        await store.settle_sandbox_process(record_id, status="reaped")
+
+        await store.claim_run_job(worker_id="worker-two", lease_seconds=30.0)
+
+        payload = await _cleanup_payload(store, context["run_id"])
+        assert payload["cleanup"]["status"] == "completed"
+        assert payload["cleanup"]["sandboxes_stopped"] == 1
+        assert "has been stopped" in payload["error"]
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_a_stale_record_keeps_cleanup_unconfirmed(tmp_path: Path) -> None:
+    """A recycled pid proves nothing, so the verdict must stay honest."""
+
+    store = await LocalStore.open(tmp_path / "store.db")
+    try:
+        context = await _expire_lease_and_read_cleanup(store, "cmd_stale")
+        record_id = await store.record_sandbox_process(
+            run_id=context["run_id"],
+            execution_attempt_id=context["attempt_id"],
+            pid=999_002,
+            process_started_at="1",
+            settings_path="/tmp/gone/sandbox-settings.json",
+        )
+        await store.settle_sandbox_process(record_id, status="stale")
+
+        await store.claim_run_job(worker_id="worker-two", lease_seconds=30.0)
+
+        payload = await _cleanup_payload(store, context["run_id"])
+        assert payload["cleanup"]["status"] == "unconfirmed"
+        assert payload["cleanup"]["sandboxes_unaccounted"] == 1
+        assert "before the Runtime could prove" in payload["error"]
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_an_attempt_that_ran_no_sandbox_stays_unconfirmed(tmp_path: Path) -> None:
+    """No evidence is not the same as evidence of a clean exit."""
+
+    store = await LocalStore.open(tmp_path / "store.db")
+    try:
+        context = await _expire_lease_and_read_cleanup(store, "cmd_silent")
+
+        await store.claim_run_job(worker_id="worker-two", lease_seconds=30.0)
+
+        payload = await _cleanup_payload(store, context["run_id"])
+        assert payload["cleanup"] == {"status": "unconfirmed"}
     finally:
         await store.close()
 

@@ -165,10 +165,14 @@ def test_runtime_killed_during_sandboxed_command_quarantines_without_replay(
             process.kill()
             process.wait(timeout=10)
 
-    for child_pid in child_pids:
-        _wait_for_process_exit(child_pid)
-
     with _runtime_process(tmp_path, port=port, token=token, data_dir=data_dir):
+        # Cleanup belongs to the next Runtime, not to the one that was killed:
+        # SIGKILL runs no code, so the sandbox is still up at this point and is
+        # stopped during boot recovery. Asserting after the restart is what
+        # makes this the real contract rather than a promise nothing keeps.
+        for child_pid in child_pids:
+            _wait_for_process_exit(child_pid)
+
         with httpx.Client(base_url=f"http://127.0.0.1:{port}", headers=headers) as client:
             events = _stream_events(client, run_id, timeout=45)
             cleanup = next(
