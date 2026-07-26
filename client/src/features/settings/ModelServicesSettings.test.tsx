@@ -182,7 +182,7 @@ describe('ModelServicesSettings', () => {
       updated_at: 'now',
     }])
 
-    render(
+    const { container } = render(
       <I18nProvider>
         <ModelServicesSettings config={config} />
       </I18nProvider>,
@@ -191,6 +191,9 @@ describe('ModelServicesSettings', () => {
     expect(await screen.findByText('DeepSeek V4 Flash、DeepSeek V4 Pro')).toBeInTheDocument()
     expect(screen.getByText('中国站 · 可用')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '打开 DeepSeek 控制台' })).toBeInTheDocument()
+    const actions = container.querySelector('.settings-model-service-actions')
+    expect(actions?.querySelectorAll('button')).toHaveLength(4)
+    expect(actions?.lastElementChild).toHaveAttribute('aria-label', '删除服务')
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 

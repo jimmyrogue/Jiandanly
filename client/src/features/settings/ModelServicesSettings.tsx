@@ -337,43 +337,45 @@ export function ModelServicesSettings({
                     ? t('settings.modelServices.needsApiKey')
                     : `${regionLabel} · ${statusLabel}`}
                 </span>
-                {preset?.billing_url && (
+                <div className="settings-model-service-actions">
+                  {preset?.billing_url && (
+                    <button
+                      type="button"
+                      className="settings-model-service-action"
+                      aria-label={t('settings.modelServices.openConsole', { name: service.name })}
+                      onClick={() => void window.shejaneClient?.openExternal?.(preset.billing_url!)}
+                    >
+                      <IconExternalLink size={15} aria-hidden="true" />
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="settings-model-service-action"
-                    aria-label={t('settings.modelServices.openConsole', { name: service.name })}
-                    onClick={() => void window.shejaneClient?.openExternal?.(preset.billing_url!)}
+                    aria-label={t('settings.modelServices.updateApiKeyAria', { name: service.name })}
+                    disabled={busy === service.id}
+                    onClick={() => openReconnect(service)}
                   >
-                    <IconExternalLink size={15} aria-hidden="true" />
+                    <IconKey size={15} aria-hidden="true" />
                   </button>
-                )}
-                <button
-                  type="button"
-                  className="settings-model-service-action"
-                  aria-label={t('settings.modelServices.updateApiKeyAria', { name: service.name })}
-                  disabled={busy === service.id}
-                  onClick={() => openReconnect(service)}
-                >
-                  <IconKey size={15} aria-hidden="true" />
-                </button>
-                <button
-                  type="button"
-                  className="settings-model-service-action"
-                  aria-label={t('settings.modelServices.refresh')}
-                  disabled={busy === service.id}
-                  onClick={() => void refresh(service)}
-                >
-                  <IconRefresh size={15} aria-hidden="true" />
-                </button>
-                <button
-                  type="button"
-                  className="settings-model-service-action danger"
-                  aria-label={t('settings.modelServices.delete')}
-                  disabled={busy === service.id}
-                  onClick={() => void remove(service)}
-                >
-                  <IconTrash size={15} aria-hidden="true" />
-                </button>
+                  <button
+                    type="button"
+                    className="settings-model-service-action"
+                    aria-label={t('settings.modelServices.refresh')}
+                    disabled={busy === service.id}
+                    onClick={() => void refresh(service)}
+                  >
+                    <IconRefresh size={15} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    className="settings-model-service-action danger"
+                    aria-label={t('settings.modelServices.delete')}
+                    disabled={busy === service.id}
+                    onClick={() => void remove(service)}
+                  >
+                    <IconTrash size={15} aria-hidden="true" />
+                  </button>
+                </div>
                 {service.models.length === 0 && (
                   <div className="settings-model-service-manual">
                     <Input
