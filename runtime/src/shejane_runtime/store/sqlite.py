@@ -1648,6 +1648,42 @@ class LocalStore:
             )
             await conn.commit()
 
+    async def list_reapable_sandbox_processes(
+        self,
+        *,
+        include_running: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Sandbox records that no live execution is supervising any more.
+
+        ``include_running`` is for boot: a row still marked running when the
+        Runtime has only just started belongs to the process that died, because
+        this one has not spawned anything yet.
+        """
+
+        statuses = ("orphaned", "running") if include_running else ("orphaned",)
+        placeholders = ", ".join("?" for _ in statuses)
+        async with aiosqlite.connect(str(self._db_path)) as conn:
+            await _configure_connection(conn)
+            cursor = await conn.execute(
+                "SELECT * FROM local_sandbox_processes "
+                f"WHERE status IN ({placeholders}) ORDER BY created_at, id",
+                statuses,
+            )
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def settle_sandbox_process(self, sandbox_process_id: str, *, status: str) -> None:
+        """Record what the reaper found, so a record is never acted on twice."""
+
+        if status not in {"reaped", "gone", "stale"}:
+            raise ValueError(f"sandbox process cannot settle as {status!r}")
+        async with aiosqlite.connect(str(self._db_path)) as conn:
+            await _configure_connection(conn)
+            await conn.execute(
+                "UPDATE local_sandbox_processes SET status = ?, updated_at = ? WHERE id = ?",
+                (status, _now(), sandbox_process_id),
+            )
+            await conn.commit()
+
     async def list_model_calls_for_run(self, run_id: str) -> list[dict[str, Any]]:
         cursor = await self._conn.execute(
             "SELECT * FROM local_model_calls WHERE run_id = ? ORDER BY call_index",
@@ -4358,6 +4394,15 @@ class LocalStore:
                 "error_type = 'execution_lease_expired', updated_at = ?, completed_at = ? "
                 "WHERE run_id = ? AND execution_attempt_id = ? AND status = 'running'",
                 (now, now, job["run_id"], execution_attempt_id),
+            )
+            # Only flag them here. Killing is an irreversible side effect and
+            # this runs inside BEGIN IMMEDIATE, so it must not happen while the
+            # write lock is held or a rollback would leave processes already
+            # dead. The reaper picks these up outside the transaction.
+            await conn.execute(
+                "UPDATE local_sandbox_processes SET status = 'orphaned', updated_at = ? "
+                "WHERE run_id = ? AND execution_attempt_id = ? AND status = 'running'",
+                (now, job["run_id"], execution_attempt_id),
             )
             settled_job_status = {
                 "completed": "completed",

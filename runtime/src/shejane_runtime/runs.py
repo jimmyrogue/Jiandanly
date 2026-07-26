@@ -25,6 +25,7 @@ import json
 import logging
 import mimetypes
 import re
+import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -55,6 +56,7 @@ from .observability import build_callbacks
 from .plugins.catalog import PluginCatalog
 from .plugins.identity import plugin_action_tool_version
 from .progress_ledger import build_handoff_snapshot
+from .sandbox_reaper import reap_sandbox_processes
 from .store.fenced_checkpointer import FencedCheckpointer
 from .store.sqlite import (
     MAX_RUN_INPUT_BYTES,
@@ -73,6 +75,10 @@ from .tools.runtime import bind_runtime_tools
 log = logging.getLogger("shejane_runtime.runs")
 
 _LIVE_EVENT_QUEUE_SIZE = 256
+
+# The idle dispatch branch runs a few times a second; sandboxes only become
+# reapable when a lease expires, so sweeping every poll would be pure overhead.
+_SANDBOX_SWEEP_SECONDS = 5.0
 
 RUNTIME_PROTOCOL_VERSION = 1
 RUNTIME_CAPABILITIES = frozenset(
@@ -562,6 +568,7 @@ class RunCoordinator:
         self._dispatcher_task: asyncio.Task[None] | None = None
         self._shutting_down = False
         self._lost_leases: set[asyncio.Task[Any]] = set()
+        self._last_sandbox_sweep = 0.0
         self._unconfirmed_cleanup: set[asyncio.Task[Any]] = set()
         self._started_jobs: set[asyncio.Task[Any]] = set()
         self._model_connection_locks: dict[tuple[str, str], asyncio.Lock] = {}
@@ -1232,6 +1239,11 @@ class RunCoordinator:
         Runs backed by a pending/leased durable job remain owned by the job
         system. Legacy queued/running rows without a job are failed. Paused
         checkpointed runs remain available for a future resume command."""
+        # Sandbox trees first: they are the part still consuming the machine.
+        # Records left as running belong to the process that died, since this
+        # Runtime has not spawned anything yet -- which holds because the port
+        # binding keeps a second Runtime off the same data dir.
+        await reap_sandbox_processes(self.store, include_running=True)
         try:
             active = await self.store.list_active_runs()
         except Exception:
@@ -1299,6 +1311,23 @@ class RunCoordinator:
                 kept,
             )
 
+    async def _reap_expired_sandboxes(self) -> None:
+        """Clear sandboxes a lease expiry orphaned, while the loop is idle.
+
+        `claim_run_job` marks those records but cannot signal anything from
+        inside its write transaction, so the idle branch is where they get
+        collected. Rate limited because the common answer is "nothing to do".
+        """
+
+        now = time.monotonic()
+        if now - self._last_sandbox_sweep < _SANDBOX_SWEEP_SECONDS:
+            return
+        self._last_sandbox_sweep = now
+        try:
+            await reap_sandbox_processes(self.store)
+        except Exception:
+            log.exception("sandbox sweep failed")
+
     async def _dispatch_jobs(self) -> None:
         try:
             while True:
@@ -1319,6 +1348,7 @@ class RunCoordinator:
                     continue
                 if job is None:
                     self._slots.release()
+                    await self._reap_expired_sandboxes()
                     try:
                         await asyncio.wait_for(self._job_wakeup.wait(), timeout=0.5)
                     except TimeoutError:
