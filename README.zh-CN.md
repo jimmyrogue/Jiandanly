@@ -56,7 +56,24 @@ Runtime 可以脱离 Client 独立启动和测试。SDK 与插件放在 Runtime 
 
 业务平台连接器统一通过标准工具或 MCP 接入。
 
-插件平台目前处于预览阶段。WASI 插件包已经可以通过 Runtime 权威的 Action 协议安装和执行；Managed Worker 插件在当前平台的生产隔离与发布 Gate 通过前保持 fail-closed。首方 macOS [Computer Use 插件](./runtime/plugins/computer-use)使用 Runtime 保留适配器，并继续经过 Action 审批与回执。公开包规范和本地工具见[插件开发者指南](./docs/plugins/developer-guide.md)。
+插件平台目前处于预览阶段。WASI 插件包已经可以通过 Runtime 权威的 Action 协议安装和执行；Managed Worker 插件在当前平台的生产隔离与发布 Gate 通过前保持 fail-closed。SheJane 的固定 [Computer Use](./runtime/plugins/computer-use)、[Browser QA](./runtime/plugins/browser-qa) 和 [OCR](./runtime/plugins/ocr) 包使用 Runtime 保留适配器，并继续经过 Action 审批、回执、严格 Schema 与内容寻址的包/资产存储。Browser QA 与 OCR 已有 macOS arm64 和 Windows AMD64 原生资产；Computer Use 仍仅支持 macOS arm64。公开包规范和本地工具见[插件开发者指南](./docs/plugins/developer-guide.md)。
+
+### 当前的多 Agent 协作
+
+SheJane 目前采用 manager-as-tools 模式：父 Agent 通过同步 `task()` 调用内置或用户定义的子 Agent。子 Agent 拥有隔离上下文和受限的模型/工具预算，并继续使用同一套 Runtime 权限与回执边界；父 Agent 可以在同一模型回合并行派发多个任务，再统一汇总结果。
+
+这属于受控并行委派，还不是真正的 handoff 或自治 Agent 团队。目前不计划开发独立后台 Agent、handoff、共享任务板或 swarm；现有子 Agent 已足够覆盖有边界的调研、审查和写作。
+
+## 路线图
+
+当前重点是证明可靠性，而不是继续增加工具数量：
+
+1. 为每个预置 Provider 和地域完成真实 BYOK `模型 → 工具 → 模型` 验证。
+2. 建立能够阻止关键 Runtime/模型回退发布的 Agent Eval。
+3. 补齐持久 Trace、Runtime 状态所有权和插件/安装包正式发布证据。
+4. 逐步增加可审计的语义记忆、结构化输出和周期任务。
+
+周期任务、Remote Client、fresh-context handoff 和实时语音属于后续工作。详见完整[路线图](./docs/roadmap.md)与[当前 Agent Harness 能力审计](./docs/agent-harness-capabilities-latest-2026-07-26.md)。
 
 ## 快速开始
 
@@ -111,6 +128,8 @@ client-windows-x64
 - [Runtime 阶段总览](./docs/harness-runtime-stages.md) 定义目标 P1-P12 架构。
 - [当前运行链路](./docs/run-loop.md) 说明代码现在如何运行。
 - [Runtime 协议](./docs/runtime-protocol.md) 定义 HTTP、SSE、事件与恢复游标。
+- [路线图](./docs/roadmap.md) 将当前能力缺口整理为有顺序的交付 Gate。
+- [Agent Harness 能力审计](./docs/agent-harness-capabilities-latest-2026-07-26.md) 对照当前 OpenAI、Anthropic、Deep Agents/LangGraph 与 Pi 模式检查实现。
 - [贡献指南](./CONTRIBUTING.md) 说明开发、测试和 CLA 流程。
 - [运维手册](./docs/operations.md) 说明部署和排障。
 - [插件开发者指南](./docs/plugins/developer-guide.md) 定义 WASI/Managed Worker 包、Action、校验和发布检查。

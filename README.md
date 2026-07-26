@@ -58,6 +58,23 @@ Business-platform connectors are not built into the Runtime. Future integrations
 
 The plugin platform is a preview. WASI packages can install and execute through the Runtime-owned Action protocol. Managed Worker packages stay fail-closed until the current platform's production isolation and release Gate passes. SheJane's fixed [Computer Use](./runtime/plugins/computer-use), [Browser QA](./runtime/plugins/browser-qa), and [OCR](./runtime/plugins/ocr) packages use reserved Runtime-owned adapters and still pass through Action approval, receipts, strict schemas, and content-addressed package/asset storage. Browser QA and OCR ship native macOS arm64 and Windows AMD64 artifacts; Computer Use remains macOS arm64 only. See the [plugin developer guide](./docs/plugins/developer-guide.md) for the public package contract and local tooling.
 
+### Agent collaboration today
+
+SheJane currently uses a manager-as-tools model. The parent agent invokes built-in or user-defined subagents through synchronous `task()` calls. Subagents have isolated context, bounded model/tool budgets, and the same Runtime permission and receipt boundary; the parent can dispatch several in one model turn and combine their results.
+
+This is controlled parallel delegation, not a handoff or an autonomous agent team. Independent background agents, handoffs, shared task boards, and swarm patterns are not currently planned; the existing subagents already cover bounded research, review, and writing.
+
+## Roadmap
+
+Current work focuses on proving reliability rather than adding more tools:
+
+1. Real BYOK `model → tool → model` validation for every preset provider and region.
+2. Agent evals that gate important Runtime and model changes.
+3. Persistent traces, tighter Runtime state ownership, and production plugin/package release evidence.
+4. Auditable semantic memory, structured outputs, and recurring schedules.
+
+Recurring schedules, remote clients, fresh-context handoffs, and realtime voice remain later work. See the full [roadmap](./docs/roadmap.md) and the [current Agent Harness capability audit](./docs/agent-harness-capabilities-latest-2026-07-26.md).
+
 ## Quick start
 
 Development requires **Node.js 22+ with Corepack**, **Python 3.12+**, and [uv](https://docs.astral.sh/uv/).
@@ -111,6 +128,8 @@ Run the workflow manually to test packages. Push a `client-vX.Y.Z` tag to create
 - [Runtime stages](./docs/harness-runtime-stages.md) defines the target P1-P12 architecture.
 - [Current run loop](./docs/run-loop.md) describes what the code does today.
 - [Runtime protocol](./docs/runtime-protocol.md) defines HTTP, SSE, events, and recovery cursors.
+- [Roadmap](./docs/roadmap.md) turns current capability gaps into ordered delivery gates.
+- [Agent Harness capability audit](./docs/agent-harness-capabilities-latest-2026-07-26.md) compares the implementation with current OpenAI, Anthropic, Deep Agents/LangGraph, and Pi patterns.
 - [Contributor guide](./CONTRIBUTING.md) covers setup, testing, and the CLA process.
 - [Operations](./docs/operations.md) covers deployment and troubleshooting.
 - [Plugin developer guide](./docs/plugins/developer-guide.md) defines WASI and Managed Worker packages, Actions, validation, and release checks.
