@@ -626,25 +626,43 @@ def test_imported_custom_service_must_be_recreated_manually(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("adapter_id", "event"),
+    ("adapter_id", "base_url", "event", "tool_stream"),
     [
         (
             "openai_chat",
+            "https://gateway.example/v1",
             {"choices": [{"delta": {"tool_calls": [{"index": 0}]}}]},
+            False,
+        ),
+        (
+            "openai_chat",
+            "https://gateway.example/v1",
+            {"choices": [{"message": {"tool_calls": [{"id": "call-ping"}]}}]},
+            False,
+        ),
+        (
+            "openai_chat",
+            "https://open.bigmodel.cn/api/paas/v4",
+            {"choices": [{"delta": {"tool_calls": [{"index": 0}]}}]},
+            True,
         ),
         (
             "anthropic_messages",
+            "https://gateway.example/v1",
             {
                 "type": "content_block_start",
                 "content_block": {"type": "tool_use", "name": "ping"},
             },
+            False,
         ),
     ],
 )
 async def test_compatibility_verification_requires_streamed_tool_call(
     monkeypatch: pytest.MonkeyPatch,
     adapter_id: str,
+    base_url: str,
     event: dict,
+    tool_stream: bool,
 ) -> None:
     requests: list[dict] = []
 
@@ -663,13 +681,15 @@ async def test_compatibility_verification_requires_streamed_tool_call(
     monkeypatch.setattr(server_module.httpx, "AsyncClient", PatchedClient)
 
     await server_module._verify_model_service_compatibility(
-        base_url="https://gateway.example/v1",
+        base_url=base_url,
         adapter_id=adapter_id,
         api_key="secret",
         model_id="model",
     )
 
     assert requests[0]["stream"] is True
+    assert "tool_choice" not in requests[0]
+    assert requests[0].get("tool_stream", False) is tool_stream
 
 
 @pytest.mark.asyncio
@@ -695,6 +715,75 @@ async def test_compatibility_verification_rejects_non_streaming_response(
 
     assert exc_info.value.status_code == 409
     assert exc_info.value.detail["message"] == "模型没有返回流式结果。"
+
+
+def test_deepseek_v4_verification_does_not_force_tool_choice(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    credential_vault: dict[str, str],
+) -> None:
+    settings = reset_settings_for_tests(
+        SHEJANE_RUNTIME_TOKEN="tok",
+        data_dir=tmp_path,
+    )
+    monkeypatch.setattr(RunCoordinator, "start", lambda _self: None)
+
+    async def discover(**_kwargs):
+        return [
+            {
+                "model_id": "deepseek-v4-pro",
+                "display_name": "DeepSeek V4 Pro",
+                "source": "discovered",
+                "verification": "unverified",
+                "recommended": False,
+                "tool_calling": True,
+                "streaming": True,
+                "image_inputs": False,
+            }
+        ], "ready"
+
+    requests: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        requests.append(payload)
+        if "tool_choice" in payload:
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "message": "Thinking mode does not support this tool_choice",
+                        "type": "invalid_request_error",
+                    }
+                },
+            )
+        event = {"choices": [{"delta": {"tool_calls": [{"index": 0}]}}]}
+        return httpx.Response(
+            200,
+            content=f"data: {json.dumps(event)}\n\ndata: [DONE]\n\n".encode(),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    class PatchedClient(httpx.AsyncClient):
+        def __init__(self, **kwargs) -> None:
+            super().__init__(transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(server_module, "_refresh_model_service_models", discover)
+    monkeypatch.setattr(server_module.httpx, "AsyncClient", PatchedClient)
+
+    with TestClient(create_app(settings)) as client:
+        connection = client.post(
+            "/v1/model-services",
+            headers={"Authorization": "Bearer tok"},
+            json={"preset_id": "deepseek", "api_key": "secret"},
+        ).json()
+        verified = client.post(
+            f"/v1/model-services/{connection['id']}/models/deepseek-v4-pro/verify",
+            headers={"Authorization": "Bearer tok"},
+        )
+
+    assert verified.status_code == 200
+    assert "tool_choice" not in requests[0]
 
 
 def test_manual_model_becomes_available_only_after_compatibility_verification(

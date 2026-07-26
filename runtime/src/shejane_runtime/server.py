@@ -396,6 +396,8 @@ async def _verify_model_service_compatibility(
     api_key: str,
     model_id: str,
 ) -> None:
+    # ponytail: bound this paid probe; use per-model budgets if 4K truncates real tool calls.
+    probe_max_tokens = 4_096
     headers = {
         "Accept": "text/event-stream",
         "Content-Type": "application/json",
@@ -410,9 +412,14 @@ async def _verify_model_service_compatibility(
         )
         payload = {
             "model": model_id,
-            "max_tokens": 64,
+            "max_tokens": probe_max_tokens,
             "stream": True,
-            "messages": [{"role": "user", "content": "Call the ping tool."}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "You must call the ping tool now. Do not answer directly.",
+                }
+            ],
             "tools": [
                 {
                     "name": "ping",
@@ -424,16 +431,20 @@ async def _verify_model_service_compatibility(
                     },
                 }
             ],
-            "tool_choice": {"type": "tool", "name": "ping"},
         }
     else:
         url = f"{base_url}/chat/completions"
         headers["Authorization"] = f"Bearer {api_key}"
         payload = {
             "model": model_id,
-            "max_tokens": 64,
+            "max_tokens": probe_max_tokens,
             "stream": True,
-            "messages": [{"role": "user", "content": "Call the ping tool."}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "You must call the ping tool now. Do not answer directly.",
+                }
+            ],
             "tools": [
                 {
                     "type": "function",
@@ -448,8 +459,9 @@ async def _verify_model_service_compatibility(
                     },
                 }
             ],
-            "tool_choice": {"type": "function", "function": {"name": "ping"}},
         }
+        if urlparse(base_url).hostname in {"open.bigmodel.cn", "api.z.ai"}:
+            payload["tool_stream"] = True
     try:
         async with httpx.AsyncClient(
             timeout=20.0,
@@ -509,8 +521,10 @@ async def _verify_model_service_compatibility(
     else:
         compatible = any(
             isinstance(choice, dict)
-            and isinstance(choice.get("delta"), dict)
-            and bool(choice["delta"].get("tool_calls"))
+            and any(
+                isinstance(message, dict) and bool(message.get("tool_calls"))
+                for message in (choice.get("delta"), choice.get("message"))
+            )
             for event in events
             for choice in (event.get("choices") if isinstance(event.get("choices"), list) else ())
         )
