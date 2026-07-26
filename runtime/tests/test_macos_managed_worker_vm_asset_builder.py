@@ -39,17 +39,52 @@ def test_vm_asset_builder_extracts_arm64_zboot_by_header() -> None:
         builder.extract_arm64_zboot(bytes(zboot))
 
 
-def test_vm_asset_builder_requires_fedora_signature_ok() -> None:
-    builder = _load_builder()
-    valid = """package.rpm:
-    Header V4 RSA/SHA256 Signature, key ID 6d9f90a6: OK
+KEY_ID = "6d9f90a6"
+FINGERPRINT = "36F612DCF27F7D1A48A835E4DBFCF71C6D9F90A6"
+
+# rpm 4 names the short key id; rpm 6 renamed the line, lowercased "signature"
+# and swapped in the full fingerprint. Both assert the same thing, and the
+# release builds on whichever version homebrew-core happens to serve.
+RPM4_OUTPUT = f"""package.rpm:
+    Header V4 RSA/SHA256 Signature, key ID {KEY_ID}: OK
     Header SHA256 digest: OK
     Payload SHA256 digest: OK
 """
-    builder.require_rpm_signature(valid, key_id="6d9f90a6")
+RPM6_OUTPUT = f"""package.rpm:
+    Header OpenPGP V4 RSA/SHA256 signature, key fingerprint: {FINGERPRINT.lower()}: OK
+    Header SHA256 digest: OK
+    Payload SHA256 digest: OK
+"""
 
-    with pytest.raises(SystemExit, match="signature"):
-        builder.require_rpm_signature(
-            valid.replace("key ID 6d9f90a6: OK", "key ID 6d9f90a6: NOKEY"),
-            key_id="6d9f90a6",
-        )
+
+@pytest.mark.parametrize("output", [RPM4_OUTPUT, RPM6_OUTPUT])
+def test_vm_asset_builder_accepts_either_rpm_signature_spelling(output: str) -> None:
+    builder = _load_builder()
+
+    builder.require_rpm_signature(output, key_id=KEY_ID, fingerprint=FINGERPRINT)
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        RPM4_OUTPUT.replace(f"key ID {KEY_ID}: OK", f"key ID {KEY_ID}: NOKEY"),
+        RPM6_OUTPUT.replace(f"{FINGERPRINT.lower()}: OK", f"{FINGERPRINT.lower()}: NOKEY"),
+        # A signature from a key the lock does not name is not our package.
+        RPM4_OUTPUT.replace(KEY_ID, "deadbeef"),
+        RPM6_OUTPUT.replace(FINGERPRINT.lower(), "0" * 40),
+    ],
+)
+def test_vm_asset_builder_rejects_an_unexpected_fedora_signature(output: str) -> None:
+    builder = _load_builder()
+
+    with pytest.raises(SystemExit, match="not signed by the expected key"):
+        builder.require_rpm_signature(output, key_id=KEY_ID, fingerprint=FINGERPRINT)
+
+
+@pytest.mark.parametrize("digest", ["Header SHA256 digest", "Payload SHA256 digest"])
+def test_vm_asset_builder_rejects_a_bad_fedora_digest(digest: str) -> None:
+    builder = _load_builder()
+    tampered = RPM4_OUTPUT.replace(f"{digest}: OK", f"{digest}: BAD")
+
+    with pytest.raises(SystemExit, match="digest is invalid"):
+        builder.require_rpm_signature(tampered, key_id=KEY_ID, fingerprint=FINGERPRINT)
