@@ -51,7 +51,11 @@ from .model_credentials import (
     CredentialStoreError,
     get_model_api_key,
 )
-from .model_profiles import apply_known_model_profile_defaults
+from .model_profiles import (
+    apply_known_model_profile_defaults,
+    model_capability,
+    normalized_model_capabilities,
+)
 from .observability import build_callbacks
 from .plugins.catalog import PluginCatalog
 from .plugins.identity import plugin_action_tool_version
@@ -103,6 +107,10 @@ RUNTIME_CAPABILITIES = frozenset(
 _MAX_ATTACHMENT_REFERENCE_BYTES = MAX_RUN_INPUT_BYTES
 _TITLE_INPUT_CHARS = 4_000
 _TITLE_ANSWER_CHARS = 8_000
+_IMAGE_TOOL_CAPABILITIES = {
+    "image.generate": "image_generation",
+    "image.edit": "image_editing",
+}
 
 
 async def _generate_conversation_title(
@@ -748,10 +756,15 @@ class RunCoordinator:
             profile,
             service_base_url=str(connection.get("base_url") or ""),
         )
-        if profile.get("verification") != "verified":
+        profile["capabilities"] = normalized_model_capabilities(
+            profile,
+            adapter_id=str(connection.get("adapter_id") or "openai_chat"),
+        )
+        agent_capability = model_capability(profile, "agent_chat")
+        if agent_capability is None or agent_capability.get("verification") != "verified":
             return {}, RunAdmissionError(
                 "model_unverified",
-                "model compatibility has not been verified",
+                "model Agent capability has not been verified",
             )
         missing = [
             capability for capability in required_capabilities if not bool(profile.get(capability))
@@ -777,7 +790,10 @@ class RunCoordinator:
                 str(exc),
             )
         return {
-            "adapter_id": str(connection["adapter_id"]),
+            "adapter_id": {
+                "openai_chat_completions": "openai_chat",
+                "anthropic_messages": "anthropic_messages",
+            }.get(str(agent_capability.get("protocol")), str(connection["adapter_id"])),
             "connection_id": connection_id,
             "connection_version": int(connection.get("version") or 1),
             "base_url": str(connection["base_url"]),
@@ -817,6 +833,93 @@ class RunCoordinator:
                     binding=binding,
                 )
         return "run model adapter is no longer supported", None
+
+    async def _capability_binding_snapshots(
+        self,
+        *,
+        principal_id: str,
+        required_tools: list[str],
+    ) -> tuple[dict[str, dict[str, Any]], RunAdmissionError | None]:
+        """Resolve Runtime-owned default image bindings into an immutable Run snapshot."""
+        rows = {
+            str(row["capability"]): row
+            for row in await self.store.list_model_capability_bindings(principal_id=principal_id)
+        }
+        snapshots: dict[str, dict[str, Any]] = {}
+        for capability in set(_IMAGE_TOOL_CAPABILITIES.values()):
+            row = rows.get(capability)
+            if row is None:
+                continue
+            connection_id = str(row["connection_id"])
+            connection = await self.store.get_model_connection(
+                principal_id=principal_id,
+                connection_id=connection_id,
+            )
+            if connection is None or int(connection.get("version") or 0) != int(
+                row["connection_version"]
+            ):
+                continue
+            try:
+                models = json.loads(connection.get("models_json") or "[]")
+            except (json.JSONDecodeError, TypeError):
+                models = []
+            profile = next(
+                (
+                    item
+                    for item in models
+                    if isinstance(item, dict) and item.get("model_id") == row["model_id"]
+                ),
+                None,
+            )
+            if profile is None:
+                continue
+            profile = apply_known_model_profile_defaults(
+                profile,
+                service_base_url=str(connection.get("base_url") or ""),
+            )
+            profile["capabilities"] = normalized_model_capabilities(
+                profile,
+                adapter_id=str(connection.get("adapter_id") or "openai_chat"),
+            )
+            verified = model_capability(profile, capability)
+            if (
+                verified is None
+                or verified.get("verification") != "verified"
+                or verified.get("protocol") != row["protocol"]
+            ):
+                continue
+            try:
+                api_key = await get_model_api_key(
+                    principal_id,
+                    connection_id,
+                    str(connection["credential_ref"]),
+                )
+            except CredentialStoreError as exc:
+                return {}, RunAdmissionError("model_credential_store_unavailable", str(exc))
+            if not api_key:
+                continue
+            snapshots[capability] = {
+                "capability": capability,
+                "connection_id": connection_id,
+                "connection_version": int(connection["version"]),
+                "base_url": str(connection["base_url"]),
+                "credential_ref": str(connection["credential_ref"]),
+                "model_id": str(row["model_id"]),
+                "protocol": str(row["protocol"]),
+                "revision": int(row["revision"]),
+            }
+
+        missing = [
+            tool_name
+            for tool_name in required_tools
+            if _IMAGE_TOOL_CAPABILITIES[tool_name] not in snapshots
+        ]
+        if missing:
+            return snapshots, RunAdmissionError(
+                "required_tool_unavailable",
+                f"required tools are not configured: {', '.join(missing)}",
+            )
+        return snapshots, None
 
     async def _skill_binding_error(self, settings_snapshot: dict[str, Any]) -> str | None:
         # Runs accepted before Skill fingerprints existed remain resumable.
@@ -871,6 +974,7 @@ class RunCoordinator:
         protocol_version: int,
         required_capabilities: list[str],
         goal: str,
+        required_tools: list[str] | None = None,
         thread_id: str | None = None,
         user_input: str | None = None,
         assistant_message_id: str | None = None,
@@ -929,6 +1033,7 @@ class RunCoordinator:
             "replace_from_client_id": replace_from_client_id,
             "protocol_version": protocol_version,
             "required_capabilities": sorted(set(required_capabilities)),
+            "required_tools": sorted(set(required_tools or [])),
             "goal": goal,
             "workspace_path": workspace_path,
             "attachment_paths": [item["source_path"] for item in attachment_bindings],
@@ -980,6 +1085,23 @@ class RunCoordinator:
                 else freeze_run_settings(self.settings, public_settings)
             )
             settings_snapshot["_model_binding"] = model_binding
+            if settings_are_frozen:
+                capability_bindings = settings_snapshot.get("_capability_bindings")
+                required_tool_names = settings_snapshot.get("_required_tools")
+                if not isinstance(capability_bindings, dict):
+                    capability_bindings = {}
+                if not isinstance(required_tool_names, list):
+                    required_tool_names = []
+            else:
+                required_tool_names = sorted(set(required_tools or []))
+                capability_bindings, capability_error = await self._capability_binding_snapshots(
+                    principal_id=principal_id,
+                    required_tools=required_tool_names,
+                )
+                if admission_error is None:
+                    admission_error = capability_error
+            settings_snapshot["_capability_bindings"] = capability_bindings
+            settings_snapshot["_required_tools"] = required_tool_names
             if (
                 settings_snapshot.get("skills") == "on"
                 and "_skills_fingerprint" not in settings_snapshot
@@ -2047,7 +2169,17 @@ class RunCoordinator:
             if run_id not in self._tasks:
                 continue
             binding = settings.get("_model_binding")
-            if not isinstance(binding, dict) or binding.get("connection_id") != connection_id:
+            capability_bindings = settings.get("_capability_bindings")
+            uses_connection = (
+                isinstance(binding, dict) and binding.get("connection_id") == connection_id
+            ) or (
+                isinstance(capability_bindings, dict)
+                and any(
+                    isinstance(item, dict) and item.get("connection_id") == connection_id
+                    for item in capability_bindings.values()
+                )
+            )
+            if not uses_connection:
                 continue
             run = await self.store.get_run(run_id)
             if run is not None and run.get("principal_id") == principal_id:
@@ -2311,6 +2443,23 @@ class RunCoordinator:
                 task_goal=goal,
                 mode=resolved_model,
                 permission_mode=str(run_settings.get("permission_mode") or "ask"),
+                capability_bindings={
+                    str(key): dict(value)
+                    for key, value in (
+                        run_settings.get("_capability_bindings", {}).items()
+                        if isinstance(run_settings.get("_capability_bindings"), dict)
+                        else ()
+                    )
+                    if isinstance(value, dict)
+                },
+                required_tools=tuple(
+                    str(value)
+                    for value in (
+                        run_settings.get("_required_tools", [])
+                        if isinstance(run_settings.get("_required_tools"), list)
+                        else []
+                    )
+                ),
                 turn_count=turn_count,
                 clarification_count=clarification_count,
                 repair_intent=bool(repair_context),

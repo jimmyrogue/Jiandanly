@@ -57,7 +57,11 @@ Client 的“模型服务”设置调用 Runtime 的 `/v1/model-services` 接口
 
 首版入口包括 DeepSeek、Kimi、千问、GLM、MiniMax、硅基流动和“连接已有服务”。官方服务的地址与接口格式由 Runtime 固定，用户只选择区域并填写 API Key；已有服务会先自动识别 OpenAI Chat 或 Anthropic Messages 格式，失败后才显示高级选择。
 
-Runtime 不在 Client 启动时访问外部服务。新增或更新官方连接时，每个内置推荐模型会使用正式 Agent 共用的 Provider 适配器，依次完成流式 `模型 → ping 工具 → 工具结果 → 最终回答`；只有完整闭环成功的模型才标记为 `verified` 并可用于 Agent Run。单个模型遇到限流、临时故障或格式不兼容时保持 `unverified`，不会阻止其他模型保存；鉴权、账户权限或余额错误会直接阻止连接。发现或手动添加的模型同样必须单独通过完整闭环。`/models` 失败不会阻止官方服务连接，Runtime 会保留内置或最近缓存目录，但不会把目录推荐误当作连接验证。
+Runtime 不在 Client 启动时访问外部服务。新增或更新官方连接时，每个内置推荐模型会使用正式 Agent 共用的 Provider 适配器，依次完成流式 `模型 → ping 工具 → 工具结果 → 最终回答`；只有完整闭环成功的模型才标记为 `verified` 并可用于 Agent Run。单个模型遇到限流、临时故障或格式不兼容时保持 `unverified`，不会阻止其他模型保存；鉴权、账户权限或余额错误会直接阻止连接。`/models` 失败不会阻止官方服务连接，Runtime 会保留内置或最近缓存目录，但不会把目录推荐误当作连接验证。
+
+中转站返回的模型只作为候选目录，不再默认声明能力。一个模型可以分别验证多项能力：Agent 对话执行完整工具闭环，图片理解发送最小内联图片，图片生成调用 OpenAI-compatible `/images/generations`，图片编辑调用 `/images/edits`。图片生成和编辑测试都会产生一次真实请求，可能计费。只有验证过 Agent 对话能力的模型进入主模型选择器；图片生成和编辑模型在设置中分别选择默认绑定，不与主模型混列。
+
+Client 的“生图”入口发送结构化的 `required_tools: ["image.generate"]`，不再向用户文本拼接隐藏提示词。Runtime 在 Run 接纳时冻结默认图片模型的连接版本、模型 ID、协议和绑定修订；Agent 通过 `image.generate` 或 `image.edit` 调用该模型，结果下载并校验后保存为 Runtime Artifact，对话只接收 Artifact 元数据并通过鉴权接口显示图片，不在事件或模型上下文中传递 Base64。模型服务或绑定在执行前发生变化时，旧 Run 会安全失效，不会静默切换到另一个模型。
 
 任务使用明确的 `local:<连接编号>:<模型编号>`。Runtime 不自动选择模型，也不会在连接之间静默切换。API Key 失效时，可在原连接上更新，不需要删除连接。
 

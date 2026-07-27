@@ -146,6 +146,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/model-capability-bindings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Model Capability Bindings */
+        get: operations["list_model_capability_bindings_v1_model_capability_bindings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/model-capability-bindings/{capability}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set Model Capability Binding */
+        put: operations["set_model_capability_binding_v1_model_capability_bindings__capability__put"];
+        post?: never;
+        /** Delete Model Capability Binding */
+        delete: operations["delete_model_capability_binding_v1_model_capability_bindings__capability__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/model-services": {
         parameters: {
             query?: never;
@@ -1125,6 +1160,8 @@ export interface components {
             replace_from_client_id?: string | null;
             /** Required Capabilities */
             required_capabilities: string[];
+            /** Required Tools */
+            required_tools?: ("image.generate" | "image.edit")[];
             /** Settings */
             settings?: {
                 [key: string]: unknown;
@@ -1662,6 +1699,11 @@ export interface components {
             /** Step */
             step: number;
         };
+        /** ListModelCapabilityBindingsResponse */
+        ListModelCapabilityBindingsResponse: {
+            /** Bindings */
+            bindings: components["schemas"]["ModelCapabilityBinding"][];
+        };
         /** ListModelServiceConnectionsResponse */
         ListModelServiceConnectionsResponse: {
             /** Services */
@@ -1851,6 +1893,8 @@ export interface components {
         LocalRuntimeModel: {
             /** Available */
             available: boolean;
+            /** Capabilities */
+            capabilities: components["schemas"]["ModelCapability"][];
             /** Connection Id */
             connection_id: string;
             /** Display Name */
@@ -2191,6 +2235,55 @@ export interface components {
         McpServerWriteResponse: {
             server: components["schemas"]["McpServerInfo"];
         };
+        /** ModelCapability */
+        ModelCapability: {
+            /**
+             * Capability
+             * @enum {string}
+             */
+            capability: "agent_chat" | "image_understanding" | "image_generation" | "image_editing";
+            /**
+             * Protocol
+             * @enum {string}
+             */
+            protocol: "openai_chat_completions" | "anthropic_messages" | "openai_images_generations" | "openai_images_edits";
+            /**
+             * Verification
+             * @default unverified
+             * @enum {string}
+             */
+            verification: "verified" | "unverified";
+        };
+        /** ModelCapabilityBinding */
+        ModelCapabilityBinding: {
+            /**
+             * Capability
+             * @enum {string}
+             */
+            capability: "image_generation" | "image_editing";
+            /** Connection Id */
+            connection_id: string;
+            /** Connection Version */
+            connection_version: number;
+            /** Model Id */
+            model_id: string;
+            /** Model Spec */
+            model_spec: string;
+            /**
+             * Protocol
+             * @enum {string}
+             */
+            protocol: "openai_chat_completions" | "anthropic_messages" | "openai_images_generations" | "openai_images_edits";
+            /** Revision */
+            revision: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ready" | "stale";
+            /** Updated At */
+            updated_at: string;
+        };
         /** ModelServiceConnection */
         ModelServiceConnection: {
             /**
@@ -2229,6 +2322,8 @@ export interface components {
         };
         /** ModelServiceModel */
         ModelServiceModel: {
+            /** Capabilities */
+            capabilities?: components["schemas"]["ModelCapability"][];
             /** Display Name */
             display_name: string;
             /**
@@ -3125,6 +3220,11 @@ export interface components {
              */
             version: number;
         };
+        /** SetModelCapabilityBindingRequest */
+        SetModelCapabilityBindingRequest: {
+            /** Model Spec */
+            model_spec: string;
+        };
         /** SkillDeleteResponse */
         SkillDeleteResponse: {
             /**
@@ -3284,6 +3384,19 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+        };
+        /** VerifyModelServiceModelRequest */
+        VerifyModelServiceModelRequest: {
+            /**
+             * Capability
+             * @enum {string}
+             */
+            capability: "agent_chat" | "image_understanding" | "image_generation" | "image_editing";
+            /**
+             * Protocol
+             * @enum {string}
+             */
+            protocol: "openai_chat_completions" | "anthropic_messages" | "openai_images_generations" | "openai_images_edits";
         };
     };
     responses: never;
@@ -3548,6 +3661,90 @@ export interface operations {
             };
         };
     };
+    list_model_capability_bindings_v1_model_capability_bindings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListModelCapabilityBindingsResponse"];
+                };
+            };
+        };
+    };
+    set_model_capability_binding_v1_model_capability_bindings__capability__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                capability: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetModelCapabilityBindingRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelCapabilityBinding"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_model_capability_binding_v1_model_capability_bindings__capability__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                capability: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_model_services_v1_model_services_get: {
         parameters: {
             query?: never;
@@ -3763,7 +3960,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["VerifyModelServiceModelRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

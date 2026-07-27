@@ -21,6 +21,74 @@ function message(overrides: Partial<ChatMessage> = {}): ChatMessage {
 }
 
 describe('MessageBubble meta', () => {
+  it('loads generated image Artifacts and renders them inline', async () => {
+    const createObjectURL = vi.fn().mockReturnValue('blob:generated-image')
+    const revokeObjectURL = vi.fn()
+    Object.defineProperties(URL, {
+      createObjectURL: { configurable: true, value: createObjectURL },
+      revokeObjectURL: { configurable: true, value: revokeObjectURL },
+    })
+    const body = new Blob(['png'], { type: 'image/png' })
+    const load = vi.fn().mockResolvedValue(body)
+
+    const { unmount } = render(
+      <I18nProvider>
+        <MessageBubble
+          message={message({
+            agentEvents: [{
+              type: 'artifact.created',
+              label: '图片',
+              artifactId: 'art-image',
+              artifactTitle: 'generated-image-1.png',
+              artifactTool: 'image.generate',
+              artifactMediaType: 'image/png',
+            }],
+          })}
+          onLoadArtifactContent={load}
+        />
+      </I18nProvider>,
+    )
+
+    const image = await screen.findByRole('img', { name: 'generated-image-1.png' })
+    expect(image).toHaveAttribute('src', 'blob:generated-image')
+    expect(load).toHaveBeenCalledWith('art-image')
+    unmount()
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:generated-image')
+  })
+
+  it('does not render a duplicate Markdown image for a generated Artifact', async () => {
+    Object.defineProperties(URL, {
+      createObjectURL: { configurable: true, value: vi.fn().mockReturnValue('blob:generated-image') },
+      revokeObjectURL: { configurable: true, value: vi.fn() },
+    })
+
+    render(
+      <I18nProvider>
+        <MessageBubble
+          message={message({
+            content: [
+              '小狗图片已生成',
+              '![按文件名引用](generated-image-1.png)',
+              '![按 Artifact ID 引用](/attachments/art-image)',
+            ].join('\n\n'),
+            agentEvents: [{
+              type: 'artifact.created',
+              label: '图片',
+              artifactId: 'art-image',
+              artifactTitle: 'generated-image-1.png',
+              artifactTool: 'image.generate',
+              artifactMediaType: 'image/png',
+            }],
+          })}
+          onLoadArtifactContent={vi.fn().mockResolvedValue(new Blob(['png'], { type: 'image/png' }))}
+        />
+      </I18nProvider>,
+    )
+
+    await screen.findByRole('img', { name: 'generated-image-1.png' })
+    expect(screen.getAllByRole('img')).toHaveLength(1)
+  })
+
   it('renders Runtime-normalized plugin references and command', () => {
     render(
       <I18nProvider>

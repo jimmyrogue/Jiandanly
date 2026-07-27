@@ -11,9 +11,11 @@ import {
   RuntimeHTTPError,
   SheJaneRuntimeClient,
   listModelServicePresets,
+  listModelCapabilityBindings,
   reconnectModelService,
   streamLocalRun,
   updateRuntimeSettings,
+  verifyModelServiceModel,
 } from './index'
 
 describe('fetchRunInput', () => {
@@ -113,6 +115,7 @@ describe('createLocalRun plugin selection', () => {
         clientMessageId: 'msg_plugin_run',
         goal: 'use plugin',
         mode: 'local:test:model',
+        requiredTools: ['image.generate'],
         pluginRefs: [
           {
             pluginId: 'dev.shejane.fixture.archive',
@@ -133,6 +136,7 @@ describe('createLocalRun plugin selection', () => {
     expect(body.goal).toBe('use plugin')
     expect(body.user_input).toBeUndefined()
     expect(body.required_capabilities).toContain('plugins')
+    expect(body.required_tools).toEqual(['image.generate'])
     expect(body.plugin_refs).toEqual([
       {
         plugin_id: 'dev.shejane.fixture.archive',
@@ -370,6 +374,78 @@ describe('SheJaneRuntimeClient', () => {
         method: 'POST',
         body: JSON.stringify(input),
       }),
+    )
+  })
+
+  it('verifies the selected model capability and protocol', async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ model_id: 'gateway-model' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    await verifyModelServiceModel(
+      'conn/1',
+      'gateway/model',
+      { capability: 'image_generation', protocol: 'openai_images_generations' },
+      { baseURL: 'http://127.0.0.1:17371', token: 'runtime-token' },
+      fetcher,
+    )
+
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://127.0.0.1:17371/v1/model-services/conn%2F1/models/gateway%2Fmodel/verify',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          capability: 'image_generation',
+          protocol: 'openai_images_generations',
+        }),
+      }),
+    )
+  })
+
+  it('lists model capability bindings', async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ bindings: [{ capability: 'image_generation' }] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const bindings = await listModelCapabilityBindings(
+      { baseURL: 'http://127.0.0.1:17371', token: 'runtime-token' },
+      fetcher,
+    )
+
+    expect(bindings).toHaveLength(1)
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://127.0.0.1:17371/v1/model-capability-bindings',
+      { method: 'GET', headers: { Authorization: 'Bearer runtime-token' } },
+    )
+  })
+
+  it('keeps the legacy model verification call signature', async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ model_id: 'gateway-model' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    await verifyModelServiceModel(
+      'conn-1',
+      'gateway-model',
+      { baseURL: 'http://127.0.0.1:17371', token: 'runtime-token' },
+      fetcher,
+    )
+
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://127.0.0.1:17371/v1/model-services/conn-1/models/gateway-model/verify',
+      {
+        method: 'POST',
+        headers: { Authorization: 'Bearer runtime-token' },
+      },
     )
   })
 

@@ -4,8 +4,16 @@ from __future__ import annotations
 
 from copy import deepcopy
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 ModelAdapterID = Literal["openai_chat", "anthropic_messages"]
+
+
+def openai_compatible_endpoint(base_url: str, path: str) -> str:
+    base = base_url.rstrip("/")
+    if not urlparse(base).path:
+        base = f"{base}/v1"
+    return f"{base}/{path.lstrip('/')}"
 
 _PRESETS: tuple[dict[str, Any], ...] = (
     {

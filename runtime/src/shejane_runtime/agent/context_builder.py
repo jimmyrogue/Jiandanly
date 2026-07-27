@@ -173,6 +173,8 @@ class RuntimeContext:
     title_model: object | None = None
     dynamic_tools: dict[str, object] = field(default_factory=dict)
     tool_registry: dict[str, object] = field(default_factory=dict)
+    capability_bindings: dict[str, dict[str, object]] = field(default_factory=dict)
+    required_tools: tuple[str, ...] = ()
     memory_enabled: bool = True
     subagents_enabled: bool = True
     # Trusted ingress capability derived from the real top-level user input.
@@ -355,6 +357,12 @@ class ContextBuilder:
             bullets.append(f"- 当前模式: {runtime.mode}")
         if runtime.turn_count is not None:
             bullets.append(f"- 对话轮次: 第 {runtime.turn_count} 轮")
+        if runtime.required_tools:
+            bullets.append(
+                "- 本次必须调用工具: "
+                + ", ".join(runtime.required_tools)
+                + "。如果工具失败或被拒绝，必须如实说明，不得声称成功。"
+            )
         if runtime.repair_intent:
             attempt = runtime.repair_attempt if runtime.repair_attempt is not None else 1
             max_attempts = runtime.repair_max_attempts if runtime.repair_max_attempts else "?"

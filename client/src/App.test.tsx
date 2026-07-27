@@ -218,7 +218,7 @@ describe('desktop shell', () => {
     expect(configureModels).not.toHaveAttribute('aria-haspopup')
     fireEvent.click(configureModels)
 
-    expect(await screen.findByRole('dialog')).toHaveTextContent('添加模型服务')
+    expect(await screen.findByRole('dialog')).toHaveTextContent('连接已有服务')
   })
 
   it('uses an available default model for old and new conversations', async () => {
@@ -294,7 +294,7 @@ describe('desktop shell', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '前往设置' }))
 
-    expect(await screen.findByRole('dialog')).toHaveTextContent('添加模型服务')
+    expect(await screen.findByRole('dialog')).toHaveTextContent('连接已有服务')
   })
 
   it('lets an unsent chat clear its selected workspace', async () => {

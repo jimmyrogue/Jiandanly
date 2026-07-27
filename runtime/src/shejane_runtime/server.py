@@ -10,6 +10,7 @@ Phase 2' deliverables:
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import logging
@@ -59,6 +60,7 @@ from .api_schemas import (
     ImportModelServiceRequest,
     InjectRunInstructionRequest,
     InjectRunInstructionResponse,
+    ListModelCapabilityBindingsResponse,
     ListModelServiceConnectionsResponse,
     ListPluginsResponse,
     ListRunsResponse,
@@ -80,6 +82,7 @@ from .api_schemas import (
     McpServerInfo,
     McpServerWriteRequest,
     McpServerWriteResponse,
+    ModelCapabilityBinding,
     ModelServiceConnection,
     ModelServiceModel,
     ModelServicePresetCatalog,
@@ -115,6 +118,7 @@ from .api_schemas import (
     RuntimeAssetInstallCommandReceipt,
     RuntimeInfo,
     RuntimeSettingsResponse,
+    SetModelCapabilityBindingRequest,
     SkillDeleteResponse,
     SkillFile,
     SkillWriteRequest,
@@ -124,6 +128,7 @@ from .api_schemas import (
     ToolReconciliationResolution,
     UpdateLocalThreadRequest,
     UpdateRuntimeSettingsRequest,
+    VerifyModelServiceModelRequest,
 )
 from .auth import LOCAL_OWNER_PRINCIPAL_ID, PairingTokenAuthMiddleware
 from .config import Settings, get_settings
@@ -138,11 +143,19 @@ from .model_credentials import (
     new_credential_ref,
     set_model_api_key,
 )
-from .model_profiles import apply_known_model_profile_defaults, discovered_model_profile
+from .model_profiles import (
+    MODEL_CAPABILITY_ORDER,
+    apply_known_model_profile_defaults,
+    default_model_protocol,
+    discovered_model_profile,
+    model_capability,
+    normalized_model_capabilities,
+)
 from .model_services import (
     adapter_for_custom_service,
     list_model_service_presets,
     model_service_preset,
+    openai_compatible_endpoint,
 )
 from .permission_policy import PermissionScopeNotAllowedError
 from .plugins.registry import PluginRegistry, PluginRegistryError
@@ -240,14 +253,27 @@ def _model_connection_models(row: dict[str, Any]) -> list[dict[str, Any]]:
         return []
     if not isinstance(models, list):
         return []
-    return [
-        apply_known_model_profile_defaults(
+    normalized_models: list[dict[str, Any]] = []
+    for model in models:
+        if not isinstance(model, dict):
+            continue
+        normalized = apply_known_model_profile_defaults(
             model,
             service_base_url=str(row.get("base_url") or ""),
         )
-        for model in models
-        if isinstance(model, dict)
-    ]
+        normalized["capabilities"] = normalized_model_capabilities(
+            normalized,
+            adapter_id=str(row.get("adapter_id") or "openai_chat"),
+        )
+        normalized.pop("purpose", None)
+        normalized.pop("protocol", None)
+        normalized["verification"] = (
+            "verified"
+            if any(item["verification"] == "verified" for item in normalized["capabilities"])
+            else "unverified"
+        )
+        normalized_models.append(normalized)
+    return normalized_models
 
 
 def _merge_refreshed_model_catalog(
@@ -260,12 +286,14 @@ def _merge_refreshed_model_catalog(
     for model in refreshed:
         model_id = str(model["model_id"])
         previous = current_by_id.get(model_id)
-        if previous and previous.get("verification") == "verified":
+        if previous and previous.get("capabilities"):
             model = {
                 **model,
-                "verification": "verified",
+                "capabilities": list(previous.get("capabilities") or []),
+                "verification": previous.get("verification", "unverified"),
                 "streaming": bool(previous.get("streaming")),
                 "tool_calling": bool(previous.get("tool_calling")),
+                "image_inputs": bool(previous.get("image_inputs")),
             }
         merged.append(model)
         seen.add(model_id)
@@ -307,6 +335,48 @@ async def _model_service_response(
     )
 
 
+async def _model_capability_binding_response(
+    store: LocalStore,
+    *,
+    principal_id: str,
+    row: dict[str, Any],
+) -> dict[str, Any]:
+    connection = await store.get_model_connection(
+        principal_id=principal_id,
+        connection_id=str(row["connection_id"]),
+    )
+    capability = None
+    if connection is not None:
+        model = next(
+            (
+                item
+                for item in _model_connection_models(connection)
+                if item.get("model_id") == row["model_id"]
+            ),
+            None,
+        )
+        if model is not None:
+            capability = model_capability(model, str(row["capability"]))
+    ready = bool(
+        connection is not None
+        and int(connection.get("version") or 1) == int(row["connection_version"])
+        and capability is not None
+        and capability.get("verification") == "verified"
+        and capability.get("protocol") == row["protocol"]
+    )
+    return {
+        "capability": row["capability"],
+        "model_spec": f"local:{row['connection_id']}:{row['model_id']}",
+        "connection_id": row["connection_id"],
+        "connection_version": row["connection_version"],
+        "model_id": row["model_id"],
+        "protocol": row["protocol"],
+        "status": "ready" if ready else "stale",
+        "revision": row["revision"],
+        "updated_at": row["updated_at"],
+    }
+
+
 async def _refresh_model_service_models(
     *,
     preset: dict[str, Any],
@@ -316,7 +386,7 @@ async def _refresh_model_service_models(
 ) -> tuple[list[dict[str, Any]], str]:
     bundled = [dict(model) for model in preset.get("models", ())]
     headers = {"Accept": "application/json"}
-    discovery_url = f"{base_url}/models"
+    discovery_url = openai_compatible_endpoint(base_url, "models")
     if adapter_id == "anthropic_messages":
         discovery_url = (
             f"{base_url}/models" if base_url.endswith("/v1") else f"{base_url}/v1/models"
@@ -387,6 +457,10 @@ async def _refresh_model_service_models(
                     for key, value in known.items()
                     if key != "verification" and value is not None
                 }
+            )
+            profile["capabilities"] = normalized_model_capabilities(
+                {**known, "source": "bundled"},
+                adapter_id=adapter_id,
             )
         models.append(profile)
         if len(models) >= 1000:
@@ -525,6 +599,321 @@ async def _verify_model_service_compatibility(
         )
 
 
+def _adapter_for_model_protocol(protocol: str) -> str:
+    if protocol == "openai_chat_completions":
+        return "openai_chat"
+    if protocol == "anthropic_messages":
+        return "anthropic_messages"
+    raise HTTPException(status_code=422, detail="selected protocol is not a chat protocol")
+
+
+def _model_probe_failure(exc: Exception, *, api_key: str, message: str) -> HTTPException:
+    status_code = getattr(exc, "status_code", None)
+    response = getattr(exc, "response", None)
+    if status_code is None:
+        status_code = getattr(response, "status_code", None)
+    if response is not None:
+        try:
+            payload = response.json()
+        except (ValueError, TypeError):
+            payload = None
+        provider_error = payload.get("error") if isinstance(payload, dict) else None
+        if isinstance(provider_error, dict) and provider_error.get("code") == "get_channel_failed":
+            upstream = re.sub(
+                r"\s+",
+                " ",
+                str(provider_error.get("message") or "").replace(api_key, "[redacted]"),
+            ).strip()[:240]
+            return HTTPException(
+                status_code=409,
+                detail={
+                    "code": "model_unavailable",
+                    "message": (
+                        "当前 API Key 所在分组没有此模型的可用渠道，请更换模型、分组或 API Key。"
+                        + (f" 服务返回：{upstream}" if upstream else "")
+                    ),
+                },
+            )
+    if status_code == 401:
+        return HTTPException(
+            status_code=401,
+            detail={"code": "invalid_api_key", "message": "API Key 无效，请检查后重试。"},
+        )
+    if status_code == 403:
+        return HTTPException(
+            status_code=403,
+            detail={
+                "code": "provider_permission_denied",
+                "message": "当前账户或 API Key 没有调用该模型的权限。",
+            },
+        )
+    if status_code == 402:
+        return HTTPException(
+            status_code=402,
+            detail={"code": "billing_required", "message": "模型服务账户余额或额度不足。"},
+        )
+    if status_code == 429:
+        return HTTPException(
+            status_code=429,
+            detail={"code": "rate_limited", "message": "模型服务请求过于频繁，请稍后重试。"},
+        )
+    if (
+        isinstance(exc, httpx.RequestError)
+        or status_code == 408
+        or (isinstance(status_code, int) and status_code >= 500)
+    ):
+        return HTTPException(
+            status_code=503,
+            detail={
+                "code": "provider_unavailable",
+                "message": "模型服务暂时无法连接，请稍后重试。",
+            },
+        )
+    upstream = re.sub(r"\s+", " ", str(exc).replace(api_key, "[redacted]")).strip()[:240]
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": "incompatible_model",
+            "message": message + (f" 服务返回：{upstream}" if upstream else ""),
+        },
+    )
+
+
+def _message_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            str(item.get("text") or "")
+            for item in content
+            if isinstance(item, dict) and item.get("type") == "text"
+        )
+    return ""
+
+
+async def _verify_model_image_understanding(
+    *,
+    settings: Settings,
+    base_url: str,
+    protocol: str,
+    api_key: str,
+    model_id: str,
+) -> None:
+    success_signal = "RED"
+    image_base64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR42mP8z4AdMDEMKQkA"
+        "zUEBD7t4NqoAAAAASUVORK5CYII="
+    )
+    image_block: dict[str, Any]
+    if protocol == "anthropic_messages":
+        image_block = {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": image_base64,
+            },
+        }
+    else:
+        image_block = {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{image_base64}"},
+        }
+    try:
+        model = _build_byok_chat_model(
+            settings=settings,
+            model_binding={
+                "adapter_id": _adapter_for_model_protocol(protocol),
+                "base_url": base_url,
+                "model_id": model_id,
+                "profile": {"image_inputs": True, "max_output_tokens": 64},
+            },
+            model_api_key=api_key,
+        ).bind(max_tokens=64)
+        response = await model.ainvoke(
+            [
+                HumanMessage(
+                    content=[
+                        {
+                            "type": "text",
+                            "text": (
+                                "What is the dominant color in this image? "
+                                "Reply with one uppercase English word only."
+                            ),
+                        },
+                        image_block,
+                    ]
+                )
+            ]
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _model_probe_failure(
+            exc,
+            api_key=api_key,
+            message="模型服务拒绝了图片输入测试，请检查模型与接口格式。",
+        ) from exc
+    if _message_text(response.content).strip() != success_signal:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "incompatible_model",
+                "message": "模型没有正确响应图片输入测试。",
+            },
+        )
+
+
+async def _verify_model_image_generation(
+    *,
+    settings: Settings,
+    base_url: str,
+    api_key: str,
+    model_id: str,
+) -> None:
+    try:
+        async with httpx.AsyncClient(
+            timeout=settings.model_request_timeout_seconds,
+            follow_redirects=False,
+            trust_env=False,
+        ) as client:
+            response = await client.post(
+                openai_compatible_endpoint(base_url, "images/generations"),
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model_id,
+                    "prompt": "A plain white square on a plain white background.",
+                    "n": 1,
+                },
+            )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        raise _model_probe_failure(
+            exc,
+            api_key=api_key,
+            message="模型服务拒绝了图片生成测试，请检查模型与接口格式。",
+        ) from exc
+    raw_results = payload.get("data") if isinstance(payload, dict) else None
+    if isinstance(raw_results, dict):
+        raw_results = raw_results.get("images", [raw_results])
+    if raw_results is None and isinstance(payload, dict):
+        raw_results = payload.get("images")
+    valid_result = isinstance(raw_results, list) and any(
+        isinstance(item, dict)
+        and bool(item.get("url") or item.get("b64_json") or item.get("base64"))
+        for item in raw_results
+    )
+    if not valid_result:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "incompatible_model",
+                "message": "图片生成接口没有返回可用的图片结果。",
+            },
+        )
+
+
+async def _verify_model_image_editing(
+    *,
+    settings: Settings,
+    base_url: str,
+    api_key: str,
+    model_id: str,
+) -> None:
+    test_png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR42mP8z4AdMDEMKQkA"
+        "zUEBD7t4NqoAAAAASUVORK5CYII="
+    )
+    try:
+        async with httpx.AsyncClient(
+            timeout=settings.model_request_timeout_seconds,
+            follow_redirects=False,
+            trust_env=False,
+        ) as client:
+            response = await client.post(
+                openai_compatible_endpoint(base_url, "images/edits"),
+                headers={"Accept": "application/json", "Authorization": f"Bearer {api_key}"},
+                data={
+                    "model": model_id,
+                    "prompt": "Keep this plain red square unchanged.",
+                    "n": "1",
+                },
+                files={"image": ("probe.png", test_png, "image/png")},
+            )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        raise _model_probe_failure(
+            exc,
+            api_key=api_key,
+            message="模型服务拒绝了图片编辑测试，请检查模型与接口格式。",
+        ) from exc
+    raw_results = payload.get("data") if isinstance(payload, dict) else None
+    if not (
+        isinstance(raw_results, list)
+        and any(
+            isinstance(item, dict)
+            and bool(item.get("url") or item.get("b64_json") or item.get("base64"))
+            for item in raw_results
+        )
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "incompatible_model",
+                "message": "图片编辑接口没有返回可用的图片结果。",
+            },
+        )
+
+
+async def _verify_model_service_capability(
+    *,
+    settings: Settings,
+    base_url: str,
+    capability: str,
+    protocol: str,
+    api_key: str,
+    model_id: str,
+) -> None:
+    if capability == "agent_chat":
+        await _verify_model_service_compatibility(
+            settings=settings,
+            base_url=base_url,
+            adapter_id=_adapter_for_model_protocol(protocol),
+            api_key=api_key,
+            model_id=model_id,
+        )
+        return
+    if capability == "image_understanding":
+        await _verify_model_image_understanding(
+            settings=settings,
+            base_url=base_url,
+            protocol=protocol,
+            api_key=api_key,
+            model_id=model_id,
+        )
+        return
+    if capability == "image_generation":
+        await _verify_model_image_generation(
+            settings=settings,
+            base_url=base_url,
+            api_key=api_key,
+            model_id=model_id,
+        )
+        return
+    await _verify_model_image_editing(
+        settings=settings,
+        base_url=base_url,
+        api_key=api_key,
+        model_id=model_id,
+    )
+
+
 async def _verify_bundled_model_catalog(
     *,
     settings: Settings,
@@ -537,6 +926,10 @@ async def _verify_bundled_model_catalog(
     for raw_model in models:
         model = {**raw_model, "verification": "unverified"}
         if model.get("source") == "bundled":
+            model["capabilities"] = normalized_model_capabilities(
+                model,
+                adapter_id=adapter_id,
+            )
             try:
                 await _verify_model_service_compatibility(
                     settings=settings,
@@ -554,13 +947,10 @@ async def _verify_bundled_model_catalog(
                     exc.status_code,
                 )
             else:
-                model.update(
-                    {
-                        "verification": "verified",
-                        "tool_calling": True,
-                        "streaming": True,
-                    }
-                )
+                for item in model["capabilities"]:
+                    if item["capability"] in {"agent_chat", "image_understanding"}:
+                        item["verification"] = "verified"
+                model.update({"verification": "verified", "tool_calling": True, "streaming": True})
         verified_models.append(model)
     return verified_models
 
@@ -1213,6 +1603,94 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         return {"services": services}
 
+    @app.get(
+        "/v1/model-capability-bindings",
+        response_model=ListModelCapabilityBindingsResponse,
+    )
+    async def list_model_capability_bindings(request: Request) -> dict[str, Any]:
+        principal_id = request.state.principal_id
+        store: LocalStore = app.state.store
+        rows = await store.list_model_capability_bindings(principal_id=principal_id)
+        return {
+            "bindings": [
+                await _model_capability_binding_response(
+                    store,
+                    principal_id=principal_id,
+                    row=row,
+                )
+                for row in rows
+            ]
+        }
+
+    @app.put(
+        "/v1/model-capability-bindings/{capability}",
+        response_model=ModelCapabilityBinding,
+    )
+    async def set_model_capability_binding(
+        request: Request,
+        capability: str,
+        body: SetModelCapabilityBindingRequest,
+    ) -> dict[str, Any]:
+        if capability not in {"image_generation", "image_editing"}:
+            raise HTTPException(status_code=404, detail="model capability is not bindable")
+        parts = body.model_spec.split(":", 2)
+        connection_id, model_id = parts[1], parts[2]
+        principal_id = request.state.principal_id
+        store: LocalStore = app.state.store
+        connection = await store.get_model_connection(
+            principal_id=principal_id,
+            connection_id=connection_id,
+        )
+        if connection is None:
+            raise HTTPException(status_code=404, detail="model service not found")
+        model = next(
+            (
+                item
+                for item in _model_connection_models(connection)
+                if item.get("model_id") == model_id
+            ),
+            None,
+        )
+        selected = model_capability(model, capability) if model is not None else None
+        if selected is None or selected.get("verification") != "verified":
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "model_capability_unverified",
+                    "message": "请先验证这个模型的对应能力。",
+                },
+            )
+        row = await store.set_model_capability_binding(
+            principal_id=principal_id,
+            capability=capability,
+            connection_id=connection_id,
+            connection_version=int(connection.get("version") or 1),
+            model_id=model_id,
+            protocol=str(selected["protocol"]),
+        )
+        return await _model_capability_binding_response(
+            store,
+            principal_id=principal_id,
+            row=row,
+        )
+
+    @app.delete(
+        "/v1/model-capability-bindings/{capability}",
+        status_code=204,
+        response_class=Response,
+    )
+    async def delete_model_capability_binding(
+        request: Request,
+        capability: str,
+    ) -> Response:
+        if capability not in {"image_generation", "image_editing"}:
+            raise HTTPException(status_code=404, detail="model capability is not bindable")
+        await app.state.store.delete_model_capability_binding(
+            principal_id=request.state.principal_id,
+            capability=capability,
+        )
+        return Response(status_code=204)
+
     @app.post(
         "/v1/model-services",
         response_model=ModelServiceConnection,
@@ -1580,11 +2058,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         model = {
             "model_id": body.model_id,
             "display_name": body.display_name or body.model_id,
+            "capabilities": [],
             "source": "manual",
             "verification": "unverified",
             "recommended": False,
-            "tool_calling": True,
-            "streaming": True,
+            "tool_calling": False,
+            "streaming": False,
             "image_inputs": False,
             "max_input_tokens": None,
             "max_output_tokens": None,
@@ -1619,6 +2098,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request: Request,
         connection_id: str,
         model_id: str,
+        body: VerifyModelServiceModelRequest | None = None,
     ) -> dict[str, Any]:
         principal_id = request.state.principal_id
         store: LocalStore = app.state.store
@@ -1628,10 +2108,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         if row is None:
             raise HTTPException(status_code=404, detail="model service not found")
+        expected_connection = (
+            int(row.get("version") or 1),
+            str(row["credential_ref"]),
+            str(row["base_url"]),
+        )
         models = _model_connection_models(row)
         model = next((item for item in models if item["model_id"] == model_id), None)
         if model is None:
             raise HTTPException(status_code=404, detail="model not found")
+        if body is None:
+            capability = model_capability(model, "agent_chat")
+            body = VerifyModelServiceModelRequest(
+                capability="agent_chat",
+                protocol=(
+                    str(capability["protocol"])
+                    if capability is not None
+                    else default_model_protocol(str(row.get("adapter_id")), "agent_chat")
+                ),
+            )
         try:
             api_key = await get_model_api_key(
                 principal_id,
@@ -1642,10 +2137,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         if not api_key:
             raise HTTPException(status_code=409, detail="model service needs an API key")
-        await _verify_model_service_compatibility(
+        await _verify_model_service_capability(
             settings=app.state.settings,
             base_url=str(row["base_url"]),
-            adapter_id=str(row["adapter_id"]),
+            capability=body.capability,
+            protocol=body.protocol,
             api_key=api_key,
             model_id=model_id,
         )
@@ -1659,17 +2155,42 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             if current is None:
                 raise HTTPException(status_code=404, detail="model service not found")
+            if (
+                int(current.get("version") or 1),
+                str(current["credential_ref"]),
+                str(current["base_url"]),
+            ) != expected_connection:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "model_service_changed",
+                        "message": "模型服务在验证期间已更新，请重新验证。",
+                    },
+                )
             models = _model_connection_models(current)
             model = next((item for item in models if item["model_id"] == model_id), None)
             if model is None:
                 raise HTTPException(status_code=404, detail="model not found")
-            model.update(
-                {
-                    "verification": "verified",
-                    "tool_calling": True,
-                    "streaming": True,
-                }
+            capabilities = {
+                item["capability"]: dict(item)
+                for item in model.get("capabilities", [])
+                if isinstance(item, dict) and item.get("capability")
+            }
+            capabilities[body.capability] = {
+                "capability": body.capability,
+                "protocol": body.protocol,
+                "verification": "verified",
+            }
+            model["capabilities"] = sorted(
+                capabilities.values(),
+                key=lambda item: MODEL_CAPABILITY_ORDER[str(item["capability"])],
             )
+            model["verification"] = "verified"
+            if body.capability == "agent_chat":
+                model["tool_calling"] = True
+                model["streaming"] = True
+            if body.capability == "image_understanding":
+                model["image_inputs"] = True
             await store.update_model_connection_catalog(
                 principal_id=principal_id,
                 connection_id=connection_id,
@@ -1742,6 +2263,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "display_name": "Test model",
                     "connection_id": "test",
                     "service_name": "Test",
+                    "capabilities": [
+                        {
+                            "capability": "agent_chat",
+                            "protocol": "openai_chat_completions",
+                            "verification": "verified",
+                        }
+                    ],
                     "tool_calling": True,
                     "streaming": True,
                     "image_inputs": False,
@@ -1767,6 +2295,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             for row, api_key in zip(rows, configured_connections, strict=True):
                 configured = bool(api_key)
                 for model in _model_connection_models(row):
+                    agent_capability = model_capability(model, "agent_chat")
                     models.append(
                         {
                             "spec": f"local:{row['id']}:{model['model_id']}",
@@ -1774,6 +2303,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             "display_name": model["display_name"],
                             "connection_id": row["id"],
                             "service_name": row["name"],
+                            "capabilities": model.get("capabilities", []),
                             "tool_calling": bool(model.get("tool_calling")),
                             "streaming": bool(model.get("streaming")),
                             "image_inputs": bool(model.get("image_inputs")),
@@ -1782,7 +2312,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             "max_input_tokens": model.get("max_input_tokens"),
                             "max_output_tokens": model.get("max_output_tokens"),
                             "available": configured
-                            and model.get("verification") == "verified"
+                            and agent_capability is not None
+                            and agent_capability.get("verification") == "verified"
                             and bool(model.get("tool_calling"))
                             and bool(model.get("streaming")),
                         }
@@ -2442,6 +2973,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 client_message_id=body.client_message_id,
                 protocol_version=body.protocol_version,
                 required_capabilities=body.required_capabilities,
+                required_tools=body.required_tools,
                 goal=goal,
                 thread_id=body.thread_id,
                 user_input=body.user_input,

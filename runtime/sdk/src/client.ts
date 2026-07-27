@@ -40,6 +40,9 @@ export type ConnectModelServiceRequest = Schemas['ConnectModelServiceRequest']
 export type ReconnectModelServiceRequest = Schemas['ReconnectModelServiceRequest']
 export type ImportModelServiceRequest = Schemas['ImportModelServiceRequest']
 export type AddModelServiceModelRequest = Schemas['AddModelServiceModelRequest']
+export type VerifyModelServiceModelRequest = Schemas['VerifyModelServiceModelRequest']
+export type ModelCapabilityBinding = Schemas['ModelCapabilityBinding']
+export type SetModelCapabilityBindingRequest = Schemas['SetModelCapabilityBindingRequest']
 export type LocalRuntimeModel = Schemas['LocalRuntimeModel']
 export type LocalScheduledRun = Schemas['LocalScheduledRun']
 export type LocalArtifact = Schemas['LocalArtifact']
@@ -233,6 +236,47 @@ export async function listModelServices(
   return body.services ?? []
 }
 
+export async function listModelCapabilityBindings(
+  config: RuntimeClientConfig,
+  fetcher: Fetcher = fetch,
+): Promise<ModelCapabilityBinding[]> {
+  const response = await fetcher(`${normalizeBaseURL(config.baseURL)}/v1/model-capability-bindings`, {
+    method: 'GET',
+    headers: localHeaders(config, false),
+  })
+  const body = await decodeLocalResponse<{ bindings?: ModelCapabilityBinding[] }>(response)
+  return body.bindings ?? []
+}
+
+export async function setModelCapabilityBinding(
+  capability: ModelCapabilityBinding['capability'],
+  input: SetModelCapabilityBindingRequest,
+  config: RuntimeClientConfig,
+  fetcher: Fetcher = fetch,
+): Promise<ModelCapabilityBinding> {
+  const response = await fetcher(
+    `${normalizeBaseURL(config.baseURL)}/v1/model-capability-bindings/${encodeURIComponent(capability)}`,
+    {
+      method: 'PUT',
+      headers: localHeaders(config, true),
+      body: JSON.stringify(input),
+    },
+  )
+  return decodeLocalResponse<ModelCapabilityBinding>(response)
+}
+
+export async function deleteModelCapabilityBinding(
+  capability: ModelCapabilityBinding['capability'],
+  config: RuntimeClientConfig,
+  fetcher: Fetcher = fetch,
+): Promise<void> {
+  const response = await fetcher(
+    `${normalizeBaseURL(config.baseURL)}/v1/model-capability-bindings/${encodeURIComponent(capability)}`,
+    { method: 'DELETE', headers: localHeaders(config, false) },
+  )
+  if (!response.ok) await decodeLocalResponse(response)
+}
+
 export async function connectModelService(
   input: ConnectModelServiceRequest,
   config: RuntimeClientConfig,
@@ -302,17 +346,40 @@ export async function addModelServiceModel(
   return decodeLocalResponse<ModelServiceModel>(response)
 }
 
-export async function verifyModelServiceModel(
+export function verifyModelServiceModel(
   connectionID: string,
   modelID: string,
   config: RuntimeClientConfig,
-  fetcher: Fetcher = fetch,
+  fetcher?: Fetcher,
+): Promise<ModelServiceModel>
+export function verifyModelServiceModel(
+  connectionID: string,
+  modelID: string,
+  input: VerifyModelServiceModelRequest,
+  config: RuntimeClientConfig,
+  fetcher?: Fetcher,
+): Promise<ModelServiceModel>
+export async function verifyModelServiceModel(
+  connectionID: string,
+  modelID: string,
+  inputOrConfig: VerifyModelServiceModelRequest | RuntimeClientConfig,
+  configOrFetcher?: RuntimeClientConfig | Fetcher,
+  maybeFetcher: Fetcher = fetch,
 ): Promise<ModelServiceModel> {
+  const hasInput = 'capability' in inputOrConfig && 'protocol' in inputOrConfig
+  const input = hasInput ? inputOrConfig : undefined
+  const config = (hasInput ? configOrFetcher : inputOrConfig) as RuntimeClientConfig
+  const fetcher = hasInput
+    ? maybeFetcher
+    : typeof configOrFetcher === 'function'
+      ? configOrFetcher
+      : fetch
   const response = await fetcher(
     `${normalizeBaseURL(config.baseURL)}/v1/model-services/${encodeURIComponent(connectionID)}/models/${encodeURIComponent(modelID)}/verify`,
     {
       method: 'POST',
-      headers: localHeaders(config, false),
+      headers: localHeaders(config, Boolean(input)),
+      ...(input ? { body: JSON.stringify(input) } : {}),
     },
   )
   return decodeLocalResponse<ModelServiceModel>(response)
@@ -400,6 +467,7 @@ export interface CreateLocalRunInput {
   goal: string
   workspacePath?: string
   attachmentPaths?: string[]
+  requiredTools?: Array<'image.generate' | 'image.edit'>
   history?: Array<{ role: 'user' | 'assistant'; content: string }>
   parentRunId?: string
   pluginRefs?: Array<{
@@ -634,6 +702,7 @@ export async function createLocalRun(
     assistant_message_id: input.assistantMessageId,
     protocol_version: LOCAL_RUNTIME_PROTOCOL_VERSION,
     required_capabilities: [...requiredCapabilities].sort(),
+    required_tools: input.requiredTools?.length ? input.requiredTools : undefined,
     goal: input.goal,
     user_input: input.userInput,
     thread_title: input.threadTitle,
@@ -1909,6 +1978,21 @@ export class SheJaneRuntimeClient {
     return listModelServices(this.config, this.fetcher)
   }
 
+  listModelCapabilityBindings(): Promise<ModelCapabilityBinding[]> {
+    return listModelCapabilityBindings(this.config, this.fetcher)
+  }
+
+  setModelCapabilityBinding(
+    capability: ModelCapabilityBinding['capability'],
+    input: SetModelCapabilityBindingRequest,
+  ): Promise<ModelCapabilityBinding> {
+    return setModelCapabilityBinding(capability, input, this.config, this.fetcher)
+  }
+
+  deleteModelCapabilityBinding(capability: ModelCapabilityBinding['capability']): Promise<void> {
+    return deleteModelCapabilityBinding(capability, this.config, this.fetcher)
+  }
+
   connectModelService(input: ConnectModelServiceRequest): Promise<ModelServiceConnection> {
     return connectModelService(input, this.config, this.fetcher)
   }
@@ -1935,8 +2019,20 @@ export class SheJaneRuntimeClient {
     return addModelServiceModel(connectionID, input, this.config, this.fetcher)
   }
 
-  verifyModelServiceModel(connectionID: string, modelID: string): Promise<ModelServiceModel> {
-    return verifyModelServiceModel(connectionID, modelID, this.config, this.fetcher)
+  verifyModelServiceModel(connectionID: string, modelID: string): Promise<ModelServiceModel>
+  verifyModelServiceModel(
+    connectionID: string,
+    modelID: string,
+    input: VerifyModelServiceModelRequest,
+  ): Promise<ModelServiceModel>
+  verifyModelServiceModel(
+    connectionID: string,
+    modelID: string,
+    input?: VerifyModelServiceModelRequest,
+  ): Promise<ModelServiceModel> {
+    return input
+      ? verifyModelServiceModel(connectionID, modelID, input, this.config, this.fetcher)
+      : verifyModelServiceModel(connectionID, modelID, this.config, this.fetcher)
   }
 
   deleteModelService(connectionID: string): Promise<void> {

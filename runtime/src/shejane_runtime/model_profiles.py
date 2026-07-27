@@ -10,6 +10,89 @@ _DEEPSEEK_V4_LIMITS = {
     "deepseek-v4-pro": (1_000_000, 384_000),
 }
 
+MODEL_CAPABILITY_ORDER = {
+    "agent_chat": 0,
+    "image_understanding": 1,
+    "image_generation": 2,
+    "image_editing": 3,
+}
+
+
+def default_model_protocol(adapter_id: str, capability: str) -> str:
+    if capability == "image_generation":
+        return "openai_images_generations"
+    if capability == "image_editing":
+        return "openai_images_edits"
+    return "anthropic_messages" if adapter_id == "anthropic_messages" else "openai_chat_completions"
+
+
+def normalized_model_capabilities(
+    model: dict[str, Any],
+    *,
+    adapter_id: str,
+) -> list[dict[str, str]]:
+    """Normalize multi-capability profiles and migrate earlier single-purpose rows."""
+    raw_capabilities = model.get("capabilities")
+    capabilities: dict[str, dict[str, str]] = {}
+    if isinstance(raw_capabilities, list):
+        for raw in raw_capabilities:
+            if not isinstance(raw, dict):
+                continue
+            capability = str(raw.get("capability") or "")
+            protocol = str(raw.get("protocol") or "")
+            if capability not in MODEL_CAPABILITY_ORDER or not protocol:
+                continue
+            capabilities[capability] = {
+                "capability": capability,
+                "protocol": protocol,
+                "verification": (
+                    "verified" if raw.get("verification") == "verified" else "unverified"
+                ),
+            }
+
+    legacy_purpose = str(model.get("purpose") or "")
+    if legacy_purpose in MODEL_CAPABILITY_ORDER and legacy_purpose not in capabilities:
+        capabilities[legacy_purpose] = {
+            "capability": legacy_purpose,
+            "protocol": str(
+                model.get("protocol") or default_model_protocol(adapter_id, legacy_purpose)
+            ),
+            "verification": (
+                "verified" if model.get("verification") == "verified" else "unverified"
+            ),
+        }
+
+    if not capabilities and (
+        model.get("source") == "bundled" or model.get("verification") == "verified"
+    ):
+        verification = "verified" if model.get("verification") == "verified" else "unverified"
+        capabilities["agent_chat"] = {
+            "capability": "agent_chat",
+            "protocol": default_model_protocol(adapter_id, "agent_chat"),
+            "verification": verification,
+        }
+        if bool(model.get("image_inputs")):
+            capabilities["image_understanding"] = {
+                "capability": "image_understanding",
+                "protocol": default_model_protocol(adapter_id, "image_understanding"),
+                "verification": verification,
+            }
+    return sorted(
+        capabilities.values(),
+        key=lambda item: MODEL_CAPABILITY_ORDER[item["capability"]],
+    )
+
+
+def model_capability(model: dict[str, Any], capability: str) -> dict[str, str] | None:
+    return next(
+        (
+            item
+            for item in model.get("capabilities", [])
+            if isinstance(item, dict) and item.get("capability") == capability
+        ),
+        None,
+    )
+
 
 def _bounded_integer(value: Any, *, minimum: int, maximum: int) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int):
@@ -56,8 +139,9 @@ def discovered_model_profile(
     profile: dict[str, Any] = {
         "model_id": model_id,
         "display_name": display_name,
-        "tool_calling": True,
-        "streaming": True,
+        "capabilities": [],
+        "tool_calling": False,
+        "streaming": False,
         "image_inputs": False,
         "max_input_tokens": None,
         "max_output_tokens": None,

@@ -26,6 +26,15 @@ def test_permission_policy_auto_allows_sandboxed_commands_but_not_deletion() -> 
     assert approval_policy_decision("execute", "sandboxed_command", "ask").decision == "ask"
     assert approval_policy_decision("clipboard.read", "runtime_state", "auto").decision == "ask"
     assert (
+        approval_policy_decision("image.generate", "external_or_unknown", "ask").decision
+        == "allow"
+    )
+    assert (
+        approval_policy_decision("image.generate", "external_or_unknown", "auto").decision
+        == "allow"
+    )
+    assert approval_policy_decision("image.edit", "external_or_unknown", "ask").decision == "ask"
+    assert (
         approval_policy_decision("office.delete_slide", "workspace_write", "full_access").decision
         == "ask"
     )
@@ -724,6 +733,63 @@ def test_completion_router_repairs_prose_clarification_into_user_ask() -> None:
     assert result["completion_route"]["decision"] == "repair_requested"
     assert result["completion_route"]["reason"] == "prose_clarification"
     assert "user.ask" in completion_repair_instruction(result)
+
+
+def test_completion_router_requires_selected_image_tool_before_finalizing() -> None:
+    from shejane_runtime.middleware.completion_router import CompletionRouterMiddleware
+
+    runtime = SimpleNamespace(
+        context=SimpleNamespace(
+            run_id="run-image",
+            required_tools=("image.generate",),
+        )
+    )
+    missing = {
+        "messages": [
+            HumanMessage(
+                content="画一块红色石头",
+                additional_kwargs={"runtime_kind": "task_input", "runtime_run_id": "run-image"},
+            ),
+            AIMessage(content="好的，图片已经生成。"),
+        ]
+    }
+
+    repair = CompletionRouterMiddleware().after_model(missing, runtime)
+
+    assert repair["jump_to"] == "model"
+    assert repair["completion_route"]["reason"] == "required_tool_missing"
+    complete = {
+        "messages": [
+            *missing["messages"][:-1],
+            ToolMessage(
+                content=(
+                    '{"ok":"true","artifacts":[{"artifact_id":"art-1","media_type":"image/png"}]}'
+                ),
+                name="image.generate",
+                tool_call_id="image-1",
+            ),
+            AIMessage(content="图片已生成。"),
+        ]
+    }
+    accepted = CompletionRouterMiddleware().after_model(complete, runtime)
+
+    assert accepted["completion_route"]["decision"] == "final"
+
+    failed = {
+        "messages": [
+            *missing["messages"][:-1],
+            ToolMessage(
+                content='{"ok":"false","error_code":"image_provider_failed"}',
+                name="image.generate",
+                tool_call_id="image-failed",
+                status="error",
+            ),
+            AIMessage(content="图片服务请求失败，本次没有生成图片。"),
+        ]
+    }
+    reported_failure = CompletionRouterMiddleware().after_model(failed, runtime)
+
+    assert reported_failure["completion_route"]["decision"] == "final"
 
 
 def test_completion_router_ignores_failed_verification_from_an_ancestor_turn() -> None:

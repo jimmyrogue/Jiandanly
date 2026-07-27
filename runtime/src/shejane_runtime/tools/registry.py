@@ -17,6 +17,7 @@ from langchain_core.tools import BaseTool
 from ..agent.backends import MODEL_FILE_READ_MAX_MB
 from ..store.sqlite import LocalStore
 from ..tool_schemas import tool_input_schema
+from .image import make_image_tools
 from .memory import MEMORY_TOOLS
 from .office import OFFICE_READ_TOOLS, OFFICE_WRITE_TOOLS
 from .progress import PROGRESS_TOOLS, make_progress_tool
@@ -45,7 +46,7 @@ def core_tools() -> list[BaseTool]:
     return tools
 
 
-async def build_tools() -> list[BaseTool]:
+async def build_tools(*, runtime_context: object | None = None) -> list[BaseTool]:
     """Assemble the Runtime's static per-run toolset.
 
     All Runtime tool categories: local utilities + web
@@ -64,6 +65,16 @@ async def build_tools() -> list[BaseTool]:
     tools.extend(OFFICE_READ_TOOLS)
     tools.extend(OFFICE_WRITE_TOOLS)
     tools.append(make_progress_tool())
+    bindings = getattr(runtime_context, "capability_bindings", None)
+    if isinstance(bindings, dict) and bindings:
+        tools.extend(
+            tool
+            for tool in make_image_tools()
+            if (
+                (tool.name == "image.generate" and "image_generation" in bindings)
+                or (tool.name == "image.edit" and "image_editing" in bindings)
+            )
+        )
     # ls/read_file/write_file/edit_file/glob/grep/execute are provided by
     # deepagents FilesystemMiddleware
     # (auto-added by create_deep_agent), so we do NOT add FileManagementToolkit

@@ -7,10 +7,13 @@ const api = vi.hoisted(() => ({
   addModelServiceModel: vi.fn(),
   connectModelService: vi.fn(),
   deleteModelService: vi.fn(),
+  listModelCapabilityBindings: vi.fn(),
   listModelServicePresets: vi.fn(),
   listModelServices: vi.fn(),
   reconnectModelService: vi.fn(),
   refreshModelService: vi.fn(),
+  setModelCapabilityBinding: vi.fn(),
+  verifyModelServiceModel: vi.fn(),
 }))
 
 vi.mock('@/runtime/client', async (importOriginal) => ({
@@ -33,6 +36,41 @@ const deepseek = {
   }],
 }
 
+const tuziConnection = {
+  id: 'conn_1',
+  preset_id: 'custom',
+  name: '兔子',
+  region: 'custom',
+  adapter_id: 'openai_chat',
+  base_url: 'https://api.tu-zi.com/v1',
+  credential_configured: true,
+  catalog_status: 'ready',
+  models: [{
+    model_id: 'gpt-5.6-luna',
+    display_name: 'gpt-5.6-luna',
+    capabilities: [],
+    source: 'discovered',
+    verification: 'unverified',
+    recommended: false,
+    tool_calling: false,
+    streaming: false,
+    image_inputs: false,
+  }, {
+    model_id: 'gpt-image-2',
+    display_name: 'gpt-image-2',
+    capabilities: [],
+    source: 'discovered',
+    verification: 'unverified',
+    recommended: false,
+    tool_calling: false,
+    streaming: false,
+    image_inputs: false,
+  }],
+  version: 1,
+  created_at: 'now',
+  updated_at: 'now',
+}
+
 describe('ModelServicesSettings', () => {
   afterEach(cleanup)
 
@@ -40,8 +78,11 @@ describe('ModelServicesSettings', () => {
     vi.clearAllMocks()
     api.listModelServicePresets.mockResolvedValue([deepseek])
     api.listModelServices.mockResolvedValue([])
+    api.listModelCapabilityBindings.mockResolvedValue([])
     api.connectModelService.mockResolvedValue({})
     api.reconnectModelService.mockResolvedValue({})
+    api.verifyModelServiceModel.mockResolvedValue({})
+    api.setModelCapabilityBinding.mockResolvedValue({})
   })
 
   it('connects an official service with an editable API address', async () => {
@@ -51,7 +92,7 @@ describe('ModelServicesSettings', () => {
       </I18nProvider>,
     )
 
-    fireEvent.click(await screen.findByRole('button', { name: '添加模型服务' }))
+    fireEvent.click(await screen.findByRole('button', { name: '连接已有服务' }))
     fireEvent.click(screen.getByRole('button', { name: /DeepSeek/ }))
     expect(screen.getByLabelText('API 地址')).toHaveValue('')
     expect(screen.getByLabelText('API 地址')).toHaveAttribute(
@@ -88,7 +129,7 @@ describe('ModelServicesSettings', () => {
       </I18nProvider>,
     )
 
-    fireEvent.click(await screen.findByRole('button', { name: '添加模型服务' }))
+    fireEvent.click(await screen.findByRole('button', { name: '连接已有服务' }))
     fireEvent.click(screen.getByRole('button', { name: /DeepSeek/ }))
     fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'secret' } })
     fireEvent.click(screen.getByRole('button', { name: '连接' }))
@@ -112,7 +153,7 @@ describe('ModelServicesSettings', () => {
       </I18nProvider>,
     )
 
-    fireEvent.click(await screen.findByRole('button', { name: '添加模型服务' }))
+    fireEvent.click(await screen.findByRole('button', { name: '连接已有服务' }))
     fireEvent.click(screen.getByRole('button', { name: /DeepSeek/ }))
 
     expect(screen.getByLabelText('API 地址')).toHaveValue('')
@@ -141,7 +182,7 @@ describe('ModelServicesSettings', () => {
       </I18nProvider>,
     )
 
-    fireEvent.click(await screen.findByRole('button', { name: '添加模型服务' }))
+    fireEvent.click(await screen.findByRole('button', { name: '连接已有服务' }))
     fireEvent.click(screen.getByRole('button', { name: /DeepSeek/ }))
     fireEvent.click(screen.getByRole('button', { name: '连接' }))
 
@@ -164,7 +205,7 @@ describe('ModelServicesSettings', () => {
     expect(screen.queryByRole('button', { name: /DeepSeek/ })).not.toBeInTheDocument()
     expect(container.querySelector('.settings-card')).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: '添加模型服务' }))
+    fireEvent.click(screen.getByRole('button', { name: '连接已有服务' }))
 
     expect(screen.getByRole('dialog')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /DeepSeek/ })).toBeInTheDocument()
@@ -190,6 +231,11 @@ describe('ModelServicesSettings', () => {
         tool_calling: true,
         streaming: true,
         image_inputs: false,
+        capabilities: [{
+          capability: 'agent_chat',
+          protocol: 'openai_chat_completions',
+          verification: 'verified',
+        }],
       }, {
         model_id: 'deepseek-v4-pro',
         display_name: 'DeepSeek V4 Pro',
@@ -199,6 +245,11 @@ describe('ModelServicesSettings', () => {
         tool_calling: true,
         streaming: true,
         image_inputs: false,
+        capabilities: [{
+          capability: 'agent_chat',
+          protocol: 'openai_chat_completions',
+          verification: 'verified',
+        }],
       }],
       version: 1,
       created_at: 'now',
@@ -213,10 +264,14 @@ describe('ModelServicesSettings', () => {
 
     expect(await screen.findByText('DeepSeek V4 Flash、DeepSeek V4 Pro')).toBeInTheDocument()
     expect(screen.getByText('中国站 · 可用')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '打开 DeepSeek 控制台' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '选择模型' })).toBeInTheDocument()
     const actions = container.querySelector('.settings-model-service-actions')
-    expect(actions?.querySelectorAll('button')).toHaveLength(4)
-    expect(actions?.lastElementChild).toHaveAttribute('aria-label', '删除服务')
+    expect(actions?.querySelectorAll('button')).toHaveLength(2)
+    expect(actions?.lastElementChild).toHaveAttribute('aria-label', 'DeepSeek 更多操作')
+    const actionsTrigger = screen.getByRole('button', { name: 'DeepSeek 更多操作' })
+    actionsTrigger.focus()
+    fireEvent.keyDown(actionsTrigger, { key: 'Enter', code: 'Enter' })
+    expect(await screen.findByRole('menuitem', { name: '打开 DeepSeek 控制台' })).toBeInTheDocument()
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
@@ -242,7 +297,10 @@ describe('ModelServicesSettings', () => {
       </I18nProvider>,
     )
 
-    fireEvent.click(await screen.findByRole('button', { name: '编辑 DeepSeek 连接' }))
+    const actionsTrigger = await screen.findByRole('button', { name: 'DeepSeek 更多操作' })
+    actionsTrigger.focus()
+    fireEvent.keyDown(actionsTrigger, { key: 'Enter', code: 'Enter' })
+    fireEvent.click(await screen.findByRole('menuitem', { name: '编辑 DeepSeek 连接' }))
     expect(screen.getByText('需要 API Key')).toBeInTheDocument()
     expect(screen.getByLabelText('API 地址')).toHaveValue('https://api.deepseek.com/v1')
     fireEvent.change(screen.getByLabelText('API 地址'), {
@@ -254,6 +312,117 @@ describe('ModelServicesSettings', () => {
     await waitFor(() => expect(api.reconnectModelService).toHaveBeenCalledWith(
       'conn_1',
       { api_key: 'new-secret', base_url: 'https://gateway.example/v1' },
+      config,
+    ))
+  })
+
+  it.each(['discovered', 'bundled'] as const)(
+    'lets users verify a %s model for its selected use',
+    async (source) => {
+    api.listModelServices.mockResolvedValue([{
+      id: 'conn_1',
+      preset_id: 'custom',
+      name: 'Tuzi',
+      region: 'custom',
+      adapter_id: 'openai_chat',
+      base_url: 'https://api.tu-zi.com/v1',
+      credential_configured: true,
+      catalog_status: 'ready',
+      models: [{
+        model_id: 'gpt-image-1',
+        display_name: 'GPT Image 1',
+        capabilities: [],
+        source,
+        verification: 'unverified',
+        recommended: false,
+        tool_calling: false,
+        streaming: false,
+        image_inputs: false,
+      }],
+      version: 1,
+      created_at: 'now',
+      updated_at: 'now',
+    }])
+
+    render(
+      <I18nProvider>
+        <ModelServicesSettings config={config} />
+      </I18nProvider>,
+    )
+
+    fireEvent.click(await screen.findByRole('button', { name: '选择模型' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: '选择 GPT Image 1' }))
+    fireEvent.click(screen.getByRole('combobox', { name: 'GPT Image 1 用途' }))
+    fireEvent.click(screen.getByRole('option', { name: '图片生成' }))
+    fireEvent.click(screen.getByRole('button', { name: '测试并启用 1 个模型' }))
+
+    await waitFor(() => expect(api.verifyModelServiceModel).toHaveBeenCalledWith(
+      'conn_1',
+      'gpt-image-1',
+      { capability: 'image_generation', protocol: 'openai_images_generations' },
+      config,
+    ))
+    await waitFor(() => expect(api.setModelCapabilityBinding).toHaveBeenCalledWith(
+      'image_generation',
+      { model_spec: 'local:conn_1:gpt-image-1' },
+      config,
+    ))
+    },
+  )
+
+  it('opens a searchable model picker after connecting an existing service', async () => {
+    api.listModelServicePresets.mockResolvedValue([{
+      id: 'custom',
+      name: '已有服务',
+      description: '兼容服务',
+      regions: [],
+    }])
+    api.connectModelService.mockResolvedValue(tuziConnection)
+    api.listModelServices
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([tuziConnection])
+
+    render(
+      <I18nProvider>
+        <ModelServicesSettings config={config} />
+      </I18nProvider>,
+    )
+
+    fireEvent.click(await screen.findByRole('button', { name: '连接已有服务' }))
+    fireEvent.click(screen.getByRole('button', { name: /已有服务/ }))
+    fireEvent.change(screen.getByLabelText('服务名称'), { target: { value: '兔子' } })
+    fireEvent.change(screen.getByLabelText('API 地址'), { target: { value: 'https://api.tu-zi.com/v1' } })
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'secret' } })
+    fireEvent.click(screen.getByRole('button', { name: '连接' }))
+
+    expect(await screen.findByRole('heading', { name: '选择要使用的模型' })).toBeInTheDocument()
+    const search = screen.getByRole('searchbox', { name: '筛选模型' })
+    fireEvent.change(search, { target: { value: 'image' } })
+    expect(screen.getByText('gpt-image-2')).toBeInTheDocument()
+    expect(screen.queryByText('gpt-5.6-luna')).not.toBeInTheDocument()
+  })
+
+  it('keeps the catalog in the picker and tests only selected models', async () => {
+    api.listModelServices.mockResolvedValue([tuziConnection])
+
+    render(
+      <I18nProvider>
+        <ModelServicesSettings config={config} />
+      </I18nProvider>,
+    )
+
+    expect(await screen.findByText('尚未启用模型')).toBeInTheDocument()
+    expect(screen.queryByText('gpt-image-2')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '选择模型' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: '选择 gpt-image-2' }))
+    fireEvent.click(screen.getByRole('combobox', { name: 'gpt-image-2 用途' }))
+    fireEvent.click(screen.getByRole('option', { name: '图片生成' }))
+    fireEvent.click(screen.getByRole('button', { name: '测试并启用 1 个模型' }))
+
+    await waitFor(() => expect(api.verifyModelServiceModel).toHaveBeenCalledWith(
+      'conn_1',
+      'gpt-image-2',
+      { capability: 'image_generation', protocol: 'openai_images_generations' },
       config,
     ))
   })

@@ -358,12 +358,13 @@ def test_state_layer_renders_mode_and_turn_count(tmp_path: Path) -> None:
     prompt_file.write_text("dev", encoding="utf-8")
     builder = ContextBuilder(developer_prompt_path=prompt_file)
     result = builder.build(
-        runtime=RuntimeContext(mode="deep", turn_count=5),
+        runtime=RuntimeContext(mode="deep", turn_count=5, required_tools=("image.generate",)),
     )
 
     assert "<state>" in result
     assert "当前模式: deep" in result
     assert "第 5 轮" in result
+    assert "必须调用工具: image.generate" in result
 
 
 def test_state_layer_absent_when_no_state_fields(tmp_path: Path) -> None:

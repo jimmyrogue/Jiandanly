@@ -13,6 +13,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 
 import shejane_runtime.server as server_module
 from shejane_runtime.config import reset_settings_for_tests
+from shejane_runtime.model_profiles import discovered_model_profile
 from shejane_runtime.model_services import (
     adapter_for_custom_service,
     list_model_service_presets,
@@ -66,6 +67,50 @@ def test_custom_service_adapter_detection_prefers_openai_chat_on_a_tie() -> None
     )
 
 
+def test_discovered_models_are_candidates_without_assumed_agent_capabilities() -> None:
+    profile = discovered_model_profile(
+        {},
+        model_id="gpt-image-1",
+        display_name="GPT Image 1",
+        service_base_url="https://gateway.example/v1",
+    )
+
+    assert profile["capabilities"] == []
+    assert profile["tool_calling"] is False
+    assert profile["streaming"] is False
+    assert profile["image_inputs"] is False
+
+
+def test_legacy_verified_models_remain_agent_models() -> None:
+    models = server_module._model_connection_models(
+        {
+            "adapter_id": "anthropic_messages",
+            "base_url": "https://gateway.example/v1",
+            "models_json": json.dumps(
+                [
+                    {
+                        "model_id": "legacy-model",
+                        "display_name": "Legacy Model",
+                        "source": "manual",
+                        "verification": "verified",
+                        "tool_calling": True,
+                        "streaming": True,
+                        "image_inputs": False,
+                    }
+                ]
+            ),
+        }
+    )
+
+    assert models[0]["capabilities"] == [
+        {
+            "capability": "agent_chat",
+            "protocol": "anthropic_messages",
+            "verification": "verified",
+        }
+    ]
+
+
 def test_bundled_models_are_recommendations_not_preverified_connections() -> None:
     deepseek = model_service_preset("deepseek")
 
@@ -93,7 +138,11 @@ async def test_bundled_models_are_verified_individually(monkeypatch) -> None:
         adapter_id="openai_chat",
         api_key="secret",
         models=[
-            {"model_id": "model-a", "source": "bundled", "verification": "unverified"},
+            {
+                "model_id": "model-a",
+                "source": "bundled",
+                "verification": "unverified",
+            },
             {"model_id": "model-b", "source": "bundled", "verification": "unverified"},
             {"model_id": "model-c", "source": "discovered", "verification": "unverified"},
         ],
@@ -105,6 +154,13 @@ async def test_bundled_models_are_verified_individually(monkeypatch) -> None:
         "unverified",
         "unverified",
     ]
+    assert models[0]["capabilities"] == [
+        {
+            "capability": "agent_chat",
+            "protocol": "openai_chat_completions",
+            "verification": "verified",
+        }
+    ]
 
 
 def test_catalog_refresh_preserves_manual_and_verified_models() -> None:
@@ -115,6 +171,13 @@ def test_catalog_refresh_preserves_manual_and_verified_models() -> None:
             "streaming": True,
             "tool_calling": True,
             "source": "discovered",
+            "capabilities": [
+                {
+                    "capability": "agent_chat",
+                    "protocol": "openai_chat_completions",
+                    "verification": "verified",
+                }
+            ],
         },
         {
             "model_id": "manual",
@@ -730,6 +793,41 @@ async def test_compatibility_verification_completes_model_tool_model_loop(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("protocol", "image_type"),
+    [
+        ("openai_chat_completions", "image_url"),
+        ("anthropic_messages", "image"),
+    ],
+)
+async def test_image_understanding_verification_sends_an_inline_image(
+    monkeypatch: pytest.MonkeyPatch,
+    protocol: str,
+    image_type: str,
+) -> None:
+    class ProbeModel:
+        def bind(self, **_kwargs):
+            return self
+
+        async def ainvoke(self, messages):
+            content = messages[0].content
+            prompt = next(item["text"] for item in content if item.get("type") == "text")
+            assert "RED" not in prompt
+            assert any(item.get("type") == image_type for item in content)
+            return AIMessage(content="RED")
+
+    monkeypatch.setattr(server_module, "_build_byok_chat_model", lambda **_kwargs: ProbeModel())
+
+    await server_module._verify_model_image_understanding(
+        settings=reset_settings_for_tests(),
+        base_url="https://gateway.example/v1",
+        protocol=protocol,
+        api_key="secret",
+        model_id="vision-model",
+    )
+
+
+@pytest.mark.asyncio
 async def test_compatibility_verification_rejects_missing_final_answer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -979,6 +1077,10 @@ def test_manual_model_becomes_available_only_after_compatibility_verification(
         verified = client.post(
             f"/v1/model-services/{connection['id']}/models/private-model/verify",
             headers={"Authorization": "Bearer tok"},
+            json={
+                "capability": "agent_chat",
+                "protocol": "openai_chat_completions",
+            },
         )
         catalog = client.get(
             "/v1/models",
@@ -987,4 +1089,270 @@ def test_manual_model_becomes_available_only_after_compatibility_verification(
 
     assert verified.status_code == 200
     assert verified.json()["verification"] == "verified"
+    assert verified.json()["capabilities"] == [
+        {
+            "capability": "agent_chat",
+            "protocol": "openai_chat_completions",
+            "verification": "verified",
+        }
+    ]
     assert catalog[0]["available"] is True
+
+
+def test_image_generation_model_uses_images_endpoint_and_stays_out_of_agent_catalog(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    credential_vault: dict[str, str],
+) -> None:
+    settings = reset_settings_for_tests(
+        SHEJANE_RUNTIME_TOKEN="tok",
+        data_dir=tmp_path,
+    )
+    monkeypatch.setattr(RunCoordinator, "start", lambda _self: None)
+
+    async def detected(**kwargs):
+        return [], "ready" if kwargs["adapter_id"] == "openai_chat" else "unavailable"
+
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"data": [{"url": "https://example.test/image.png"}]})
+
+    class PatchedClient(httpx.AsyncClient):
+        def __init__(self, **kwargs) -> None:
+            super().__init__(transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(server_module, "_refresh_model_service_models", detected)
+    monkeypatch.setattr(server_module.httpx, "AsyncClient", PatchedClient)
+
+    with TestClient(create_app(settings)) as client:
+        connection = client.post(
+            "/v1/model-services",
+            headers={"Authorization": "Bearer tok"},
+            json={
+                "preset_id": "custom",
+                "name": "Gateway",
+                "base_url": "https://gateway.example",
+                "api_key": "secret",
+            },
+        ).json()
+        client.post(
+            f"/v1/model-services/{connection['id']}/models",
+            headers={"Authorization": "Bearer tok"},
+            json={"model_id": "gpt-image-1"},
+        )
+        verified = client.post(
+            f"/v1/model-services/{connection['id']}/models/gpt-image-1/verify",
+            headers={"Authorization": "Bearer tok"},
+            json={
+                "capability": "image_generation",
+                "protocol": "openai_images_generations",
+            },
+        )
+        catalog = client.get(
+            "/v1/models",
+            headers={"Authorization": "Bearer tok"},
+        ).json()["models"]
+
+    assert verified.status_code == 200
+    assert verified.json() == {
+        "model_id": "gpt-image-1",
+        "display_name": "gpt-image-1",
+        "capabilities": [
+            {
+                "capability": "image_generation",
+                "protocol": "openai_images_generations",
+                "verification": "verified",
+            }
+        ],
+        "source": "manual",
+        "verification": "verified",
+        "recommended": False,
+        "tool_calling": False,
+        "streaming": False,
+        "image_inputs": False,
+        "max_input_tokens": None,
+        "max_output_tokens": None,
+    }
+    assert requests[0].url == "https://gateway.example/v1/images/generations"
+    assert json.loads(requests[0].content)["model"] == "gpt-image-1"
+    assert catalog[0]["available"] is False
+
+
+@pytest.mark.asyncio
+async def test_image_generation_reports_newapi_missing_channel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            500,
+            json={
+                "error": {
+                    "message": "分组 Codex 下模型 gpt-image-2 的可用渠道不存在（retry）",
+                    "type": "new_api_error",
+                    "code": "get_channel_failed",
+                }
+            },
+        )
+
+    class PatchedClient(httpx.AsyncClient):
+        def __init__(self, **kwargs) -> None:
+            super().__init__(transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(server_module.httpx, "AsyncClient", PatchedClient)
+
+    with pytest.raises(server_module.HTTPException) as exc_info:
+        await server_module._verify_model_image_generation(
+            settings=reset_settings_for_tests(),
+            base_url="https://gateway.example/v1",
+            api_key="secret",
+            model_id="gpt-image-2",
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["code"] == "model_unavailable"
+    assert "分组 Codex 下模型 gpt-image-2 的可用渠道不存在" in exc_info.value.detail["message"]
+
+
+def test_model_keeps_multiple_verified_capabilities_and_binds_image_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    credential_vault: dict[str, str],
+) -> None:
+    settings = reset_settings_for_tests(
+        SHEJANE_RUNTIME_TOKEN="tok",
+        data_dir=tmp_path,
+    )
+    monkeypatch.setattr(RunCoordinator, "start", lambda _self: None)
+
+    async def detected(**kwargs):
+        return [], "ready" if kwargs["adapter_id"] == "openai_chat" else "unavailable"
+
+    async def compatible(**_kwargs):
+        return None
+
+    monkeypatch.setattr(server_module, "_refresh_model_service_models", detected)
+    monkeypatch.setattr(server_module, "_verify_model_service_capability", compatible)
+
+    with TestClient(create_app(settings)) as client:
+        connection = client.post(
+            "/v1/model-services",
+            headers={"Authorization": "Bearer tok"},
+            json={
+                "preset_id": "custom",
+                "name": "Gateway",
+                "base_url": "https://gateway.example/v1",
+                "api_key": "secret",
+            },
+        ).json()
+        client.post(
+            f"/v1/model-services/{connection['id']}/models",
+            headers={"Authorization": "Bearer tok"},
+            json={"model_id": "multi-model"},
+        )
+
+        for capability, protocol in (
+            ("agent_chat", "openai_chat_completions"),
+            ("image_generation", "openai_images_generations"),
+        ):
+            verified = client.post(
+                f"/v1/model-services/{connection['id']}/models/multi-model/verify",
+                headers={"Authorization": "Bearer tok"},
+                json={"capability": capability, "protocol": protocol},
+            )
+            assert verified.status_code == 200
+
+        model = verified.json()
+        assert model["capabilities"] == [
+            {
+                "capability": "agent_chat",
+                "protocol": "openai_chat_completions",
+                "verification": "verified",
+            },
+            {
+                "capability": "image_generation",
+                "protocol": "openai_images_generations",
+                "verification": "verified",
+            },
+        ]
+
+        bound = client.put(
+            "/v1/model-capability-bindings/image_generation",
+            headers={"Authorization": "Bearer tok"},
+            json={"model_spec": f"local:{connection['id']}:multi-model"},
+        )
+        listed = client.get(
+            "/v1/model-capability-bindings",
+            headers={"Authorization": "Bearer tok"},
+        )
+
+    assert bound.status_code == 200
+    assert bound.json()["capability"] == "image_generation"
+    assert bound.json()["model_spec"] == f"local:{connection['id']}:multi-model"
+    assert listed.json() == {"bindings": [bound.json()]}
+
+
+def test_model_verification_rejects_a_concurrently_reconnected_service(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    credential_vault: dict[str, str],
+) -> None:
+    settings = reset_settings_for_tests(
+        SHEJANE_RUNTIME_TOKEN="tok",
+        data_dir=tmp_path,
+    )
+    monkeypatch.setattr(RunCoordinator, "start", lambda _self: None)
+
+    async def detected(**kwargs):
+        return [], "ready" if kwargs["adapter_id"] == "openai_chat" else "unavailable"
+
+    connection_id = ""
+
+    async def reconnect_during_probe(**_kwargs):
+        row = await app.state.store.get_model_connection(
+            principal_id=server_module.LOCAL_OWNER_PRINCIPAL_ID,
+            connection_id=connection_id,
+        )
+        assert row is not None
+        await app.state.store.replace_model_connection_credential(
+            principal_id=server_module.LOCAL_OWNER_PRINCIPAL_ID,
+            connection_id=connection_id,
+            credential_ref=str(row["credential_ref"]),
+            base_url=str(row["base_url"]),
+            models=server_module._model_connection_models(row),
+            catalog_status=str(row["catalog_status"]),
+        )
+
+    monkeypatch.setattr(server_module, "_refresh_model_service_models", detected)
+    monkeypatch.setattr(server_module, "_verify_model_service_capability", reconnect_during_probe)
+    app = create_app(settings)
+
+    with TestClient(app) as client:
+        connection = client.post(
+            "/v1/model-services",
+            headers={"Authorization": "Bearer tok"},
+            json={
+                "preset_id": "custom",
+                "name": "Gateway",
+                "base_url": "https://gateway.example/v1",
+                "api_key": "secret",
+            },
+        ).json()
+        connection_id = connection["id"]
+        client.post(
+            f"/v1/model-services/{connection_id}/models",
+            headers={"Authorization": "Bearer tok"},
+            json={"model_id": "private-model"},
+        )
+        verified = client.post(
+            f"/v1/model-services/{connection_id}/models/private-model/verify",
+            headers={"Authorization": "Bearer tok"},
+            json={
+                "capability": "agent_chat",
+                "protocol": "openai_chat_completions",
+            },
+        )
+
+    assert verified.status_code == 409
+    assert verified.json()["detail"]["code"] == "model_service_changed"

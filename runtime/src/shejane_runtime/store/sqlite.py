@@ -115,6 +115,20 @@ CREATE TABLE IF NOT EXISTS model_connections (
     PRIMARY KEY (principal_id, id)
 );
 
+CREATE TABLE IF NOT EXISTS model_capability_bindings (
+    principal_id TEXT NOT NULL,
+    capability TEXT NOT NULL CHECK (capability IN ('image_generation', 'image_editing')),
+    connection_id TEXT NOT NULL,
+    connection_version INTEGER NOT NULL CHECK (connection_version >= 1),
+    model_id TEXT NOT NULL,
+    protocol TEXT NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (principal_id, capability),
+    FOREIGN KEY (principal_id, connection_id)
+        REFERENCES model_connections(principal_id, id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS local_runtime_settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     settings_json TEXT NOT NULL,
@@ -2517,6 +2531,86 @@ class LocalStore:
             principal_id=principal_id,
             connection_id=connection_id,
         )
+
+    async def list_model_capability_bindings(
+        self,
+        *,
+        principal_id: str,
+    ) -> list[dict[str, Any]]:
+        rows = await (
+            await self._conn.execute(
+                "SELECT * FROM model_capability_bindings "
+                "WHERE principal_id = ? ORDER BY capability",
+                (principal_id,),
+            )
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    async def get_model_capability_binding(
+        self,
+        *,
+        principal_id: str,
+        capability: str,
+    ) -> dict[str, Any] | None:
+        row = await (
+            await self._conn.execute(
+                "SELECT * FROM model_capability_bindings WHERE principal_id = ? AND capability = ?",
+                (principal_id, capability),
+            )
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    async def set_model_capability_binding(
+        self,
+        *,
+        principal_id: str,
+        capability: str,
+        connection_id: str,
+        connection_version: int,
+        model_id: str,
+        protocol: str,
+    ) -> dict[str, Any]:
+        cursor = await self._conn.execute(
+            "INSERT INTO model_capability_bindings "
+            "(principal_id, capability, connection_id, connection_version, model_id, "
+            "protocol, revision, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?) "
+            "ON CONFLICT(principal_id, capability) DO UPDATE SET "
+            "connection_id = excluded.connection_id, "
+            "connection_version = excluded.connection_version, "
+            "model_id = excluded.model_id, protocol = excluded.protocol, "
+            "revision = model_capability_bindings.revision + 1, "
+            "updated_at = excluded.updated_at RETURNING *",
+            (
+                principal_id,
+                capability,
+                connection_id,
+                connection_version,
+                model_id,
+                protocol,
+                _now(),
+            ),
+        )
+        row = await cursor.fetchone()
+        assert row is not None
+        return dict(row)
+
+    async def delete_model_capability_binding(
+        self,
+        *,
+        principal_id: str,
+        capability: str,
+    ) -> dict[str, Any] | None:
+        existing = await self.get_model_capability_binding(
+            principal_id=principal_id,
+            capability=capability,
+        )
+        if existing is None:
+            return None
+        await self._conn.execute(
+            "DELETE FROM model_capability_bindings WHERE principal_id = ? AND capability = ?",
+            (principal_id, capability),
+        )
+        return existing
 
     # --- workspaces ---
 

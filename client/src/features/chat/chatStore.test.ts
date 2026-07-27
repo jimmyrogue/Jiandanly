@@ -218,6 +218,22 @@ describe('runtime timeline', () => {
     })
   })
 
+  it('keeps image Artifact media types for inline rendering', () => {
+    expect(timelineItem({
+      event_type: 'artifact.created',
+      payload: {
+        artifact_id: 'art-image',
+        title: 'generated-image-1.png',
+        tool: 'image.generate',
+        media_type: 'image/png',
+      },
+    })).toMatchObject({
+      artifactId: 'art-image',
+      artifactTool: 'image.generate',
+      artifactMediaType: 'image/png',
+    })
+  })
+
   it('renders local harness budget warnings with a readable label', () => {
     expect(timelineItem({ event_type: 'run.budget_warning', payload: { reason: 'max_steps_reached', max_steps: 12 } })).toMatchObject({
       label: '工具步数达到上限，正在整理已有结果',

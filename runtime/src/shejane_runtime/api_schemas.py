@@ -111,11 +111,47 @@ class UpdateRuntimeSettingsRequest(BaseModel):
     pii_redact: str | None = Field(default=None, max_length=200)
 
 
+ModelCapabilityName = Literal[
+    "agent_chat",
+    "image_understanding",
+    "image_generation",
+    "image_editing",
+]
+ModelProtocol = Literal[
+    "openai_chat_completions",
+    "anthropic_messages",
+    "openai_images_generations",
+    "openai_images_edits",
+]
+ModelVerification = Literal["verified", "unverified"]
+
+
+class ModelCapability(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    capability: ModelCapabilityName
+    protocol: ModelProtocol
+    verification: ModelVerification = "unverified"
+
+    @model_validator(mode="after")
+    def validate_protocol(self) -> ModelCapability:
+        valid = {
+            "agent_chat": {"openai_chat_completions", "anthropic_messages"},
+            "image_understanding": {"openai_chat_completions", "anthropic_messages"},
+            "image_generation": {"openai_images_generations"},
+            "image_editing": {"openai_images_edits"},
+        }[self.capability]
+        if self.protocol not in valid:
+            raise ValueError("protocol does not support the selected model capability")
+        return self
+
+
 class ModelCapabilityProfile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     model_id: str = Field(min_length=1, max_length=200, pattern=r"^\S+$")
     display_name: str = Field(min_length=1, max_length=100)
+    capabilities: list[ModelCapability] = Field(default_factory=list, max_length=4)
     tool_calling: bool = True
     streaming: bool = True
     image_inputs: bool = False
@@ -129,6 +165,7 @@ class LocalRuntimeModel(BaseModel):
     display_name: str
     connection_id: str
     service_name: str
+    capabilities: list[ModelCapability]
     tool_calling: bool
     streaming: bool
     image_inputs: bool
@@ -165,7 +202,6 @@ class ModelServicePresetCatalog(BaseModel):
 
 ModelAdapterID = Literal["openai_chat", "anthropic_messages"]
 ModelCatalogStatus = Literal["ready", "stale", "unavailable"]
-ModelVerification = Literal["verified", "unverified"]
 ModelSource = Literal["bundled", "discovered", "manual"]
 
 
@@ -229,6 +265,47 @@ class AddModelServiceModelRequest(BaseModel):
 
     model_id: str = Field(min_length=1, max_length=200, pattern=r"^\S+$")
     display_name: str | None = Field(default=None, min_length=1, max_length=100)
+
+
+class VerifyModelServiceModelRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    capability: ModelCapabilityName
+    protocol: ModelProtocol
+
+    @model_validator(mode="after")
+    def validate_protocol_for_capability(self) -> VerifyModelServiceModelRequest:
+        ModelCapability(
+            capability=self.capability,
+            protocol=self.protocol,
+            verification="unverified",
+        )
+        return self
+
+
+BindableModelCapability = Literal["image_generation", "image_editing"]
+
+
+class ModelCapabilityBinding(BaseModel):
+    capability: BindableModelCapability
+    model_spec: str = Field(pattern=RUNTIME_MODEL_PATTERN)
+    connection_id: str
+    connection_version: int = Field(ge=1)
+    model_id: str
+    protocol: ModelProtocol
+    status: Literal["ready", "stale"]
+    revision: int = Field(ge=1)
+    updated_at: str
+
+
+class ListModelCapabilityBindingsResponse(BaseModel):
+    bindings: list[ModelCapabilityBinding]
+
+
+class SetModelCapabilityBindingRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model_spec: str = Field(pattern=RUNTIME_MODEL_PATTERN)
 
 
 # ---------------------------------------------------------------------------
@@ -467,6 +544,10 @@ class CreateRunRequest(BaseModel):
     )
     protocol_version: int = Field(ge=1, le=65_535)
     required_capabilities: list[str] = Field(max_length=32)
+    required_tools: list[Literal["image.generate", "image.edit"]] = Field(
+        default_factory=list,
+        max_length=2,
+    )
     goal: str = Field(max_length=131_072)
     user_input: str | None = Field(default=None, max_length=131_072)
     thread_title: str | None = Field(default=None, max_length=512)
@@ -500,6 +581,8 @@ class CreateRunRequest(BaseModel):
             raise ValueError("assistant_message_id must differ from client_message_id")
         if _has_invalid_capability_name(self.required_capabilities):
             raise ValueError("required_capabilities contains an invalid capability name")
+        if len(self.required_tools) != len(set(self.required_tools)):
+            raise ValueError("required_tools must contain unique tool names")
         plugin_ids = [reference.plugin_id for reference in self.plugin_refs]
         if len(plugin_ids) != len(set(plugin_ids)):
             raise ValueError("plugin_refs must contain unique plugin ids")

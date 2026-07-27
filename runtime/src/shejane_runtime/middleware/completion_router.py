@@ -150,6 +150,37 @@ class CompletionRouterMiddleware(AgentMiddleware):
         if incremental is not None:
             return incremental
 
+        context = getattr(runtime, "context", None)
+        required_tools = tuple(getattr(context, "required_tools", ()) or ())
+        missing_tools = _missing_required_tools(messages, required_tools, run_id)
+        if missing_tools:
+            attempts = _route_attempts_for_run(state, run_id, "required_tool_missing")
+            names = ", ".join(missing_tools)
+            if attempts >= 1:
+                return _terminal_route(
+                    "blocked",
+                    "required_tool_missing",
+                    f"The model did not complete the required tool call: {names}.",
+                    recoverable=True,
+                    run_id=run_id,
+                )
+            return {
+                "completion_route": {
+                    "decision": "repair_requested",
+                    "reason": "required_tool_missing",
+                    "message": f"Required tool call is missing: {names}.",
+                    "recoverable": True,
+                    "attempts": 1,
+                    "max_attempts": 1,
+                    "run_id": run_id,
+                    "instruction": (
+                        f"The user explicitly selected {names}. Call the required tool now. "
+                        "Do not claim completion until its ToolMessage reports success."
+                    ),
+                },
+                "jump_to": "model",
+            }
+
         verification = _latest_task_verification(messages)
         if verification is not None and not verification["ok"]:
             attempts = _repair_attempts_for_run(state, run_id)
@@ -961,6 +992,36 @@ def _route_attempts_for_run(state: Any, run_id: str, reason: str) -> int:
     if route.get("run_id") != run_id or route.get("reason") != reason:
         return 0
     return _int_state(route.get("attempts"))
+
+
+def _missing_required_tools(
+    messages: list[Any],
+    required_tools: tuple[str, ...],
+    run_id: str,
+) -> list[str]:
+    if not required_tools:
+        return []
+    turn_messages = messages
+    for index in range(len(messages) - 1, -1, -1):
+        kwargs = getattr(messages[index], "additional_kwargs", None)
+        if (
+            isinstance(kwargs, dict)
+            and kwargs.get("runtime_kind") == "task_input"
+            and (not run_id or kwargs.get("runtime_run_id") == run_id)
+        ):
+            turn_messages = messages[index + 1 :]
+            break
+    completed: set[str] = set()
+    for message in turn_messages:
+        if not isinstance(message, ToolMessage):
+            continue
+        name = str(getattr(message, "name", "") or "")
+        # A denied or failed paid image request still satisfies the requirement
+        # to attempt the selected tool. Other completion checks prevent a false
+        # success claim without automatically repeating a paid side effect.
+        if name in required_tools:
+            completed.add(name)
+    return [name for name in required_tools if name not in completed]
 
 
 def _parse_tool_content(content: Any) -> Any:

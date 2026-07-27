@@ -1758,9 +1758,6 @@ function useAppContentViewModel() {
     const functionsForRun = !settingsOverride ? draftFunctions : []
     const mcpsForRun = !settingsOverride ? draftMcps : []
     const directives: string[] = []
-    if (functionsForRun.includes('image')) {
-      directives.push(t('functions.imageDirective'))
-    }
     if (skillsForRun.length > 0) {
       directives.push(t('skills.useDirective', { names: skillsForRun.join('、') }))
     }
@@ -1813,6 +1810,7 @@ function useAppContentViewModel() {
       goal,
       workspacePath: conversation.workspace?.path.trim() || undefined,
       attachmentPaths: attachments.map((attachment) => attachment.path),
+      requiredTools: functionsForRun.includes('image') ? ['image.generate'] : undefined,
       history: runtimeThreadIDsRef.current.has(conversation.id)
         ? undefined
         : deriveAgentHistory(priorMessages),
@@ -3408,6 +3406,9 @@ function AppChatWorkspace({ view }: { view: AppContentViewModel }) {
         conversation={activeConversation}
         workspaceRoot={activeWorkspace?.path}
         onOpenArtifact={(artifactID) => void openLocalArtifact(artifactID)}
+        onLoadArtifactContent={runtimeConnection
+          ? (artifactID) => getLocalArtifactContent(artifactID, runtimeConnection)
+          : undefined}
         onOpenDiagnostics={setPendingDiagnosticsRunID}
         onPreviewLocalFile={openLocalDocument}
         onLocalFileContextMenu={(ref) => void showLocalFileContextMenu(ref)}

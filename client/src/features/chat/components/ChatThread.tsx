@@ -13,6 +13,7 @@ export function ChatThread({
   conversation,
   workspaceRoot,
   onOpenArtifact,
+  onLoadArtifactContent,
   onOpenDiagnostics,
   onPreviewLocalFile,
   onLocalFileContextMenu,
@@ -28,6 +29,7 @@ export function ChatThread({
    *  Runtime projection is still converging. */
   workspaceRoot?: string
   onOpenArtifact: (artifactID: string) => void
+  onLoadArtifactContent?: (artifactID: string) => Promise<Blob>
   onOpenDiagnostics: (runID: string) => void
   /** Open supported local files in the right-side preview. */
   onPreviewLocalFile?: (ref: LocalFileRef) => void
@@ -128,6 +130,7 @@ export function ChatThread({
                 onEditResend={onEditResendMessage}
                 onDelete={onDeleteMessage}
                 onOpenDiagnostics={onOpenDiagnostics}
+                onLoadArtifactContent={onLoadArtifactContent}
                 runActive={runActive}
               >
                 <AgentProgress

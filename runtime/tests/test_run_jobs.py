@@ -139,6 +139,90 @@ async def test_worker_rechecks_frozen_model_credential_reference(tmp_path: Path)
         await store.close()
 
 
+async def test_run_admission_freezes_required_image_generation_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = await LocalStore.open(tmp_path / "local.db")
+    coordinator = RunCoordinator(
+        store=store,
+        checkpointer=None,  # type: ignore[arg-type]
+        settings=Settings(SHEJANE_FAKE_LLM=False),
+    )
+    monkeypatch.setattr("shejane_runtime.runs.get_model_api_key", lambda *_args: _async("secret"))
+    try:
+        models = [
+            {
+                "model_id": "agent-model",
+                "display_name": "Agent",
+                "source": "manual",
+                "tool_calling": True,
+                "streaming": True,
+                "capabilities": [
+                    {
+                        "capability": "agent_chat",
+                        "protocol": "openai_chat_completions",
+                        "verification": "verified",
+                    }
+                ],
+            },
+            {
+                "model_id": "image-model",
+                "display_name": "Image",
+                "source": "manual",
+                "capabilities": [
+                    {
+                        "capability": "image_generation",
+                        "protocol": "openai_images_generations",
+                        "verification": "verified",
+                    }
+                ],
+            },
+        ]
+        await store.create_model_connection(
+            principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+            connection_id="conn-models",
+            preset_id="custom",
+            name="Models",
+            region="custom",
+            adapter_id="openai_chat",
+            base_url="https://models.example/v1",
+            requires_api_key=True,
+            credential_ref="keyring:model-service:conn-models",
+            models=models,
+            catalog_status="ready",
+        )
+        await store.set_model_capability_binding(
+            principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+            capability="image_generation",
+            connection_id="conn-models",
+            connection_version=1,
+            model_id="image-model",
+            protocol="openai_images_generations",
+        )
+
+        run = await coordinator.start_run(
+            principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+            command_id="cmd_image_binding",
+            client_message_id="msg_image_binding",
+            protocol_version=1,
+            required_capabilities=["agent.run", "agent.stream"],
+            required_tools=["image.generate"],
+            goal="draw",
+            mode="local:conn-models:agent-model",
+        )
+
+        settings = json.loads(run["settings_json"])
+        assert settings["_required_tools"] == ["image.generate"]
+        assert settings["_capability_bindings"]["image_generation"]["model_id"] == "image-model"
+    finally:
+        await store.close()
+
+
+async def _async(value: Any) -> Any:
+    return value
+
+
 async def test_preflight_crash_is_persisted_as_a_failed_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

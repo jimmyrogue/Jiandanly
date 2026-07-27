@@ -236,6 +236,7 @@ export function timelineItem(event: AgentRunEvent, t: Translator = createTransla
         artifactId: stringValue(payload.artifact_id),
         artifactTitle: title,
         artifactTool: tool,
+        artifactMediaType: stringValue(payload.media_type),
       }
     }
     case 'verification.completed': {

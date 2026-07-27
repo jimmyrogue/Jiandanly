@@ -1026,7 +1026,7 @@ async def build_agent(
     if workspace_root is None and resource_stack is None:
         raise RuntimeError("no-workspace execution requires a resource stack")
 
-    tools = await build_tools()
+    tools = await build_tools(runtime_context=runtime_context)
     catalog = mcp_catalog or MCPToolCatalog(settings.data_dir)
     if mcp_catalog is None and resource_stack is not None:
         resource_stack.push_async_callback(catalog.close)

@@ -50,6 +50,8 @@ def approval_policy_decision(
     """Return the Runtime-owned P10 decision before optional model review."""
     if tool_name in IRREVERSIBLE_TOOLS:
         return ApprovalPolicyDecision("ask", "irreversible")
+    if tool_name == "image.generate":
+        return ApprovalPolicyDecision("allow", "image_generation")
     if permission_mode == "full_access":
         return ApprovalPolicyDecision("allow", "full_access")
     if tool_name == "clipboard.read":

@@ -452,6 +452,18 @@
             "title": "Required Capabilities",
             "type": "array"
           },
+          "required_tools": {
+            "items": {
+              "enum": [
+                "image.generate",
+                "image.edit"
+              ],
+              "type": "string"
+            },
+            "maxItems": 2,
+            "title": "Required Tools",
+            "type": "array"
+          },
           "settings": {
             "anyOf": [
               {
@@ -1940,6 +1952,22 @@
         "title": "LatestCheckpoint",
         "type": "object"
       },
+      "ListModelCapabilityBindingsResponse": {
+        "properties": {
+          "bindings": {
+            "items": {
+              "$ref": "#/components/schemas/ModelCapabilityBinding"
+            },
+            "title": "Bindings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "bindings"
+        ],
+        "title": "ListModelCapabilityBindingsResponse",
+        "type": "object"
+      },
       "ListModelServiceConnectionsResponse": {
         "properties": {
           "services": {
@@ -2520,6 +2548,13 @@
             "title": "Available",
             "type": "boolean"
           },
+          "capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/ModelCapability"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          },
           "connection_id": {
             "title": "Connection Id",
             "type": "string"
@@ -2593,6 +2628,7 @@
           "display_name",
           "connection_id",
           "service_name",
+          "capabilities",
           "tool_calling",
           "streaming",
           "image_inputs",
@@ -3366,6 +3402,116 @@
         "title": "McpServerWriteResponse",
         "type": "object"
       },
+      "ModelCapability": {
+        "additionalProperties": false,
+        "properties": {
+          "capability": {
+            "enum": [
+              "agent_chat",
+              "image_understanding",
+              "image_generation",
+              "image_editing"
+            ],
+            "title": "Capability",
+            "type": "string"
+          },
+          "protocol": {
+            "enum": [
+              "openai_chat_completions",
+              "anthropic_messages",
+              "openai_images_generations",
+              "openai_images_edits"
+            ],
+            "title": "Protocol",
+            "type": "string"
+          },
+          "verification": {
+            "default": "unverified",
+            "enum": [
+              "verified",
+              "unverified"
+            ],
+            "title": "Verification",
+            "type": "string"
+          }
+        },
+        "required": [
+          "capability",
+          "protocol"
+        ],
+        "title": "ModelCapability",
+        "type": "object"
+      },
+      "ModelCapabilityBinding": {
+        "properties": {
+          "capability": {
+            "enum": [
+              "image_generation",
+              "image_editing"
+            ],
+            "title": "Capability",
+            "type": "string"
+          },
+          "connection_id": {
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "connection_version": {
+            "minimum": 1.0,
+            "title": "Connection Version",
+            "type": "integer"
+          },
+          "model_id": {
+            "title": "Model Id",
+            "type": "string"
+          },
+          "model_spec": {
+            "pattern": "^local:[^:\\s]+:\\S+$",
+            "title": "Model Spec",
+            "type": "string"
+          },
+          "protocol": {
+            "enum": [
+              "openai_chat_completions",
+              "anthropic_messages",
+              "openai_images_generations",
+              "openai_images_edits"
+            ],
+            "title": "Protocol",
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 1.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "stale"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "capability",
+          "model_spec",
+          "connection_id",
+          "connection_version",
+          "model_id",
+          "protocol",
+          "status",
+          "revision",
+          "updated_at"
+        ],
+        "title": "ModelCapabilityBinding",
+        "type": "object"
+      },
       "ModelServiceConnection": {
         "properties": {
           "adapter_id": {
@@ -3454,6 +3600,14 @@
       "ModelServiceModel": {
         "additionalProperties": false,
         "properties": {
+          "capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/ModelCapability"
+            },
+            "maxItems": 4,
+            "title": "Capabilities",
+            "type": "array"
+          },
           "display_name": {
             "maxLength": 100,
             "minLength": 1,
@@ -5629,6 +5783,21 @@
         "title": "RuntimeSettingsResponse",
         "type": "object"
       },
+      "SetModelCapabilityBindingRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "model_spec": {
+            "pattern": "^local:[^:\\s]+:\\S+$",
+            "title": "Model Spec",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model_spec"
+        ],
+        "title": "SetModelCapabilityBindingRequest",
+        "type": "object"
+      },
       "SkillDeleteResponse": {
         "properties": {
           "deleted": {
@@ -6109,6 +6278,37 @@
         ],
         "title": "ValidationError",
         "type": "object"
+      },
+      "VerifyModelServiceModelRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "capability": {
+            "enum": [
+              "agent_chat",
+              "image_understanding",
+              "image_generation",
+              "image_editing"
+            ],
+            "title": "Capability",
+            "type": "string"
+          },
+          "protocol": {
+            "enum": [
+              "openai_chat_completions",
+              "anthropic_messages",
+              "openai_images_generations",
+              "openai_images_edits"
+            ],
+            "title": "Protocol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "capability",
+          "protocol"
+        ],
+        "title": "VerifyModelServiceModelRequest",
+        "type": "object"
       }
     }
   },
@@ -6493,6 +6693,103 @@
         "summary": "Clear Memory"
       }
     },
+    "/v1/model-capability-bindings": {
+      "get": {
+        "operationId": "list_model_capability_bindings_v1_model_capability_bindings_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListModelCapabilityBindingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Model Capability Bindings"
+      }
+    },
+    "/v1/model-capability-bindings/{capability}": {
+      "delete": {
+        "operationId": "delete_model_capability_binding_v1_model_capability_bindings__capability__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capability",
+            "required": true,
+            "schema": {
+              "title": "Capability",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Model Capability Binding"
+      },
+      "put": {
+        "operationId": "set_model_capability_binding_v1_model_capability_bindings__capability__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capability",
+            "required": true,
+            "schema": {
+              "title": "Capability",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetModelCapabilityBindingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelCapabilityBinding"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Model Capability Binding"
+      }
+    },
     "/v1/model-services": {
       "get": {
         "operationId": "list_model_services_v1_model_services_get",
@@ -6756,6 +7053,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/VerifyModelServiceModelRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "content": {

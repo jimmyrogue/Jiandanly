@@ -30,6 +30,7 @@ function useMessageBubbleViewModel({
   onEditResend,
   onDelete,
   onOpenDiagnostics,
+  onLoadArtifactContent,
   runActive = false,
 }: {
   message: ChatMessage
@@ -47,6 +48,8 @@ function useMessageBubbleViewModel({
   onDelete?: (messageID: string) => void
   /** Open diagnostics for this Runtime-backed assistant turn. */
   onOpenDiagnostics?: (runID: string) => void
+  /** Load an authenticated Runtime Artifact body for inline image rendering. */
+  onLoadArtifactContent?: (artifactID: string) => Promise<Blob>
   /** True while a run is streaming for this conversation — disables the
    *  retry/edit/delete actions so the user can't mutate mid-run. */
   runActive?: boolean
@@ -172,6 +175,13 @@ function useMessageBubbleViewModel({
       ? t('message.waitingInput')
       : ''
   const content = message.content || waitingText
+  const generatedArtifactImageRefs = new Set((message.agentEvents ?? []).flatMap((event) => (
+    event.type === 'artifact.created'
+    && (event.artifactTool === 'image.generate' || event.artifactTool === 'image.edit')
+    && event.artifactMediaType?.startsWith('image/')
+      ? [event.artifactTitle ?? '', event.artifactId ?? ''].filter(Boolean)
+      : []
+  )))
   const hideFailedAssistantContent = isFailureOnlyAssistantContent(message)
   // Action affordances appear on settled turns only (not mid-stream).
   const settled = message.status === 'done' || message.status === 'error'
@@ -226,7 +236,7 @@ function useMessageBubbleViewModel({
     </div>
   ) : null
 
-  return { attachmentCards, canDelete, canEdit, canRegenerate, cancelEdit, children, commitEdit, content, copied, copyFailed, editText, editing, handleCopy, hideFailedAssistantContent, isAssistant, message, messageTime, onDelete, onLocalFileContextMenu, onOpenDiagnostics, onPreviewLocalFile, onRegenerate, runActive, setEditText, showStream, showUsage, startEdit, stream, t, usageParts, waitingText, workspaceRoot }
+  return { attachmentCards, canDelete, canEdit, canRegenerate, cancelEdit, children, commitEdit, content, copied, copyFailed, editText, editing, generatedArtifactImageRefs, handleCopy, hideFailedAssistantContent, isAssistant, message, messageTime, onDelete, onLoadArtifactContent, onLocalFileContextMenu, onOpenDiagnostics, onPreviewLocalFile, onRegenerate, runActive, setEditText, showStream, showUsage, startEdit, stream, t, usageParts, waitingText, workspaceRoot }
 }
 
 export function MessageBubble(props: Parameters<typeof useMessageBubbleViewModel>[0]) {
@@ -234,7 +244,7 @@ export function MessageBubble(props: Parameters<typeof useMessageBubbleViewModel
 }
 
 function MessageBubbleView({ view }: { view: ReturnType<typeof useMessageBubbleViewModel> }) {
-  const { attachmentCards, canDelete, canEdit, canRegenerate, cancelEdit, children, commitEdit, content, copied, copyFailed, editText, editing, handleCopy, hideFailedAssistantContent, isAssistant, message, messageTime, onDelete, onLocalFileContextMenu, onOpenDiagnostics, onPreviewLocalFile, onRegenerate, runActive, setEditText, showStream, showUsage, startEdit, stream, t, usageParts, waitingText, workspaceRoot } = view
+  const { attachmentCards, canDelete, canEdit, canRegenerate, cancelEdit, children, commitEdit, content, copied, copyFailed, editText, editing, generatedArtifactImageRefs, handleCopy, hideFailedAssistantContent, isAssistant, message, messageTime, onDelete, onLoadArtifactContent, onLocalFileContextMenu, onOpenDiagnostics, onPreviewLocalFile, onRegenerate, runActive, setEditText, showStream, showUsage, startEdit, stream, t, usageParts, waitingText, workspaceRoot } = view
   return (
     <article className={cn('message', message.role)}>
       {!isAssistant ? attachmentCards : null}
@@ -292,6 +302,7 @@ function MessageBubbleView({ view }: { view: ReturnType<typeof useMessageBubbleV
             stream.text ? (
               <MarkdownContent
                 content={completePartialMarkdown(stream.text)}
+                generatedArtifactImageRefs={generatedArtifactImageRefs}
                 workspaceRoot={workspaceRoot}
                 onPreviewLocalFile={onPreviewLocalFile}
                 onLocalFileContextMenu={onLocalFileContextMenu}
@@ -302,6 +313,7 @@ function MessageBubbleView({ view }: { view: ReturnType<typeof useMessageBubbleV
           ) : hideFailedAssistantContent ? null : (
             <MarkdownContent
               content={content}
+              generatedArtifactImageRefs={generatedArtifactImageRefs}
               normalizeHeadings
               workspaceRoot={workspaceRoot}
               onPreviewLocalFile={onPreviewLocalFile}
@@ -315,6 +327,12 @@ function MessageBubbleView({ view }: { view: ReturnType<typeof useMessageBubbleV
          *  the actual chart instead of just LLM prose describing it (or,
          *  worse, the model's hallucinated `![](imgbb.com/…)` URL). */}
         {isAssistant ? <CodeExecutionImages events={message.agentEvents} /> : null}
+        {isAssistant ? (
+          <GeneratedArtifactImages
+            events={message.agentEvents}
+            onLoadArtifactContent={onLoadArtifactContent}
+          />
+        ) : null}
         {children}
       </div>
       <div className="message-meta">
@@ -461,12 +479,14 @@ function formatUsageNumber(value: number, locale: string): string {
 
 function MarkdownContent({
   content,
+  generatedArtifactImageRefs,
   normalizeHeadings = false,
   workspaceRoot,
   onPreviewLocalFile,
   onLocalFileContextMenu,
 }: {
   content: string
+  generatedArtifactImageRefs?: ReadonlySet<string>
   normalizeHeadings?: boolean
   workspaceRoot?: string
   onPreviewLocalFile?: (ref: LocalFileRef) => void
@@ -503,7 +523,13 @@ function MarkdownContent({
       remarkPlugins={remarkPlugins}
       components={{
         a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer" />,
-        img: ({ node: _node, src, alt }) => <ChatImage src={typeof src === 'string' ? src : undefined} alt={alt} />,
+        img: ({ node: _node, src, alt }) => {
+          const source = typeof src === 'string' ? src : undefined
+          const filename = source ? pathBasename(source.split(/[?#]/, 1)[0]) : ''
+          return filename && generatedArtifactImageRefs?.has(filename)
+            ? null
+            : <ChatImage src={source} alt={alt} />
+        },
         p: ({ children }) => <p>{renderChildren(children)}</p>,
         li: ({ children }) => <li>{renderChildren(children)}</li>,
         td: ({ children }) => <td>{renderChildren(children)}</td>,
@@ -806,6 +832,67 @@ function CodeExecutionImages({ events }: { events?: AgentTimelineItem[] }) {
           className="message-code-image"
           loading="lazy"
         />
+      ))}
+    </div>
+  )
+}
+
+function GeneratedArtifactImages({
+  events,
+  onLoadArtifactContent,
+}: {
+  events?: AgentTimelineItem[]
+  onLoadArtifactContent?: (artifactID: string) => Promise<Blob>
+}) {
+  const [images, setImages] = useState<Array<{ id: string; title: string; url: string }>>([])
+  const loaderRef = useRef(onLoadArtifactContent)
+  loaderRef.current = onLoadArtifactContent
+
+  useEffect(() => {
+    const loader = loaderRef.current
+    const artifacts = (events ?? []).filter((item) => (
+      item.type === 'artifact.created'
+      && (item.artifactTool === 'image.generate' || item.artifactTool === 'image.edit')
+      && item.artifactMediaType?.startsWith('image/')
+      && item.artifactId
+    ))
+    if (!loader || artifacts.length === 0) {
+      setImages([])
+      return
+    }
+    let disposed = false
+    const createdURLs: string[] = []
+    void Promise.all(artifacts.map(async (artifact) => {
+      try {
+        const blob = await loader(artifact.artifactId!)
+        const url = URL.createObjectURL(blob)
+        createdURLs.push(url)
+        return {
+          id: artifact.artifactId!,
+          title: artifact.artifactTitle || artifact.artifactId!,
+          url,
+        }
+      } catch {
+        return undefined
+      }
+    })).then((loaded) => {
+      if (disposed) {
+        createdURLs.forEach((url) => URL.revokeObjectURL(url))
+        return
+      }
+      setImages(loaded.filter((item): item is NonNullable<typeof item> => Boolean(item)))
+    })
+    return () => {
+      disposed = true
+      createdURLs.forEach((url) => URL.revokeObjectURL(url))
+    }
+  }, [events, Boolean(onLoadArtifactContent)])
+
+  if (images.length === 0) return null
+  return (
+    <div className="message-code-images">
+      {images.map((image) => (
+        <ChatImage key={image.id} src={image.url} alt={image.title} />
       ))}
     </div>
   )
