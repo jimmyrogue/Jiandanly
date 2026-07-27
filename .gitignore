@@ -103,3 +103,4 @@ runtime/large_tool_results/
 
 # PyInstaller intermediate build dir for the frozen runtime (dist/ already ignored)
 runtime/build/
+drafts/
