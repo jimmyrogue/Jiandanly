@@ -117,6 +117,9 @@ jobs:
       - name: Unit suites + build
         run: make test build
 
+      - name: Deterministic Agent outcome gate
+        run: make eval-gate
+
   # The Windows Managed Worker host boundary uses Windows-only LPAC and Job
   # Object APIs, so it must compile and execute on a real Windows runner. This
   # gate intentionally proves only the native host confinement boundary; the

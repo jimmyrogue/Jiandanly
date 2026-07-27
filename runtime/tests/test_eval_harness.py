@@ -22,6 +22,7 @@ from shejane_runtime.eval import (
     heuristic_judge,
     make_llm_judge,
     parse_judgment,
+    report_payload,
 )
 from shejane_runtime.eval.__main__ import _required_model
 from shejane_runtime.eval.driver import HttpRuntimeDriver
@@ -86,6 +87,16 @@ def test_heuristic_requires_metered_real_model_calls() -> None:
     judgment = heuristic_judge(case, Trajectory())
     assert not judgment.passed
     assert any("model calls" in reason for reason in judgment.reasons)
+
+
+def test_heuristic_checks_final_workspace_results() -> None:
+    case = _case(expect=Expectation(files_contain={"result.txt": "READY"}))
+
+    assert heuristic_judge(
+        case,
+        Trajectory(workspace_results={"result.txt": "STATUS=READY"}),
+    ).passed
+    assert not heuristic_judge(case, Trajectory()).passed
 
 
 def test_evaluate_aggregates_pass_rate() -> None:
@@ -155,6 +166,56 @@ def test_http_driver_sends_the_strict_run_command(monkeypatch) -> None:
     assert "mode" not in run_request
 
 
+def test_http_driver_resolves_waits_and_captures_workspace_results(monkeypatch) -> None:
+    commands: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/workspaces"):
+            return httpx.Response(200, json={"id": "workspace_eval"})
+        if request.url.path.endswith("/runs"):
+            workspace = json.loads(request.content)["workspace_path"]
+            with open(f"{workspace}/result.txt", "w", encoding="utf-8") as output:
+                output.write("READY")
+            return httpx.Response(200, json={"id": "run_eval"})
+        if request.url.path.endswith("/commands"):
+            commands.append(json.loads(request.content))
+            return httpx.Response(200, json={"resolved": True, "resumed": True})
+        events = [
+            {
+                "event_type": "permission.required",
+                "payload": {"request_id": "perm_eval"},
+            },
+            {"event_type": "run.completed", "payload": {"final_text": "done"}},
+        ]
+        content = "".join(f"data: {json.dumps(event)}\n\n" for event in events)
+        return httpx.Response(
+            200,
+            content=f"{content}data: [DONE]\n\n".encode(),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    class PatchedClient(httpx.AsyncClient):
+        def __init__(self, **kwargs) -> None:
+            super().__init__(transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr("shejane_runtime.eval.driver.httpx.AsyncClient", PatchedClient)
+    trajectory = asyncio.run(
+        HttpRuntimeDriver("http://runtime", "tok").run(
+            _case(
+                workspace_files={"source.txt": "seed"},
+                permission_mode="ask",
+                permission_decision="approve",
+                expect=Expectation(files_contain={"result.txt": "READY"}),
+            )
+        )
+    )
+
+    assert commands[0]["type"] == "permission.resolve"
+    assert commands[0]["permission_id"] == "perm_eval"
+    assert trajectory.workspace_results == {"result.txt": "READY"}
+    assert trajectory.terminal_status == "completed"
+
+
 def test_required_model_accepts_a_concrete_runtime_model(monkeypatch) -> None:
     monkeypatch.setenv("SHEJANE_EVAL_MODEL", "local:provider:model")
     assert _required_model() == "local:provider:model"
@@ -203,3 +264,35 @@ def test_format_report_renders_pass_and_fail() -> None:
     report = asyncio.run(evaluate(cases, D(), heuristic_judge))
     out = format_report(report)
     assert "PASS" in out and "pass_rate=100%" in out
+
+
+def test_report_payload_records_trajectory_and_baseline_regressions() -> None:
+    case = _case(id="regressed", expect=Expectation(answer_contains=["expected"]))
+
+    class D:
+        async def run(self, _case: EvalCase) -> Trajectory:
+            return Trajectory(
+                final_text="missing",
+                terminal_status="completed",
+                event_counts={"run.completed": 1},
+                workspace_results={"result.txt": "actual"},
+            )
+
+    report = asyncio.run(evaluate([case], D(), heuristic_judge))
+    payload = report_payload(
+        report,
+        runtime_version="1.2.3",
+        model="local:provider:model",
+        baseline={
+            "summary": {"pass_rate": 1.0},
+            "results": [{"case_id": "regressed", "judgment": {"passed": True}}],
+        },
+        generated_at="2026-07-26T00:00:00+00:00",
+    )
+
+    assert payload["runtime_version"] == "1.2.3"
+    assert payload["comparison"]["pass_rate_delta"] == -1.0
+    assert payload["comparison"]["changed_cases"] == [
+        {"case_id": "regressed", "previous_passed": True, "passed": False}
+    ]
+    assert payload["results"][0]["trajectory"]["event_counts"] == {"run.completed": 1}

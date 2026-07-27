@@ -18,7 +18,7 @@
 	test test-client test-runtime test-runtime-sdk test-contract test-fixed-plugins-e2e test-e2e test-e2e-real test-packaged \
 	ci build build-client build-runtime build-runtime-sdk package-runtime \
 	lint schemas setup-hooks \
-	release eval \
+	release eval eval-gate \
 	logs logs-client logs-runtime
 
 help: ## Show this help
@@ -135,6 +135,22 @@ release: ## Cut a published release: COMPONENT=client|runtime-sdk VERSION=X.Y.Z
 ##@ Eval
 eval: ## Run the agent eval suite against a Runtime with a real provider
 	cd runtime && uv run python -m shejane_runtime.eval
+
+eval-gate: ## Deterministic core Agent outcome gate for CI and releases
+	@mkdir -p .tmp
+	cd runtime && uv run python -m pytest -q \
+		tests/test_eval_harness.py \
+		tests/test_e2e_capabilities.py::test_permission_mode_auto_executes_workspace_writes_without_prompt \
+		tests/test_e2e_capabilities.py::test_read_file_without_pagination_reads_a_normal_text_file_in_one_call \
+		tests/test_e2e_capabilities.py::test_capability_1b_permission_approve_resumes_the_run \
+		tests/test_e2e_capabilities.py::test_capability_2_subagent_task_surfaces_spawned_event \
+		tests/test_e2e_capabilities.py::test_capability_6_memory_middleware_injects_agents_md \
+		tests/test_e2e_capabilities.py::test_capability_7_todolist_middleware_exposes_write_todos_tool \
+		tests/test_e2e_capabilities.py::test_capability_9_memory_search_tool_in_agent \
+		tests/test_e2e_capabilities.py::test_capability_10_plan_first_is_a_runtime_gate_not_prompt_text \
+		tests/test_e2e_capabilities.py::test_capability_8_happy_path_run_completes \
+		tests/test_run_recovery.py::test_recover_orphans_fails_dead_runs_and_keeps_waiting \
+		--junitxml=../.tmp/eval-gate.xml
 
 ##@ Logs
 logs: ## Snapshot both Client and Runtime logs

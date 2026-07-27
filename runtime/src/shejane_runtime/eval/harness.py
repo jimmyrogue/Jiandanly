@@ -24,7 +24,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
 from typing import Protocol
 
 
@@ -42,6 +43,8 @@ class Expectation:
     min_model_calls: int = 0
     min_input_tokens: int = 0
     min_output_tokens: int = 0
+    # Relative workspace files whose final content must contain the value.
+    files_contain: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -52,6 +55,11 @@ class EvalCase:
     model: str = ""
     workspace_path: str | None = None
     settings: dict | None = None
+    workspace_files: dict[str, str] = field(default_factory=dict)
+    permission_mode: str = "auto"
+    permission_decision: str | None = None
+    question_answers: list[str] = field(default_factory=list)
+    approve_plans: bool = False
     # Free-text guidance for the LLM judge (ignored by the heuristic judge).
     rubric: str = ""
 
@@ -68,6 +76,9 @@ class Trajectory:
     output_tokens: int = 0
     failed: bool = False
     error: str = ""
+    terminal_status: str = ""
+    event_counts: dict[str, int] = field(default_factory=dict)
+    workspace_results: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -150,6 +161,14 @@ def heuristic_judge(case: EvalCase, traj: Trajectory) -> Judgment:
     for t in want:
         if t not in used:
             reasons.append(f"expected tool not used: {t}")
+    for path, expected in case.expect.files_contain.items():
+        actual = traj.workspace_results.get(path)
+        if actual is None:
+            correctness = 0.0
+            reasons.append(f"expected workspace file missing: {path}")
+        elif expected not in actual:
+            correctness = 0.0
+            reasons.append(f"workspace file {path} missing expected content: {expected!r}")
 
     efficiency = 1.0
     if case.expect.max_steps is not None and traj.steps > case.expect.max_steps:
@@ -261,6 +280,67 @@ def format_report(report: EvalReport) -> str:
         f"pass_rate={report.pass_rate:.0%}  mean_overall={report.mean_overall:.2f}  ({len(report.results)} cases)"
     )
     return "\n".join(lines)
+
+
+def report_payload(
+    report: EvalReport,
+    *,
+    runtime_version: str,
+    model: str,
+    baseline: dict | None = None,
+    generated_at: str | None = None,
+) -> dict:
+    results = [
+        {
+            "case_id": result.case_id,
+            "trajectory": asdict(result.trajectory),
+            "judgment": {**asdict(result.judgment), "overall": result.judgment.overall},
+        }
+        for result in report.results
+    ]
+    previous_results = {
+        str(result.get("case_id")): result
+        for result in (baseline or {}).get("results", [])
+        if isinstance(result, dict) and result.get("case_id")
+    }
+    changed = []
+    for result in results:
+        previous = previous_results.get(result["case_id"])
+        if previous is None:
+            continue
+        previous_passed = bool((previous.get("judgment") or {}).get("passed"))
+        passed = bool(result["judgment"]["passed"])
+        if previous_passed != passed:
+            changed.append(
+                {
+                    "case_id": result["case_id"],
+                    "previous_passed": previous_passed,
+                    "passed": passed,
+                }
+            )
+    previous_rate = (baseline or {}).get("summary", {}).get("pass_rate")
+    return {
+        "schema_version": 1,
+        "generated_at": generated_at or datetime.now(UTC).isoformat(),
+        "runtime_version": runtime_version,
+        "model": model,
+        "summary": {
+            "passed": report.passed,
+            "pass_rate": report.pass_rate,
+            "mean_overall": report.mean_overall,
+            "case_count": len(results),
+        },
+        "comparison": {
+            "baseline_pass_rate": previous_rate,
+            "pass_rate_delta": (
+                round(report.pass_rate - float(previous_rate), 3)
+                if isinstance(previous_rate, (int, float))
+                else None
+            ),
+            "changed_cases": changed,
+        },
+        "results": results,
+    }
 
 
 # Re-exported for the real driver module's type hints without importing httpx here.

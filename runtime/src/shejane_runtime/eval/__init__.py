@@ -19,6 +19,7 @@ from .harness import (
     heuristic_judge,
     make_llm_judge,
     parse_judgment,
+    report_payload,
 )
 
 __all__ = [
@@ -35,4 +36,5 @@ __all__ = [
     "heuristic_judge",
     "make_llm_judge",
     "parse_judgment",
+    "report_payload",
 ]

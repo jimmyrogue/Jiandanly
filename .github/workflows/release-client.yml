@@ -9,6 +9,29 @@ permissions:
   contents: write
 
 jobs:
+  agent-eval-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: runtime/uv.lock
+      - name: Install Runtime dependencies
+        working-directory: runtime
+        run: uv sync --frozen
+      - name: Gate release on deterministic Agent outcomes
+        run: make eval-gate
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: agent-eval-gate
+          path: .tmp/eval-gate.xml
+          if-no-files-found: error
+
   linux-arm64-runtime:
     runs-on: ubuntu-24.04-arm
     steps:
@@ -780,6 +803,7 @@ jobs:
 
   build:
     needs:
+      - agent-eval-gate
       - guest-rootfs
       - linux-arm64-documents-worker
       - linux-arm64-ffmpeg-runtime

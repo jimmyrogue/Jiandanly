@@ -13,16 +13,18 @@ mock-provider tell trips the `answer_excludes` check and cases fail loudly.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import sys
 from dataclasses import replace
+from pathlib import Path
 
 from shejane_runtime.api_schemas import RUNTIME_MODEL_PATTERN
 
 from .cases import CASES
 from .driver import HttpRuntimeDriver
-from .harness import evaluate, format_report, heuristic_judge
+from .harness import evaluate, format_report, heuristic_judge, report_payload
 
 
 def _required_model() -> str:
@@ -52,8 +54,28 @@ def main() -> int:
 
     driver = HttpRuntimeDriver(base_url, token)
     cases = [replace(case, model=model) for case in CASES]
-    report = asyncio.run(evaluate(cases, driver, heuristic_judge))
+
+    async def run_eval():
+        return await driver.runtime_version(), await evaluate(cases, driver, heuristic_judge)
+
+    runtime_version, report = asyncio.run(run_eval())
     print(format_report(report))
+    report_path = Path(os.environ.get("SHEJANE_EVAL_REPORT", "../.tmp/eval-report.json"))
+    baseline_path = os.environ.get("SHEJANE_EVAL_BASELINE")
+    baseline = None
+    if baseline_path and Path(baseline_path).is_file():
+        baseline = json.loads(Path(baseline_path).read_text(encoding="utf-8"))
+    payload = report_payload(
+        report,
+        runtime_version=runtime_version,
+        model=model,
+        baseline=baseline,
+    )
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    print(f"report={report_path}")
     return 0 if report.passed else 1
 
 
