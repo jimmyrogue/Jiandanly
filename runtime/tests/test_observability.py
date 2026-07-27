@@ -11,6 +11,7 @@ import pytest
 import structlog
 from structlog.testing import capture_logs
 
+from shejane_runtime.diagnostics_trace import build_run_trace
 from shejane_runtime.observability import (
     RuntimeObserver,
     build_callbacks,
@@ -171,3 +172,65 @@ def test_observer_truncates_long_payloads() -> None:
     start = next(e for e in captured if e["event"] == "tool.start")
     assert len(start["input_preview"]) <= 200
     assert start["input_preview"].endswith("…")
+
+
+def test_durable_trace_links_redacted_model_tool_checkpoint_and_terminal_spans() -> None:
+    trace = build_run_trace(
+        {
+            "id": "run-1",
+            "status": "completed",
+            "created_at": "2026-07-26T00:00:00+00:00",
+            "updated_at": "2026-07-26T00:00:03+00:00",
+            "completed_at": "2026-07-26T00:00:03+00:00",
+        },
+        model_calls=[
+            {
+                "id": "model-1",
+                "execution_attempt_id": "attempt-1",
+                "call_index": 1,
+                "model": "local:connection:model",
+                "purpose": "agent",
+                "status": "completed",
+                "output_started": 1,
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "created_at": "2026-07-26T00:00:00.500000+00:00",
+                "completed_at": "2026-07-26T00:00:01+00:00",
+            }
+        ],
+        tool_receipts=[
+            {
+                "operation_id": "operation-1",
+                "execution_attempt_id": "attempt-1",
+                "tool_call_id": "call-1",
+                "tool_name": "read_file",
+                "tool_version": "1",
+                "arguments_hash": "args-hash",
+                "arguments_json": '{"secret":"must-not-appear"}',
+                "risk": "workspace_read",
+                "status": "completed",
+                "attempt_count": 1,
+                "result_hash": "result-hash",
+                "result_json": '"private output"',
+                "created_at": "2026-07-26T00:00:01.100000+00:00",
+                "started_at": "2026-07-26T00:00:01.200000+00:00",
+                "completed_at": "2026-07-26T00:00:02+00:00",
+            }
+        ],
+        child_runs=[],
+        checkpoint={
+            "id": "checkpoint-1",
+            "step": 2,
+            "reason": "loop",
+            "messages_count": 3,
+            "created_at": "2026-07-26T00:00:02.500000+00:00",
+        },
+        event_count=8,
+    )
+
+    spans = {span["id"]: span for span in trace["spans"]}
+    assert spans["span:tool:operation-1"]["parent_id"] == "span:model:model-1"
+    assert spans["span:checkpoint:checkpoint-1"]["parent_id"] == trace["root_span_id"]
+    assert spans["span:terminal:run-1"]["status"] == "completed"
+    assert "arguments_json" not in str(trace)
+    assert "private output" not in str(trace)

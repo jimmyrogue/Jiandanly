@@ -2133,6 +2133,13 @@ def test_run_diagnostics_include_handoff_summary(client: TestClient) -> None:
     assert checkpoint["step"] >= 0
     assert checkpoint["reason"]
     assert checkpoint["messages_count"] == 2
+    trace = body["trace"]
+    assert trace["root_span_id"] == f"span:run:{run_id}"
+    spans = {span["id"]: span for span in trace["spans"]}
+    assert spans[trace["root_span_id"]]["kind"] == "run"
+    assert any(span["kind"] == "model" for span in spans.values())
+    assert spans[f"span:checkpoint:{checkpoint['id']}"]["parent_id"] == trace["root_span_id"]
+    assert spans[f"span:terminal:{run_id}"]["status"] == "completed"
 
 
 def test_run_diagnostics_include_reflection_summary(client: TestClient) -> None:

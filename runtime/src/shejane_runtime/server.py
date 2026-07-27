@@ -30,13 +30,14 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.tools import StructuredTool
 from langgraph.graph import add_messages
 from sse_starlette.sse import EventSourceResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from . import __version__
-from .agent.builder import open_checkpointer, open_store
+from .agent.builder import _build_byok_chat_model, open_checkpointer, open_store
 from .api_schemas import (
     MAX_LOCAL_REQUEST_BODY_BYTES,
     AddModelServiceModelRequest,
@@ -126,6 +127,7 @@ from .api_schemas import (
 )
 from .auth import LOCAL_OWNER_PRINCIPAL_ID, PairingTokenAuthMiddleware
 from .config import Settings, get_settings
+from .diagnostics_trace import build_run_trace
 from .failure_policy import classify_failure_payload
 from .middleware.tool_execution import serialize_tool_result
 from .model_credentials import (
@@ -374,12 +376,18 @@ async def _refresh_model_service_models(
         profile.update(
             {
                 "source": "bundled" if known else "discovered",
-                "verification": "verified" if known else "unverified",
+                "verification": "unverified",
                 "recommended": bool(known and known.get("recommended")),
             }
         )
         if known:
-            profile.update({key: value for key, value in known.items() if value is not None})
+            profile.update(
+                {
+                    key: value
+                    for key, value in known.items()
+                    if key != "verification" and value is not None
+                }
+            )
         models.append(profile)
         if len(models) >= 1000:
             break
@@ -391,6 +399,7 @@ async def _refresh_model_service_models(
 
 async def _verify_model_service_compatibility(
     *,
+    settings: Settings,
     base_url: str,
     adapter_id: str,
     api_key: str,
@@ -398,144 +407,162 @@ async def _verify_model_service_compatibility(
 ) -> None:
     # ponytail: bound this paid probe; use per-model budgets if 4K truncates real tool calls.
     probe_max_tokens = 4_096
-    headers = {
-        "Accept": "text/event-stream",
-        "Content-Type": "application/json",
-    }
-    if adapter_id == "anthropic_messages":
-        url = f"{base_url}/messages" if base_url.endswith("/v1") else f"{base_url}/v1/messages"
-        headers.update(
-            {
-                "anthropic-version": "2023-06-01",
-                "x-api-key": api_key,
-            }
-        )
-        payload = {
-            "model": model_id,
-            "max_tokens": probe_max_tokens,
-            "stream": True,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": "You must call the ping tool now. Do not answer directly.",
-                }
-            ],
-            "tools": [
-                {
-                    "name": "ping",
-                    "description": "Return a compatibility signal.",
-                    "input_schema": {
-                        "type": "object",
-                        "properties": {},
-                        "additionalProperties": False,
-                    },
-                }
-            ],
-        }
-    else:
-        url = f"{base_url}/chat/completions"
-        headers["Authorization"] = f"Bearer {api_key}"
-        payload = {
-            "model": model_id,
-            "max_tokens": probe_max_tokens,
-            "stream": True,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": "You must call the ping tool now. Do not answer directly.",
-                }
-            ],
-            "tools": [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "ping",
-                        "description": "Return a compatibility signal.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {},
-                            "additionalProperties": False,
-                        },
-                    },
-                }
-            ],
-        }
-        if urlparse(base_url).hostname in {"open.bigmodel.cn", "api.z.ai"}:
-            payload["tool_stream"] = True
+    success_signal = "SHEJANE_MODEL_TOOL_LOOP_OK"
+    ping = StructuredTool.from_function(
+        lambda: success_signal,
+        name="ping",
+        description="Return a compatibility signal.",
+    )
     try:
-        async with httpx.AsyncClient(
-            timeout=20.0,
-            follow_redirects=False,
-            trust_env=False,
-        ) as client:
-            response = await client.post(url, headers=headers, json=payload)
-    except httpx.RequestError as exc:
+        model = _build_byok_chat_model(
+            settings=settings,
+            model_binding={
+                "adapter_id": adapter_id,
+                "base_url": base_url,
+                "model_id": model_id,
+                "profile": {
+                    "tool_calling": True,
+                    "image_inputs": False,
+                    "max_output_tokens": probe_max_tokens,
+                },
+            },
+            model_api_key=api_key,
+        ).bind(max_tokens=probe_max_tokens)
+        prompt = HumanMessage(
+            content=(
+                "Call the ping tool exactly once. After receiving its result, "
+                f"answer exactly {success_signal}."
+            )
+        )
+        bound = model.bind_tools([ping])
+        tool_request = await bound.ainvoke([prompt])
+        calls = list(getattr(tool_request, "tool_calls", ()) or ())
+        if len(calls) != 1 or calls[0].get("name") != "ping" or not calls[0].get("id"):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "incompatible_model",
+                    "message": "模型没有完成工具调用，无法用于 Agent 任务。",
+                },
+            )
+        result = ping.invoke(calls[0].get("args") or {})
+        final = await bound.ainvoke(
+            [
+                prompt,
+                tool_request,
+                ToolMessage(
+                    content=result,
+                    name="ping",
+                    tool_call_id=str(calls[0]["id"]),
+                ),
+            ]
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        status_code = getattr(exc, "status_code", None)
+        if status_code == 401:
+            raise HTTPException(
+                status_code=401,
+                detail={"code": "invalid_api_key", "message": "API Key 无效，请检查后重试。"},
+            ) from exc
+        if status_code == 403:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "provider_permission_denied",
+                    "message": "当前账户或 API Key 没有调用该模型的权限。",
+                },
+            ) from exc
+        if status_code == 402:
+            raise HTTPException(
+                status_code=402,
+                detail={"code": "billing_required", "message": "模型服务账户余额或额度不足。"},
+            ) from exc
+        if status_code == 429:
+            raise HTTPException(
+                status_code=429,
+                detail={"code": "rate_limited", "message": "模型服务请求过于频繁，请稍后重试。"},
+            ) from exc
+        if status_code == 408 or (isinstance(status_code, int) and status_code >= 500):
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "provider_unavailable",
+                    "message": "模型服务暂时无法连接，请稍后重试。",
+                },
+            ) from exc
+        upstream = re.sub(r"\s+", " ", str(exc).replace(api_key, "[redacted]")).strip()[:240]
         raise HTTPException(
-            status_code=503,
+            status_code=409,
             detail={
-                "code": "provider_unavailable",
-                "message": "模型服务暂时无法连接，请稍后重试。",
+                "code": "incompatible_model",
+                "message": (
+                    "模型服务拒绝了完整工具调用测试，请检查模型与接口格式。"
+                    + (f" 服务返回：{upstream}" if upstream else "")
+                ),
             },
         ) from exc
-    if response.status_code == 401:
-        raise HTTPException(
-            status_code=401,
-            detail={"code": "invalid_api_key", "message": "API Key 无效，请检查后重试。"},
+    content = final.content
+    final_text = (
+        content
+        if isinstance(content, str)
+        else "".join(
+            str(item.get("text") or "")
+            for item in content
+            if isinstance(item, dict) and item.get("type") == "text"
         )
-    if not response.is_success:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "incompatible_model",
-                "message": "模型未通过流式工具调用兼容性测试。",
-            },
-        )
-    if "text/event-stream" not in response.headers.get("content-type", ""):
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "incompatible_model",
-                "message": "模型没有返回流式结果。",
-            },
-        )
-    events: list[dict[str, Any]] = []
-    for line in response.text.splitlines():
-        if not line.startswith("data:"):
-            continue
-        data = line[5:].strip()
-        if not data or data == "[DONE]":
-            continue
-        try:
-            event = json.loads(data)
-        except ValueError:
-            continue
-        if isinstance(event, dict):
-            events.append(event)
-    if adapter_id == "anthropic_messages":
-        compatible = any(
-            event.get("type") == "content_block_start"
-            and isinstance(event.get("content_block"), dict)
-            and event["content_block"].get("type") == "tool_use"
-            for event in events
-        )
-    else:
-        compatible = any(
-            isinstance(choice, dict)
-            and any(
-                isinstance(message, dict) and bool(message.get("tool_calls"))
-                for message in (choice.get("delta"), choice.get("message"))
-            )
-            for event in events
-            for choice in (event.get("choices") if isinstance(event.get("choices"), list) else ())
-        )
-    if not compatible:
+        if isinstance(content, list)
+        else ""
+    )
+    if getattr(final, "tool_calls", None) or final_text.strip() != success_signal:
         raise HTTPException(
             status_code=409,
             detail={
                 "code": "incompatible_model",
-                "message": "模型没有完成工具调用，无法用于 Agent 任务。",
+                "message": "模型没有在工具执行后返回最终答案。",
             },
         )
+
+
+async def _verify_bundled_model_catalog(
+    *,
+    settings: Settings,
+    base_url: str,
+    adapter_id: str,
+    api_key: str,
+    models: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    verified_models: list[dict[str, Any]] = []
+    for raw_model in models:
+        model = {**raw_model, "verification": "unverified"}
+        if model.get("source") == "bundled":
+            try:
+                await _verify_model_service_compatibility(
+                    settings=settings,
+                    base_url=base_url,
+                    adapter_id=adapter_id,
+                    api_key=api_key,
+                    model_id=str(model["model_id"]),
+                )
+            except HTTPException as exc:
+                if exc.status_code in {401, 402, 403}:
+                    raise
+                log.info(
+                    "bundled model compatibility probe failed model=%s status=%s",
+                    model["model_id"],
+                    exc.status_code,
+                )
+            else:
+                model.update(
+                    {
+                        "verification": "verified",
+                        "tool_calling": True,
+                        "streaming": True,
+                    }
+                )
+        verified_models.append(model)
+    return verified_models
 
 
 class _RequestBodyTooLarge(Exception):
@@ -1274,6 +1301,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 adapter_id=adapter_id,
                 api_key=api_key,
             )
+            models = await _verify_bundled_model_catalog(
+                settings=app.state.settings,
+                base_url=base_url,
+                adapter_id=adapter_id,
+                api_key=api_key,
+                models=models,
+            )
         connection_id = f"conn_{uuid.uuid4().hex}"
         next_credential_ref = credential_ref(connection_id)
         principal_id = request.state.principal_id
@@ -1398,6 +1432,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "message": "暂时无法验证新的 API Key，旧 Key 已保留。",
                 },
             )
+        models = await _verify_bundled_model_catalog(
+            settings=app.state.settings,
+            base_url=base_url,
+            adapter_id=str(row["adapter_id"]),
+            api_key=api_key,
+            models=models,
+        )
         next_credential_ref = new_credential_ref(connection_id)
         credential_swapped = False
         try:
@@ -1602,6 +1643,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not api_key:
             raise HTTPException(status_code=409, detail="model service needs an API key")
         await _verify_model_service_compatibility(
+            settings=app.state.settings,
             base_url=str(row["base_url"]),
             adapter_id=str(row["adapter_id"]),
             api_key=api_key,
@@ -3163,9 +3205,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def run_diagnostics(request: Request, run_id: str) -> dict[str, Any]:
         """Return the full `LocalRunDiagnostics` payload.
 
-        Shape (per TS interface `runtime/sdk/src/client.ts`):
-            { schema_version: 1, exported_at, runtime_version?,
-              run, events, permissions, artifacts, latest_checkpoint, handoff }
+        Shape is defined by `LocalRunDiagnostics` and generated into the SDK.
+        It includes the redacted durable trace projection used by exports.
 
         Phase 5'+ used to return only `{run, events}`, so the
         `DiagnosticsPanel` rendered NaN counts (permissions.length on
@@ -3191,6 +3232,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ]
         permissions = await store.list_permissions_for_run(run_id)
         tool_receipts = await store.list_tool_receipts_for_run(run_id)
+        model_calls = await store.list_model_calls_for_run(run_id)
+        child_runs = await store.list_child_runs_for_run(run_id)
         wait_candidates = await store.list_wait_candidates_for_run(run_id)
         artifacts = await store.list_artifacts_for_run(run_id)
         latest_checkpoint = await _latest_checkpoint_summary(app.state.checkpointer, run)
@@ -3236,6 +3279,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "handoff": _build_diagnostics_handoff(run, events, permissions, artifacts),
             "feature_ledger": _latest_feature_ledger(artifacts),
             "reflection": reflection,
+            "trace": build_run_trace(
+                run,
+                model_calls=model_calls,
+                tool_receipts=tool_receipts,
+                child_runs=child_runs,
+                checkpoint=latest_checkpoint,
+                event_count=len(events),
+            ),
         }
 
     @app.post(

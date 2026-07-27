@@ -631,52 +631,50 @@ def _build_chat_model(
                 "max_output_tokens": settings.unknown_model_max_output_tokens,
             }
         )
-    if model_binding and model_binding.get("adapter_id") in {
+    return _build_byok_chat_model(
+        settings=settings,
+        model_binding=model_binding,
+        model_api_key=model_api_key,
+    )
+
+
+def _build_byok_chat_model(
+    *,
+    settings: Settings,
+    model_binding: dict[str, Any] | None,
+    model_api_key: str | None,
+) -> Any:
+    if not model_binding or model_binding.get("adapter_id") not in {
         "openai_chat",
         "anthropic_messages",
     }:
-        raw_profile = model_binding.get("profile")
-        profile = (
-            {
-                key: raw_profile[key]
-                for key in (
-                    "tool_calling",
-                    "image_inputs",
-                    "max_input_tokens",
-                    "max_output_tokens",
-                )
-                if key in raw_profile and raw_profile[key] is not None
-            }
-            if isinstance(raw_profile, dict)
-            else {}
-        )
-        profile.setdefault("max_input_tokens", settings.unknown_model_max_input_tokens)
-        profile.setdefault("max_output_tokens", settings.unknown_model_max_output_tokens)
-        profile.setdefault("image_inputs", False)
-        profile["image_tool_message"] = profile["image_inputs"]
-        if model_binding["adapter_id"] == "anthropic_messages":
-            from langchain_anthropic import ChatAnthropic
-
-            return ChatAnthropic(
-                model=str(model_binding["model_id"]),
-                base_url=str(model_binding["base_url"]),
-                api_key=model_api_key or "local",
-                streaming=True,
-                stream_usage=True,
-                max_retries=0,
-                max_tokens=int(profile["max_output_tokens"]),
-                timeout=settings.model_request_timeout_seconds,
-                profile=profile,
+        raise RuntimeError("Runtime BYOK model binding is required")
+    raw_profile = model_binding.get("profile")
+    profile = (
+        {
+            key: raw_profile[key]
+            for key in (
+                "tool_calling",
+                "image_inputs",
+                "max_input_tokens",
+                "max_output_tokens",
             )
+            if key in raw_profile and raw_profile[key] is not None
+        }
+        if isinstance(raw_profile, dict)
+        else {}
+    )
+    profile.setdefault("max_input_tokens", settings.unknown_model_max_input_tokens)
+    profile.setdefault("max_output_tokens", settings.unknown_model_max_output_tokens)
+    profile.setdefault("image_inputs", False)
+    profile["image_tool_message"] = profile["image_inputs"]
+    if model_binding["adapter_id"] == "anthropic_messages":
+        from langchain_anthropic import ChatAnthropic
 
-        from langchain_openai import ChatOpenAI
-
-        return ChatOpenAI(
+        return ChatAnthropic(
             model=str(model_binding["model_id"]),
             base_url=str(model_binding["base_url"]),
             api_key=model_api_key or "local",
-            http_client=httpx.Client(),
-            http_async_client=httpx.AsyncClient(),
             streaming=True,
             stream_usage=True,
             max_retries=0,
@@ -684,7 +682,29 @@ def _build_chat_model(
             timeout=settings.model_request_timeout_seconds,
             profile=profile,
         )
-    raise RuntimeError("Runtime BYOK model binding is required")
+
+    from langchain_openai import ChatOpenAI
+
+    base_url = str(model_binding["base_url"])
+    extra_body = (
+        {"tool_stream": True}
+        if urlparse(base_url).hostname in {"open.bigmodel.cn", "api.z.ai"}
+        else None
+    )
+    return ChatOpenAI(
+        model=str(model_binding["model_id"]),
+        base_url=base_url,
+        api_key=model_api_key or "local",
+        http_client=httpx.Client(),
+        http_async_client=httpx.AsyncClient(),
+        streaming=True,
+        stream_usage=True,
+        max_retries=0,
+        max_tokens=int(profile["max_output_tokens"]),
+        timeout=settings.model_request_timeout_seconds,
+        profile=profile,
+        extra_body=extra_body,
+    )
 
 
 async def _invoke_plugin_vision(

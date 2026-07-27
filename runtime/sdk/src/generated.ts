@@ -537,9 +537,8 @@ export interface paths {
          * Run Diagnostics
          * @description Return the full `LocalRunDiagnostics` payload.
          *
-         *     Shape (per TS interface `runtime/sdk/src/client.ts`):
-         *         { schema_version: 1, exported_at, runtime_version?,
-         *           run, events, permissions, artifacts, latest_checkpoint, handoff }
+         *     Shape is defined by `LocalRunDiagnostics` and generated into the SDK.
+         *     It includes the redacted durable trace projection used by exports.
          *
          *     Phase 5'+ used to return only `{run, events}`, so the
          *     `DiagnosticsPanel` rendered NaN counts (permissions.length on
@@ -1421,6 +1420,39 @@ export interface components {
             /** Updated At */
             updated_at: string;
         };
+        /** DiagnosticsTrace */
+        DiagnosticsTrace: {
+            /** Root Span Id */
+            root_span_id: string;
+            /** Spans */
+            spans?: components["schemas"]["DiagnosticsTraceSpan"][];
+        };
+        /** DiagnosticsTraceSpan */
+        DiagnosticsTraceSpan: {
+            /** Attributes */
+            attributes?: {
+                [key: string]: unknown;
+            };
+            /** Duration Ms */
+            duration_ms?: number | null;
+            /** Ended At */
+            ended_at?: string | null;
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "run" | "model" | "tool" | "subagent" | "checkpoint" | "terminal";
+            /** Name */
+            name: string;
+            /** Parent Id */
+            parent_id?: string | null;
+            /** Started At */
+            started_at?: string | null;
+            /** Status */
+            status: string;
+        };
         /**
          * DiagnosticsVerification
          * @description Latest machine-readable task.verify result, if any.
@@ -1794,6 +1826,7 @@ export interface components {
             schema_version: 1;
             /** Tool Receipts */
             tool_receipts?: components["schemas"]["DiagnosticsToolReceipt"][];
+            trace: components["schemas"]["DiagnosticsTrace"];
             /** Wait Candidates */
             wait_candidates?: components["schemas"]["DiagnosticsWaitCandidate"][];
         };

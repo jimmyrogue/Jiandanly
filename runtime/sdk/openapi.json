@@ -1293,6 +1293,111 @@
         "title": "DiagnosticsToolReceipt",
         "type": "object"
       },
+      "DiagnosticsTrace": {
+        "properties": {
+          "root_span_id": {
+            "title": "Root Span Id",
+            "type": "string"
+          },
+          "spans": {
+            "items": {
+              "$ref": "#/components/schemas/DiagnosticsTraceSpan"
+            },
+            "title": "Spans",
+            "type": "array"
+          }
+        },
+        "required": [
+          "root_span_id"
+        ],
+        "title": "DiagnosticsTrace",
+        "type": "object"
+      },
+      "DiagnosticsTraceSpan": {
+        "properties": {
+          "attributes": {
+            "additionalProperties": true,
+            "title": "Attributes",
+            "type": "object"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "run",
+              "model",
+              "tool",
+              "subagent",
+              "checkpoint",
+              "terminal"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Id"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "status"
+        ],
+        "title": "DiagnosticsTraceSpan",
+        "type": "object"
+      },
       "DiagnosticsVerification": {
         "description": "Latest machine-readable task.verify result, if any.",
         "properties": {
@@ -2341,6 +2446,9 @@
             "title": "Tool Receipts",
             "type": "array"
           },
+          "trace": {
+            "$ref": "#/components/schemas/DiagnosticsTrace"
+          },
           "wait_candidates": {
             "items": {
               "$ref": "#/components/schemas/DiagnosticsWaitCandidate"
@@ -2355,7 +2463,8 @@
           "events",
           "permissions",
           "artifacts",
-          "handoff"
+          "handoff",
+          "trace"
         ],
         "title": "LocalRunDiagnostics",
         "type": "object"
@@ -7154,7 +7263,7 @@
     },
     "/v1/runs/{run_id}/diagnostics": {
       "get": {
-        "description": "Return the full `LocalRunDiagnostics` payload.\n\nShape (per TS interface `runtime/sdk/src/client.ts`):\n    { schema_version: 1, exported_at, runtime_version?,\n      run, events, permissions, artifacts, latest_checkpoint, handoff }\n\nPhase 5'+ used to return only `{run, events}`, so the\n`DiagnosticsPanel` rendered NaN counts (permissions.length on\nundefined) and the \"latest checkpoint\" tab was always missing.",
+        "description": "Return the full `LocalRunDiagnostics` payload.\n\nShape is defined by `LocalRunDiagnostics` and generated into the SDK.\nIt includes the redacted durable trace projection used by exports.\n\nPhase 5'+ used to return only `{run, events}`, so the\n`DiagnosticsPanel` rendered NaN counts (permissions.length on\nundefined) and the \"latest checkpoint\" tab was always missing.",
         "operationId": "run_diagnostics_v1_runs__run_id__diagnostics_get",
         "parameters": [
           {

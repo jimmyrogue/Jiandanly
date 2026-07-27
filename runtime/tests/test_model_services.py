@@ -9,12 +9,14 @@ import httpx
 import keyring
 import pytest
 from fastapi.testclient import TestClient
+from langchain_core.messages import AIMessage, ToolMessage
 
 import shejane_runtime.server as server_module
 from shejane_runtime.config import reset_settings_for_tests
 from shejane_runtime.model_services import (
     adapter_for_custom_service,
     list_model_service_presets,
+    model_service_preset,
 )
 from shejane_runtime.runs import RunCoordinator
 from shejane_runtime.server import create_app
@@ -62,6 +64,47 @@ def test_custom_service_adapter_detection_prefers_openai_chat_on_a_tie() -> None
         )
         is None
     )
+
+
+def test_bundled_models_are_recommendations_not_preverified_connections() -> None:
+    deepseek = model_service_preset("deepseek")
+
+    assert deepseek is not None
+    assert [model["verification"] for model in deepseek["models"]] == [
+        "unverified",
+        "unverified",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_bundled_models_are_verified_individually(monkeypatch) -> None:
+    attempted: list[str] = []
+
+    async def verify(**kwargs):
+        attempted.append(kwargs["model_id"])
+        if kwargs["model_id"] == "model-b":
+            raise server_module.HTTPException(status_code=409, detail="incompatible")
+
+    monkeypatch.setattr(server_module, "_verify_model_service_compatibility", verify)
+
+    models = await server_module._verify_bundled_model_catalog(
+        settings=reset_settings_for_tests(),
+        base_url="https://provider.example/v1",
+        adapter_id="openai_chat",
+        api_key="secret",
+        models=[
+            {"model_id": "model-a", "source": "bundled", "verification": "unverified"},
+            {"model_id": "model-b", "source": "bundled", "verification": "unverified"},
+            {"model_id": "model-c", "source": "discovered", "verification": "unverified"},
+        ],
+    )
+
+    assert attempted == ["model-a", "model-b"]
+    assert [model["verification"] for model in models] == [
+        "verified",
+        "unverified",
+        "unverified",
+    ]
 
 
 def test_catalog_refresh_preserves_manual_and_verified_models() -> None:
@@ -180,6 +223,17 @@ def credential_vault(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
         "delete_password",
         lambda _service, account: values.pop(account, None),
     )
+
+    async def verify_bundled(**kwargs):
+        return [
+            {
+                **model,
+                "verification": "verified" if model.get("source") == "bundled" else "unverified",
+            }
+            for model in kwargs["models"]
+        ]
+
+    monkeypatch.setattr(server_module, "_verify_bundled_model_catalog", verify_bundled)
     return values
 
 
@@ -636,88 +690,69 @@ def test_imported_custom_service_must_be_recreated_manually(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("adapter_id", "base_url", "event", "tool_stream"),
-    [
-        (
-            "openai_chat",
-            "https://gateway.example/v1",
-            {"choices": [{"delta": {"tool_calls": [{"index": 0}]}}]},
-            False,
-        ),
-        (
-            "openai_chat",
-            "https://gateway.example/v1",
-            {"choices": [{"message": {"tool_calls": [{"id": "call-ping"}]}}]},
-            False,
-        ),
-        (
-            "openai_chat",
-            "https://open.bigmodel.cn/api/paas/v4",
-            {"choices": [{"delta": {"tool_calls": [{"index": 0}]}}]},
-            True,
-        ),
-        (
-            "anthropic_messages",
-            "https://gateway.example/v1",
-            {
-                "type": "content_block_start",
-                "content_block": {"type": "tool_use", "name": "ping"},
-            },
-            False,
-        ),
-    ],
-)
-async def test_compatibility_verification_requires_streamed_tool_call(
+async def test_compatibility_verification_completes_model_tool_model_loop(
     monkeypatch: pytest.MonkeyPatch,
-    adapter_id: str,
-    base_url: str,
-    event: dict,
-    tool_stream: bool,
 ) -> None:
-    requests: list[dict] = []
+    rounds: list[list] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests.append(json.loads(request.content))
-        return httpx.Response(
-            200,
-            content=f"data: {json.dumps(event)}\n\ndata: [DONE]\n\n".encode(),
-            headers={"content-type": "text/event-stream"},
-        )
+    class ProbeModel:
+        def bind(self, **_kwargs):
+            return self
 
-    class PatchedClient(httpx.AsyncClient):
-        def __init__(self, **kwargs) -> None:
-            super().__init__(transport=httpx.MockTransport(handler), **kwargs)
+        def bind_tools(self, tools, **_kwargs):
+            assert [tool.name for tool in tools] == ["ping"]
+            return self
 
-    monkeypatch.setattr(server_module.httpx, "AsyncClient", PatchedClient)
+        async def ainvoke(self, messages):
+            rounds.append(messages)
+            if len(rounds) == 1:
+                return AIMessage(
+                    content="",
+                    additional_kwargs={"reasoning_content": "keep me"},
+                    tool_calls=[{"id": "call-ping", "name": "ping", "args": {}}],
+                )
+            return AIMessage(content="SHEJANE_MODEL_TOOL_LOOP_OK")
+
+    monkeypatch.setattr(server_module, "_build_byok_chat_model", lambda **_kwargs: ProbeModel())
 
     await server_module._verify_model_service_compatibility(
-        base_url=base_url,
-        adapter_id=adapter_id,
+        settings=reset_settings_for_tests(),
+        base_url="https://gateway.example/v1",
+        adapter_id="openai_chat",
         api_key="secret",
         model_id="model",
     )
 
-    assert requests[0]["stream"] is True
-    assert "tool_choice" not in requests[0]
-    assert requests[0].get("tool_stream", False) is tool_stream
+    assert len(rounds) == 2
+    assert rounds[1][1].additional_kwargs["reasoning_content"] == "keep me"
+    assert isinstance(rounds[1][2], ToolMessage)
+    assert rounds[1][2].tool_call_id == "call-ping"
 
 
 @pytest.mark.asyncio
-async def test_compatibility_verification_rejects_non_streaming_response(
+async def test_compatibility_verification_rejects_missing_final_answer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def handler(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"choices": []})
+    class ProbeModel:
+        def bind(self, **_kwargs):
+            return self
 
-    class PatchedClient(httpx.AsyncClient):
-        def __init__(self, **kwargs) -> None:
-            super().__init__(transport=httpx.MockTransport(handler), **kwargs)
+        def bind_tools(self, _tools, **_kwargs):
+            return self
 
-    monkeypatch.setattr(server_module.httpx, "AsyncClient", PatchedClient)
+        async def ainvoke(self, messages):
+            if len(messages) == 1:
+                return AIMessage(
+                    content="",
+                    tool_calls=[{"id": "call-ping", "name": "ping", "args": {}}],
+                )
+            return AIMessage(content="")
+
+    monkeypatch.setattr(server_module, "_build_byok_chat_model", lambda **_kwargs: ProbeModel())
 
     with pytest.raises(server_module.HTTPException) as exc_info:
         await server_module._verify_model_service_compatibility(
+            settings=reset_settings_for_tests(),
             base_url="https://gateway.example/v1",
             adapter_id="openai_chat",
             api_key="secret",
@@ -725,7 +760,52 @@ async def test_compatibility_verification_rejects_non_streaming_response(
         )
 
     assert exc_info.value.status_code == 409
-    assert exc_info.value.detail["message"] == "模型没有返回流式结果。"
+    assert exc_info.value.detail["message"] == "模型没有在工具执行后返回最终答案。"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_status", "expected_status", "expected_code"),
+    [
+        (401, 401, "invalid_api_key"),
+        (403, 403, "provider_permission_denied"),
+        (402, 402, "billing_required"),
+        (429, 429, "rate_limited"),
+        (500, 503, "provider_unavailable"),
+    ],
+)
+async def test_compatibility_verification_classifies_provider_failures(
+    monkeypatch,
+    provider_status: int,
+    expected_status: int,
+    expected_code: str,
+) -> None:
+    class ProviderError(RuntimeError):
+        status_code = provider_status
+
+    class ProbeModel:
+        def bind(self, **_kwargs):
+            return self
+
+        def bind_tools(self, _tools, **_kwargs):
+            return self
+
+        async def ainvoke(self, _messages):
+            raise ProviderError("provider rejected request with secret")
+
+    monkeypatch.setattr(server_module, "_build_byok_chat_model", lambda **_kwargs: ProbeModel())
+
+    with pytest.raises(server_module.HTTPException) as exc_info:
+        await server_module._verify_model_service_compatibility(
+            settings=reset_settings_for_tests(),
+            base_url="https://gateway.example/v1",
+            adapter_id="openai_chat",
+            api_key="secret",
+            model_id="model",
+        )
+
+    assert exc_info.value.status_code == expected_status
+    assert exc_info.value.detail["code"] == expected_code
 
 
 def test_deepseek_v4_verification_does_not_force_tool_choice(
@@ -768,7 +848,43 @@ def test_deepseek_v4_verification_does_not_force_tool_choice(
                     }
                 },
             )
-        event = {"choices": [{"delta": {"tool_calls": [{"index": 0}]}}]}
+        if any(message.get("role") == "tool" for message in payload["messages"]):
+            event = {
+                "id": "chatcmpl-final",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "deepseek-v4-pro",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": "SHEJANE_MODEL_TOOL_LOOP_OK"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            }
+        else:
+            event = {
+                "id": "chatcmpl-tool",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "deepseek-v4-pro",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call-ping",
+                                    "type": "function",
+                                    "function": {"name": "ping", "arguments": "{}"},
+                                }
+                            ]
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+            }
         return httpx.Response(
             200,
             content=f"data: {json.dumps(event)}\n\ndata: [DONE]\n\n".encode(),
@@ -794,7 +910,33 @@ def test_deepseek_v4_verification_does_not_force_tool_choice(
         )
 
     assert verified.status_code == 200
-    assert "tool_choice" not in requests[0]
+    assert len(requests) == 2
+    assert all("tool_choice" not in request for request in requests)
+
+
+def test_glm_tool_stream_is_shared_by_probe_and_agent_requests(monkeypatch) -> None:
+    import langchain_openai
+
+    captured: dict = {}
+
+    class FakeChatOpenAI:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(langchain_openai, "ChatOpenAI", FakeChatOpenAI)
+
+    server_module._build_byok_chat_model(
+        settings=reset_settings_for_tests(),
+        model_binding={
+            "adapter_id": "openai_chat",
+            "base_url": "https://open.bigmodel.cn/api/paas/v4",
+            "model_id": "glm-5",
+            "profile": {},
+        },
+        model_api_key="secret",
+    )
+
+    assert captured["extra_body"] == {"tool_stream": True}
 
 
 def test_manual_model_becomes_available_only_after_compatibility_verification(

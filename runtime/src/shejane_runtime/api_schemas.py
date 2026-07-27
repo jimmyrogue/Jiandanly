@@ -934,6 +934,23 @@ class DiagnosticsHandoff(BaseModel):
     verification: DiagnosticsVerification | None = None
 
 
+class DiagnosticsTraceSpan(BaseModel):
+    id: str
+    parent_id: str | None = None
+    kind: Literal["run", "model", "tool", "subagent", "checkpoint", "terminal"]
+    name: str
+    status: str
+    started_at: str | None = None
+    ended_at: str | None = None
+    duration_ms: float | None = None
+    attributes: dict[str, Any] = Field(default_factory=dict)
+
+
+class DiagnosticsTrace(BaseModel):
+    root_span_id: str
+    spans: list[DiagnosticsTraceSpan] = Field(default_factory=list)
+
+
 class FeatureLedger(BaseModel):
     """Latest durable progress ledger entry for the run."""
 
@@ -963,6 +980,7 @@ class LocalRunDiagnostics(BaseModel):
     handoff: DiagnosticsHandoff
     feature_ledger: FeatureLedger | None = None
     reflection: DiagnosticsReflection | None = None
+    trace: DiagnosticsTrace
 
 
 # ---------------------------------------------------------------------------

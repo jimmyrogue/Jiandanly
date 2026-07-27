@@ -2217,6 +2217,16 @@ class LocalStore:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    async def list_child_runs_for_run(self, run_id: str) -> list[dict[str, Any]]:
+        rows = await (
+            await self._conn.execute(
+                "SELECT id, status, created_at, updated_at, completed_at "
+                "FROM local_runs WHERE parent_run_id = ? ORDER BY created_at, id",
+                (run_id,),
+            )
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     async def get_assistant_draft(self, run_id: str) -> dict[str, Any] | None:
         row = await (
             await self._conn.execute(
