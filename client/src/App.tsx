@@ -341,6 +341,13 @@ function writeChatMode(mode: ChatMode) {
   }
 }
 
+function chooseAvailableMode(models: ModelOption[], ...candidates: ChatMode[]): ChatMode {
+  return candidates.find((candidate) => models.some((model) => model.id === candidate))
+    ?? models.find((model) => model.recommended)?.id
+    ?? models[0]?.id
+    ?? ''
+}
+
 
 export function App() {
   return (
@@ -383,7 +390,7 @@ function useAppContentViewModel() {
   )
   const [activeID, setActiveID] = useState<string>()
   const [draft, setDraft] = useState('')
-  // Visible selection. Only successful runs update the cross-conversation default.
+  // Visible selection. The first available model seeds the cross-conversation default.
   const [mode, setMode] = useState<ChatMode>(readChatMode)
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('auto')
   function changeMode(next: ChatMode): void {
@@ -414,6 +421,7 @@ function useAppContentViewModel() {
   const [modelServiceAddRequested, setModelServiceAddRequested] = useState(false)
   // Runtime model catalog feeding the composer picker.
   const [models, setModels] = useState<ModelOption[]>([])
+  const modelsRef = useRef<ModelOption[]>([])
   const [modelCatalogVersion, setModelCatalogVersion] = useState(0)
   const [runtime, setRuntime] = useState<RuntimeProbe | null>(null)
   const [runtimeConnection, setRuntimeConnection] = useState<RuntimeConnection | null>(null)
@@ -588,6 +596,7 @@ function useAppContentViewModel() {
   // Runtime owns the complete BYOK model catalog.
   useEffect(() => {
     if (!runtimeConnection) {
+      modelsRef.current = []
       setModels([])
       return
     }
@@ -607,7 +616,12 @@ function useAppContentViewModel() {
             recommended: model.recommended,
           }]
         })
+        const savedMode = readChatMode()
+        const defaultMode = chooseAvailableMode(catalog, savedMode)
+        modelsRef.current = catalog
         setModels(catalog)
+        if (defaultMode && defaultMode !== savedMode) writeChatMode(defaultMode)
+        setMode((current) => chooseAvailableMode(catalog, current, defaultMode))
       }).catch(() => setModels([]))
     return () => {
       cancelled = true
@@ -1242,12 +1256,12 @@ function useAppContentViewModel() {
     activeIDRef.current = nextActiveID
     setActiveID(nextActiveID)
     if (!nextActiveID) {
-      setMode(readChatMode())
+      setMode(chooseAvailableMode(modelsRef.current, readChatMode()))
       return
     }
     void localData.get(nextActiveID).then((conversation) => {
       if (activeIDRef.current === nextActiveID) {
-        setMode(conversation?.model ?? readChatMode())
+        setMode(chooseAvailableMode(modelsRef.current, conversation?.model ?? '', readChatMode()))
       }
     })
   }

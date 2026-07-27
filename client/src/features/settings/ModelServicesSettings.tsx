@@ -4,6 +4,7 @@ import {
   IconChevronRight,
   IconExternalLink,
   IconKey,
+  IconLoader2,
   IconPlus,
   IconRefresh,
   IconTrash,
@@ -598,7 +599,19 @@ export function ModelServicesSettings({
                 </Button>
               )}
               {error && <div className="settings-model-service-error" role="alert">{error}</div>}
-              <Button type="submit" size="lg" className="h-11 w-full" disabled={busy === 'connect'}>
+              {busy === 'connect' && (
+                <p className="text-center text-xs text-muted-foreground" role="status">
+                  {t('settings.modelServices.configuringHint')}
+                </p>
+              )}
+              <Button
+                type="submit"
+                size="lg"
+                className="h-11 w-full"
+                disabled={busy === 'connect'}
+                aria-busy={busy === 'connect'}
+              >
+                {busy === 'connect' && <IconLoader2 className="animate-spin" aria-hidden="true" />}
                 {busy === 'connect'
                   ? t(reconnecting
                     ? 'settings.modelServices.updating'

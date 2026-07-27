@@ -221,6 +221,66 @@ describe('desktop shell', () => {
     expect(await screen.findByRole('dialog')).toHaveTextContent('添加模型服务')
   })
 
+  it('uses an available default model for old and new conversations', async () => {
+    const store = new LocalConversationStore('shejane-local:runtime:local-owner')
+    window.localStorage.setItem('shejane.chatMode.v2', 'local:removed:model')
+    await store.save({
+      id: 'conversation-with-removed-model',
+      title: '旧对话',
+      archived: false,
+      createdAt: '2026-07-21T00:00:00.000Z',
+      updatedAt: '2026-07-21T00:00:00.000Z',
+      model: 'local:removed:model',
+      messages: [],
+    })
+    Object.defineProperty(window, 'shejaneClient', {
+      configurable: true,
+      value: {
+        platform: 'darwin',
+        runtime: { baseURL: 'http://127.0.0.1:17371', session: 'client', ready: true },
+      },
+    })
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/v1/models')) {
+        return new Response(JSON.stringify({
+          models: [{
+            spec: 'local:test:standard',
+            model_id: 'standard',
+            display_name: 'Standard Model',
+            connection_id: 'test',
+            service_name: 'Test',
+            available: true,
+            tool_calling: true,
+            streaming: true,
+            image_inputs: false,
+            verification: 'verified',
+            recommended: false,
+          }, {
+            spec: 'local:test:recommended',
+            model_id: 'recommended',
+            display_name: 'Recommended Model',
+            connection_id: 'test',
+            service_name: 'Test',
+            available: true,
+            tool_calling: true,
+            streaming: true,
+            image_inputs: false,
+            verification: 'verified',
+            recommended: true,
+          }],
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      throw new Error('Runtime offline')
+    }))
+
+    render(<App />)
+
+    expect(await screen.findByRole('button', { name: '选择模型' })).toHaveTextContent('Recommended Model')
+    expect(window.localStorage.getItem('shejane.chatMode.v2')).toBe('local:test:recommended')
+    fireEvent.click(screen.getByRole('button', { name: '新对话' }))
+    expect(screen.getByRole('button', { name: '选择模型' })).toHaveTextContent('Recommended Model')
+  })
+
   it('asks before opening model settings when a message has no model', async () => {
     render(<App />)
 

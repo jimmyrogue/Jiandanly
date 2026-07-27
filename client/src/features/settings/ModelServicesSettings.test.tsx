@@ -77,6 +77,29 @@ describe('ModelServicesSettings', () => {
     ))
   })
 
+  it('shows persistent configuration progress while the service is being verified', async () => {
+    let finishConnect!: () => void
+    api.connectModelService.mockImplementation(() => new Promise((resolve) => {
+      finishConnect = () => resolve({})
+    }))
+    render(
+      <I18nProvider>
+        <ModelServicesSettings config={config} />
+      </I18nProvider>,
+    )
+
+    fireEvent.click(await screen.findByRole('button', { name: '添加模型服务' }))
+    fireEvent.click(screen.getByRole('button', { name: /DeepSeek/ }))
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'secret' } })
+    fireEvent.click(screen.getByRole('button', { name: '连接' }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent('正在配置并验证模型兼容性')
+    expect(screen.getByRole('button', { name: '配置中…' })).toHaveAttribute('aria-busy', 'true')
+
+    finishConnect()
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument())
+  })
+
   it('uses the first official API address as the visible and submitted fallback', async () => {
     api.listModelServicePresets.mockResolvedValue([{
       ...deepseek,
