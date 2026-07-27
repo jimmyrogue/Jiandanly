@@ -66,12 +66,13 @@ This is controlled parallel delegation, not a handoff or an autonomous agent tea
 
 ## Roadmap
 
-Current work focuses on proving reliability rather than adding more tools:
+The first reliability gate is now in place:
 
-1. Real BYOK `model → tool → model` validation for every preset provider and region.
-2. Agent evals that gate important Runtime and model changes.
-3. Persistent traces, tighter Runtime state ownership, and production plugin/package release evidence.
-4. Auditable semantic memory, structured outputs, and recurring schedules.
+- preset BYOK models run the same streamed `model → tool → model` loop used by the Agent before they become available;
+- deterministic Agent outcomes gate CI and Client releases, while `make eval` records real-provider trajectories and baseline deltas;
+- Runtime diagnostics export a redacted `run → model → tool/subagent → checkpoint → terminal` trace from durable records.
+
+Current work now focuses on tighter Runtime state ownership and production plugin/package release evidence. Auditable semantic memory, structured outputs, and recurring schedules remain later work.
 
 Recurring schedules, remote clients, fresh-context handoffs, and realtime voice remain later work. See the full [roadmap](./docs/roadmap.md) and the [current Agent Harness capability audit](./docs/agent-harness-capabilities-latest-2026-07-26.md).
 

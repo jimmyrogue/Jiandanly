@@ -8,8 +8,8 @@ SheJane 已经具备本地 Agent Harness 的主干，不需要继续以“增加
 
 | 判定 | 数量 | 主要能力 |
 | --- | ---: | --- |
-| 已实现 | 14 / 24 | Agent 循环、指令与上下文、工具生命周期、工作区、持久 Run/Thread、SSE、取消恢复、压缩、主 Agent Sandbox/HITL、Checkpoint/Fork、Skills、MCP、计划、Runtime SDK |
-| 部分实现 | 10 / 24 | Provider 真实兼容性、输出 Guard/结构化结果、Tracing、插件发布、长期记忆、多 Agent、Artifact workspace snapshot、周期调度、多模态实时能力、Agent Evals |
+| 已实现 | 17 / 24 | Agent 循环、指令与上下文、工具生命周期、工作区、持久 Run/Thread、SSE、取消恢复、压缩、主 Agent Sandbox/HITL、Checkpoint/Fork、Skills、MCP、计划、Runtime SDK、Provider 真实兼容性、Tracing、Agent Evals |
+| 部分实现 | 7 / 24 | 输出 Guard/结构化结果、插件发布、长期记忆、多 Agent、Artifact workspace snapshot、周期调度、多模态实时能力 |
 
 路线图的目标是把“代码存在”推进为“真实 Provider 可用、失败可诊断、结果可验证、安装包可发布”。
 
@@ -23,7 +23,7 @@ SheJane 已经具备本地 Agent Harness 的主干，不需要继续以“增加
 
 ## Now：真实可用性与质量门禁
 
-### 1. 真实 BYOK 模型工具回环
+### 1. 真实 BYOK 模型工具回环（已完成）
 
 目标：解决“设置显示可用，但真实 Agent 不能完成流式工具调用”的问题。
 
@@ -36,7 +36,9 @@ SheJane 已经具备本地 Agent Harness 的主干，不需要继续以“增加
 
 完成标准：新增或编辑模型后无需人工猜测“测试兼容性”为何失败；失败原因可操作，成功模型可直接进入 Agent Run。
 
-### 2. Agent Eval 发布门禁
+实现结果：预置模型不再凭静态目录标记 `verified`。连接或更新官方服务时，Runtime 会让每个 bundled model 使用正式 Agent 共用的 Provider 适配器，完整执行两轮流式 `模型 → ping 工具 → 工具结果 → 最终标记`；DeepSeek 等 thinking 模型不再被强制 `tool_choice` 误判，GLM 的 `tool_stream` 同时作用于探测和正式 Agent。鉴权、权限、余额、限流、临时不可用和格式不兼容分别返回可操作错误。
+
+### 2. Agent Eval 发布门禁（已完成）
 
 目标：验证 Agent 最终完成了任务，而不是只验证 API 和事件没有报错。
 
@@ -49,13 +51,17 @@ SheJane 已经具备本地 Agent Harness 的主干，不需要继续以“增加
 
 完成标准：关键改动不能在核心任务成功率明显回退时发布。
 
+实现结果：真实 Provider seed case 已从 3 个扩到 10 个，覆盖文件读写、工具回环、计划、AGENTS.md、Memory、SubAgent、权限等待和问题等待恢复；`make eval` 保存 Runtime/模型版本、完整轨迹、工作区结果、grader 结果及可选基线差异。CI 与 Client release 先运行 `make eval-gate` 的确定性 Agent 结果集并保存 JUnit 报告；有 BYOK 凭据的受控环境继续使用 `make eval` 跑真实 Provider 集。
+
 ## Next：可诊断性、状态收敛与发布证据
 
-### 3. 持久 Trace/Span
+### 3. 持久 Trace/Span（已完成）
 
 - 建立 `run → model → tool/subagent → checkpoint → terminal` 的稳定父子关系。
 - 记录 usage、耗时、错误分类和脱敏输入摘要，不复制密钥、原始附件或大结果。
 - diagnostics 能直接打开或导出同一条执行链；Langfuse/LangSmith 保持可选出口，而不是唯一事实来源。
+
+实现结果：Runtime 从已有 SQLite Run、模型调用账本、Tool Receipt、子 Run、Checkpoint 和终态记录投影稳定父子 Span，不新增第二套事实表。Trace 只带 usage、耗时、状态、错误分类和内容摘要哈希，不复制提示词、工具参数、原始附件、密钥或大结果；同一结构已经进入 diagnostics API、OpenAPI、Runtime SDK 与现有 diagnostics 导出。
 
 ### 4. Runtime 状态所有权收敛
 

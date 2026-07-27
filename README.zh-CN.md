@@ -66,12 +66,13 @@ SheJane 目前采用 manager-as-tools 模式：父 Agent 通过同步 `task()` �
 
 ## 路线图
 
-当前重点是证明可靠性，而不是继续增加工具数量：
+第一组可靠性门禁已经落地：
 
-1. 为每个预置 Provider 和地域完成真实 BYOK `模型 → 工具 → 模型` 验证。
-2. 建立能够阻止关键 Runtime/模型回退发布的 Agent Eval。
-3. 补齐持久 Trace、Runtime 状态所有权和插件/安装包正式发布证据。
-4. 逐步增加可审计的语义记忆、结构化输出和周期任务。
+- 预置 BYOK 模型必须先通过与正式 Agent 共用适配器的流式 `模型 → 工具 → 模型` 回环，才能进入可用状态；
+- CI 与 Client 发布使用确定性 Agent 结果门禁，`make eval` 另外保存真实 Provider 轨迹和基线差异；
+- Runtime diagnostics 会从持久记录导出脱敏的 `run → model → tool/subagent → checkpoint → terminal` Trace。
+
+当前继续收敛 Runtime 状态所有权，并补齐插件/安装包正式发布证据。可审计语义记忆、结构化输出和周期任务属于后续工作。
 
 周期任务、Remote Client、fresh-context handoff 和实时语音属于后续工作。详见完整[路线图](./docs/roadmap.md)与[当前 Agent Harness 能力审计](./docs/agent-harness-capabilities-latest-2026-07-26.md)。
 

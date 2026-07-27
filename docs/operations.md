@@ -57,7 +57,7 @@ Client 的“模型服务”设置调用 Runtime 的 `/v1/model-services` 接口
 
 首版入口包括 DeepSeek、Kimi、千问、GLM、MiniMax、硅基流动和“连接已有服务”。官方服务的地址与接口格式由 Runtime 固定，用户只选择区域并填写 API Key；已有服务会先自动识别 OpenAI Chat 或 Anthropic Messages 格式，失败后才显示高级选择。
 
-Runtime 立即返回缓存模型目录，不在 Client 启动时逐个访问外部服务。官方推荐模型使用内置能力资料；发现或手动添加的模型必须通过轻量工具调用测试后，才能用于 Agent Run。`/models` 失败不会阻止官方服务连接，Runtime 会保留内置或最近缓存目录。
+Runtime 不在 Client 启动时访问外部服务。新增或更新官方连接时，每个内置推荐模型会使用正式 Agent 共用的 Provider 适配器，依次完成流式 `模型 → ping 工具 → 工具结果 → 最终回答`；只有完整闭环成功的模型才标记为 `verified` 并可用于 Agent Run。单个模型遇到限流、临时故障或格式不兼容时保持 `unverified`，不会阻止其他模型保存；鉴权、账户权限或余额错误会直接阻止连接。发现或手动添加的模型同样必须单独通过完整闭环。`/models` 失败不会阻止官方服务连接，Runtime 会保留内置或最近缓存目录，但不会把目录推荐误当作连接验证。
 
 任务使用明确的 `local:<连接编号>:<模型编号>`。Runtime 不自动选择模型，也不会在连接之间静默切换。API Key 失效时，可在原连接上更新，不需要删除连接。
 
@@ -66,6 +66,20 @@ Runtime 立即返回缓存模型目录，不在 Client 启动时逐个访问外�
 Client 新对话默认使用“自动审批”。Runtime 会先执行确定性安全规则，只把外部或未知灰区交给当前 Run 已冻结的具体模型；审查器没有工具，也不能授予插件 capability、扩大工作区或绕过沙箱。审查超时、供应商失败、无效 JSON 或不完整决定都会回退到人工审批，不会自动放行或切换模型。
 
 审查调用和主 Agent 使用同一持久模型账本，但记录为独立的 `approval_review` purpose；每个 Run 最多 20 次，不占主执行模型的 100 次预算。自动决定保存在 Tool Receipt；诊断时可以通过 Run diagnostics 查看 `review_source`、`review_reason` 和 `review_model`。Client 时间线中的“规则自动允许”表示固定策略决定，“智能自动允许”表示当前模型决定。
+
+## Agent Evals 与诊断 Trace
+
+`make eval-gate` 运行不需要 API Key 的确定性核心 Agent 结果集，CI 和 Client release 都会先通过该门禁，并把 JUnit 报告写入 `.tmp/eval-gate.xml`。真实 Provider 验证使用正在运行的 Runtime：
+
+```bash
+SHEJANE_EVAL_TOKEN=<runtime-token> \
+SHEJANE_EVAL_MODEL=local:<connection>:<model> \
+make eval
+```
+
+默认报告写入 `.tmp/eval-report.json`。可用 `SHEJANE_EVAL_REPORT` 修改输出路径，用 `SHEJANE_EVAL_BASELINE` 指向上一份报告以计算通过率和 case 变化；报告包含 Runtime/模型版本、轨迹、工作区结果和 grader 结论，不保存 API Key。
+
+`GET /v1/runs/{run_id}/diagnostics` 的 `trace` 字段从持久 Run、模型账本、Tool Receipt、子 Run、最新 Checkpoint 和终态记录生成 `run → model → tool/subagent → checkpoint → terminal` 执行链。现有 diagnostics 导出会包含同一结构；Span 只包含状态、usage、耗时、错误分类和内容摘要哈希，不包含原始提示词、工具参数、附件正文、密钥或大结果。外部 Langfuse/LangSmith tracing 仍是可选出口，不是事实来源。
 
 ## 插件安装与信任
 
