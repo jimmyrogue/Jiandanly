@@ -74,3 +74,73 @@ test('subtask card keeps compact bottom and following progress spacing', async (
   expect.soft(card!.y + card!.height - (lastTask!.y + lastTask!.height)).toBeGreaterThanOrEqual(6)
   expect.soft(thinking!.y - (meta!.y + meta!.height)).toBeLessThanOrEqual(20)
 })
+
+test('model selector label leaves room for descenders', async ({ page }) => {
+  await page.setContent(`
+    <style>${styles}</style>
+    <button class="composer-mode-trigger">
+      <span class="composer-mode-trigger-label">gpt-5.6-luna</span>
+    </button>
+  `)
+
+  const metrics = await page.locator('.composer-mode-trigger-label').evaluate((element) => {
+    const style = getComputedStyle(element)
+    return {
+      fontSize: Number.parseFloat(style.fontSize),
+      lineHeight: Number.parseFloat(style.lineHeight),
+      overflowY: style.overflowY,
+    }
+  })
+
+  expect(metrics.overflowY === 'visible' || metrics.lineHeight > metrics.fontSize).toBe(true)
+})
+
+test('model capability settings follow a vertical hierarchy', async ({ page }) => {
+  await page.setContent(`
+    <style>${styles}</style>
+    <div class="settings-model-picker-row selected" style="width: 600px">
+      <div class="settings-model-picker-config">
+        <div class="settings-model-picker-field primary-field">
+          <span>用途</span>
+          <button data-slot="select-trigger">Agent 对话</button>
+        </div>
+        <details class="settings-model-picker-advanced" open>
+          <summary>高级设置</summary>
+          <div class="settings-model-picker-field protocol-field">
+            <span>接口格式</span>
+            <button data-slot="select-trigger">OpenAI Chat</button>
+          </div>
+        </details>
+      </div>
+    </div>
+  `)
+
+  const primary = await page.locator('.primary-field').boundingBox()
+  const advanced = await page.locator('.settings-model-picker-advanced').boundingBox()
+  const protocol = await page.locator('.protocol-field').boundingBox()
+
+  expect(primary).not.toBeNull()
+  expect(advanced).not.toBeNull()
+  expect(protocol).not.toBeNull()
+  expect(advanced!.y).toBeGreaterThanOrEqual(primary!.y + primary!.height)
+  expect(protocol!.x).toBe(primary!.x)
+})
+
+test('adjacent model states keep a visible gap', async ({ page }) => {
+  await page.setContent(`
+    <style>${styles}</style>
+    <div class="composer-mode-model-list" style="width: 270px">
+      <div>
+        <div class="composer-mode-item composer-mode-model-item is-active">DeepSeek V4 Flash</div>
+        <div class="composer-mode-item composer-mode-model-item">DeepSeek V4 Pro</div>
+      </div>
+    </div>
+  `)
+
+  const selected = await page.locator('.composer-mode-model-item').first().boundingBox()
+  const hovered = await page.locator('.composer-mode-model-item').last().boundingBox()
+
+  expect(selected).not.toBeNull()
+  expect(hovered).not.toBeNull()
+  expect(hovered!.y - (selected!.y + selected!.height)).toBeGreaterThanOrEqual(2)
+})

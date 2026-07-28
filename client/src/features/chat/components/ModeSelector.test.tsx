@@ -58,10 +58,12 @@ describe('ModeSelector (Runtime catalog)', () => {
     expect(window.confirm).toHaveBeenCalledOnce()
   })
 
-  it('separates recommended and more models', async () => {
+  it('keeps provider groups without an extra more-models heading', async () => {
     renderSelector('local:openai:gpt-4o')
     openMenu()
-    expect(await screen.findByText('更多模型')).toBeInTheDocument()
+    expect(await screen.findByText('OpenAI')).toBeInTheDocument()
+    expect(screen.getByText('Ollama')).toBeInTheDocument()
+    expect(screen.queryByText('更多模型')).not.toBeInTheDocument()
   })
 
   it('keeps recommended and additional models from one vendor together', async () => {

@@ -6103,7 +6103,7 @@ button.agent-progress-summary:focus-visible {
   transform: none;
 }
 .composer-mode-trigger-label {
-  line-height: 1;
+  line-height: 1.4;
 }
 .composer-mode-trigger-chevron {
   opacity: 0.6;
@@ -6143,6 +6143,9 @@ button.agent-progress-summary:focus-visible {
 .composer-mode-model-item {
   min-height: 34px;
   padding: 8px 10px;
+}
+.composer-mode-model-item + .composer-mode-model-item {
+  margin-top: 2px;
 }
 .composer-mode-item.is-active {
   background: var(--surface-2, rgba(120, 120, 130, 0.08));
@@ -6263,11 +6266,6 @@ button.agent-progress-summary:focus-visible {
   color: var(--text-secondary);
   outline: none;
   background: var(--surface-2, rgba(120, 120, 130, 0.12));
-}
-.composer-mode-more-label {
-  padding: 6px 12px 3px;
-  color: var(--text-tertiary);
-  font-size: 10.5px;
 }
 /* Concrete model badge. Service details can be shown in a tooltip. */
 .message-meta-mode {
@@ -9325,17 +9323,18 @@ button.settings-row-button:focus-visible,
 }
 
 .settings-model-picker-config {
-  display: flex;
-  align-items: center;
-  gap: 18px;
+  display: grid;
+  gap: 10px;
   padding: 0 8px 12px 35px;
 }
 
 .settings-model-picker-field {
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: 56px minmax(0, 220px);
   min-width: 0;
+  width: 100%;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
 
 .settings-model-picker-field > span {
@@ -9346,15 +9345,17 @@ button.settings-row-button:focus-visible,
 
 .settings-model-picker-field [data-slot='select-trigger'] {
   height: 32px;
-  min-width: 132px;
+  width: 100%;
   font-size: 11.5px;
 }
 
 .settings-model-picker-advanced {
-  display: inline-flex;
+  display: grid;
   min-width: 0;
-  align-items: center;
-  gap: 12px;
+  width: 100%;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 0.5px solid var(--sj-line, #E8E5DE);
 }
 
 .settings-model-picker-advanced > summary,
@@ -9434,9 +9435,12 @@ button.settings-row-button:focus-visible,
   }
 
   .settings-model-picker-config {
-    align-items: flex-start;
-    flex-direction: column;
     gap: 10px;
+  }
+
+  .settings-model-picker-field {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 5px;
   }
 
   .settings-model-picker-footer {

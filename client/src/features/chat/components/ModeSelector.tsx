@@ -173,9 +173,6 @@ export function ModeSelector({
       <DropdownMenuContent align="end" alignOffset={4} sideOffset={8} className="composer-mode-menu">
         <div className="composer-mode-model-list">
           {recommendedGroups.map(renderGroup)}
-          {recommendedGroups.length > 0 && moreGroups.length > 0 && (
-            <div className="composer-mode-more-label">{t('composer.mode.moreModels')}</div>
-          )}
           {moreGroups.map(renderGroup)}
         </div>
       </DropdownMenuContent>
