@@ -3,13 +3,35 @@ name: Release Client
 on:
   push:
     tags: ["client-v*"]
+    branches: [main]
+    paths:
+      - .github/workflows/release-client.yml
+      - client/vm-assets/**
+      - pnpm-lock.yaml
+      - runtime/plugins/browser-qa/**
+      - runtime/plugins/computer-use/**
+      - runtime/plugins/ocr/**
+      - runtime/pyproject.toml
+      - runtime/src/shejane_runtime/plugins/**
+      - runtime/uv.lock
+      - scripts/build-browser-qa-builtin.sh
+      - scripts/build-browser-qa-windows-amd64.ps1
+      - scripts/build-computer-use-builtin.sh
+      - scripts/build-ocr-builtin.sh
+      - scripts/build-ocr-windows-amd64.ps1
   workflow_dispatch:
+    inputs:
+      extended_asset_verification:
+        description: Build the Linux arm64 assets used only by the deferred macOS VM gates
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
 jobs:
   agent-eval-gate:
+    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,6 +55,7 @@ jobs:
           if-no-files-found: error
 
   linux-arm64-runtime:
+    if: inputs.extended_asset_verification == true
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -168,6 +191,7 @@ jobs:
           if-no-files-found: error
 
   linux-arm64-node-runtime:
+    if: inputs.extended_asset_verification == true
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -215,6 +239,7 @@ jobs:
           if-no-files-found: error
 
   linux-arm64-office-runtime:
+    if: inputs.extended_asset_verification == true
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -261,6 +286,7 @@ jobs:
           if-no-files-found: error
 
   linux-arm64-pdf-runtime:
+    if: inputs.extended_asset_verification == true
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -294,6 +320,7 @@ jobs:
           if-no-files-found: error
 
   linux-arm64-ffmpeg-runtime:
+    if: inputs.extended_asset_verification == true
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -338,6 +365,7 @@ jobs:
           if-no-files-found: error
 
   linux-arm64-ocr-runtime:
+    if: inputs.extended_asset_verification == true
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -409,6 +437,12 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - name: Restore macOS RapidOCR Runtime Asset
+        id: rapidocr-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/rapidocr-runtime-darwin-arm64-a.shejane-runtime-asset
+          key: release-asset-v1-darwin-arm64-rapidocr-${{ hashFiles('runtime/plugins/ocr/runtime-assets/rapidocr-3.9.1.lock.json', 'runtime/plugins/ocr/runtime-assets/build_darwin.py', 'runtime/plugins/ocr/runtime-assets/ocr_engine.py') }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12.10"
@@ -416,6 +450,7 @@ jobs:
         with:
           version: "0.9.14"
       - name: Fetch content-locked macOS OCR packages and models
+        if: steps.rapidocr-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -458,6 +493,7 @@ jobs:
           done < <(jq -r '.models[] | [.source_url, .filename] | @tsv' \
             runtime/plugins/ocr/runtime-assets/rapidocr-3.9.1.lock.json)
       - name: Build reproducible macOS arm64 RapidOCR Runtime Asset
+        if: steps.rapidocr-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -470,14 +506,45 @@ jobs:
               --output "${output}"
           done
           cmp "${first}" "${second}"
+      - name: Verify macOS arm64 RapidOCR Runtime Asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - "${RUNNER_TEMP}/rapidocr-runtime-darwin-arm64-a.shejane-runtime-asset" <<'PY'
+          import json
+          import sys
+          import zipfile
+
+          with zipfile.ZipFile(sys.argv[1]) as archive:
+              if archive.testzip() is not None:
+                  raise SystemExit("RapidOCR Runtime Asset cache is corrupt")
+              manifest = json.loads(
+                  archive.read(".shejane-runtime-asset/asset.json").decode("utf-8")
+              )
+          expected = {
+              "id": "org.rapidocr.runtime",
+              "version": "3.9.1+ppocrv6-medium.1",
+              "platform": "darwin/arm64",
+          }
+          if {key: manifest.get(key) for key in expected} != expected:
+              raise SystemExit("RapidOCR Runtime Asset cache has the wrong identity")
+          PY
+      - name: Save macOS RapidOCR Runtime Asset
+        if: github.ref == 'refs/heads/main' && steps.rapidocr-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/rapidocr-runtime-darwin-arm64-a.shejane-runtime-asset
+          key: ${{ steps.rapidocr-cache.outputs.cache-primary-key }}
       - uses: actions/upload-artifact@v4
         with:
           name: rapidocr-runtime-darwin-arm64
           path: ${{ runner.temp }}/rapidocr-runtime-darwin-arm64-a.shejane-runtime-asset
           if-no-files-found: error
+          retention-days: 1
 
-  windows-amd64-fixed-plugins:
-    runs-on: windows-latest
+  darwin-arm64-fixed-plugins:
+    needs: darwin-arm64-ocr-runtime
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -492,25 +559,192 @@ jobs:
         with:
           python-version: "3.12.10"
       - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.9.14"
+          enable-cache: true
+          cache-dependency-glob: runtime/uv.lock
+      - name: Restore macOS fixed capabilities
+        id: fixed-capabilities-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/shejane-fixed-capabilities
+          key: release-asset-v1-darwin-arm64-fixed-capabilities-${{ hashFiles('pnpm-lock.yaml', 'runtime/pyproject.toml', 'runtime/uv.lock', 'runtime/src/shejane_runtime/plugins/**', 'scripts/build-browser-qa-builtin.sh', 'scripts/build-computer-use-builtin.sh', 'scripts/build-ocr-builtin.sh', 'runtime/plugins/browser-qa/**', 'runtime/plugins/computer-use/**', 'runtime/plugins/ocr/**') }}
+      - name: Install fixed capability build dependencies
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          cd runtime
+          uv sync --frozen
+      - uses: actions/download-artifact@v4
+        if: steps.fixed-capabilities-cache.outputs.cache-hit != 'true'
+        with:
+          name: rapidocr-runtime-darwin-arm64
+          path: ${{ runner.temp }}/shejane-rapidocr-runtime-darwin
+      - name: Build locked macOS fixed capabilities
+        if: steps.fixed-capabilities-cache.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          SHEJANE_RAPIDOCR_RUNTIME_ASSET: ${{ runner.temp }}/shejane-rapidocr-runtime-darwin/rapidocr-runtime-darwin-arm64-a.shejane-runtime-asset
+        run: |
+          set -euo pipefail
+          ./scripts/build-computer-use-builtin.sh
+          ./scripts/build-browser-qa-builtin.sh
+          ./scripts/build-ocr-builtin.sh
+          output="${RUNNER_TEMP}/shejane-fixed-capabilities"
+          mkdir -p "${output}"
+          cp runtime/plugins/computer-use/dist/computer-use-0.2.0-darwin-arm64.shejane-plugin "${output}/"
+          cp runtime/plugins/browser-qa/dist/browser-qa-0.1.0-darwin-arm64.shejane-plugin "${output}/"
+          cp runtime/plugins/browser-qa/dist/browser-qa-runtime-1.61.1-darwin-arm64.shejane-runtime-asset "${output}/"
+          cp runtime/plugins/ocr/dist/ocr-0.1.0-darwin-arm64.shejane-plugin "${output}/"
+          cp runtime/plugins/ocr/dist/rapidocr-runtime-3.9.1-darwin-arm64.shejane-runtime-asset "${output}/"
+      - name: Verify macOS fixed capability cache
+        working-directory: runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="${RUNNER_TEMP}/shejane-fixed-capabilities"
+          packages=(
+            computer-use-0.2.0-darwin-arm64.shejane-plugin
+            browser-qa-0.1.0-darwin-arm64.shejane-plugin
+            ocr-0.1.0-darwin-arm64.shejane-plugin
+          )
+          for filename in "${packages[@]}"; do
+            package="${output}/${filename}"
+            test -f "${package}"
+            uv run shejane-plugin inspect "${package}"
+          done
+          uv run python - "${output}" <<'PY'
+          import sys
+          import tempfile
+          from pathlib import Path
+
+          from shejane_runtime.plugins.runtime_assets import RuntimeAssetStore
+
+          root = Path(sys.argv[1])
+          expected = {
+              "browser-qa-runtime-1.61.1-darwin-arm64.shejane-runtime-asset": (
+                  "org.shejane.browser-qa.runtime",
+                  "1.61.1+chromium1228.1",
+              ),
+              "rapidocr-runtime-3.9.1-darwin-arm64.shejane-runtime-asset": (
+                  "org.rapidocr.runtime",
+                  "3.9.1+ppocrv6-medium.1",
+              ),
+          }
+          with tempfile.TemporaryDirectory(prefix="shejane-fixed-cache-") as temporary:
+              store = RuntimeAssetStore(Path(temporary))
+              for filename, identity in expected.items():
+                  installed = store.install(root / filename, target_platform="darwin/arm64")
+                  if (installed.asset_id, installed.version) != identity:
+                      raise SystemExit(f"cached Runtime Asset identity mismatch: {filename}")
+          PY
+      - name: Save macOS fixed capabilities
+        if: github.ref == 'refs/heads/main' && steps.fixed-capabilities-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/shejane-fixed-capabilities
+          key: ${{ steps.fixed-capabilities-cache.outputs.cache-primary-key }}
+      - uses: actions/upload-artifact@v4
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+        with:
+          name: fixed-plugins-darwin-arm64
+          path: ${{ runner.temp }}/shejane-fixed-capabilities
+          if-no-files-found: error
+          retention-days: 1
+
+  windows-amd64-fixed-plugins:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore Windows fixed capabilities
+        id: fixed-capabilities-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/shejane-fixed-capabilities
+          key: release-asset-v1-windows-amd64-fixed-capabilities-${{ hashFiles('pnpm-lock.yaml', 'runtime/pyproject.toml', 'runtime/uv.lock', 'runtime/src/shejane_runtime/plugins/**', 'scripts/build-browser-qa-windows-amd64.ps1', 'scripts/build-ocr-windows-amd64.ps1', 'runtime/plugins/browser-qa/**', 'runtime/plugins/ocr/**') }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.10"
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: runtime/uv.lock
       - name: Install workspace dependencies
         run: corepack enable && pnpm install --frozen-lockfile
       - name: Install Runtime test dependencies
         working-directory: runtime
         run: uv sync --frozen
       - name: Build and execute locked Windows fixed capabilities
+        if: steps.fixed-capabilities-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           ./scripts/build-ocr-windows-amd64.ps1 `
             -OutputDirectory "$env:RUNNER_TEMP/shejane-fixed-capabilities"
           ./scripts/build-browser-qa-windows-amd64.ps1 `
             -OutputDirectory "$env:RUNNER_TEMP/shejane-fixed-capabilities"
+      - name: Verify Windows fixed capability cache
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP "shejane-fixed-capabilities"
+          @(
+            "browser-qa-0.1.0-windows-amd64.shejane-plugin",
+            "ocr-0.1.0-windows-amd64.shejane-plugin"
+          ) | ForEach-Object {
+            $package = Join-Path $output $_
+            if (-not (Test-Path $package -PathType Leaf)) {
+              throw "cached fixed capability is missing: $_"
+            }
+            uv run --project runtime shejane-plugin inspect $package
+          }
+          @'
+          import sys
+          import tempfile
+          from pathlib import Path
+
+          from shejane_runtime.plugins.runtime_assets import RuntimeAssetStore
+
+          root = Path(sys.argv[1])
+          expected = {
+              "browser-qa-runtime-1.61.1-windows-amd64.shejane-runtime-asset": (
+                  "org.shejane.browser-qa.runtime",
+                  "1.61.1+chromium1228.1",
+              ),
+              "rapidocr-runtime-3.9.1-windows-amd64.shejane-runtime-asset": (
+                  "org.rapidocr.runtime",
+                  "3.9.1+ppocrv6-medium.1",
+              ),
+          }
+          with tempfile.TemporaryDirectory(prefix="shejane-fixed-cache-") as temporary:
+              store = RuntimeAssetStore(Path(temporary))
+              for filename, identity in expected.items():
+                  installed = store.install(root / filename, target_platform="windows/amd64")
+                  if (installed.asset_id, installed.version) != identity:
+                      raise SystemExit(f"cached Runtime Asset identity mismatch: {filename}")
+          '@ | uv run --project runtime python - $output
+      - name: Save Windows fixed capabilities
+        if: github.ref == 'refs/heads/main' && steps.fixed-capabilities-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/shejane-fixed-capabilities
+          key: ${{ steps.fixed-capabilities-cache.outputs.cache-primary-key }}
       - uses: actions/upload-artifact@v4
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         with:
           name: fixed-plugins-windows-amd64
           path: ${{ runner.temp }}/shejane-fixed-capabilities
           if-no-files-found: error
+          retention-days: 1
 
   darwin-arm64-speech-model:
+    if: inputs.extended_asset_verification == true
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -556,6 +790,7 @@ jobs:
           if-no-files-found: error
 
   linux-arm64-speech-runtime:
+    if: inputs.extended_asset_verification == true
     needs: darwin-arm64-speech-model
     runs-on: ubuntu-24.04-arm
     steps:
@@ -605,6 +840,7 @@ jobs:
           if-no-files-found: error
 
   linux-arm64-documents-worker:
+    if: inputs.extended_asset_verification == true
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -624,6 +860,7 @@ jobs:
           if-no-files-found: error
 
   linux-arm64-spreadsheets-worker:
+    if: inputs.extended_asset_verification == true
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -643,6 +880,7 @@ jobs:
           if-no-files-found: error
 
   linux-arm64-presentations-worker:
+    if: inputs.extended_asset_verification == true
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -662,6 +900,7 @@ jobs:
           if-no-files-found: error
 
   linux-arm64-pdf-worker:
+    if: inputs.extended_asset_verification == true
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -681,6 +920,7 @@ jobs:
           if-no-files-found: error
 
   linux-arm64-media-worker:
+    if: inputs.extended_asset_verification == true
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -700,6 +940,7 @@ jobs:
           if-no-files-found: error
 
   linux-arm64-ocr-worker:
+    if: inputs.extended_asset_verification == true
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -719,6 +960,7 @@ jobs:
           if-no-files-found: error
 
   linux-arm64-speech-worker:
+    if: inputs.extended_asset_verification == true
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -738,6 +980,7 @@ jobs:
           if-no-files-found: error
 
   linux-arm64-vision-worker:
+    if: inputs.extended_asset_verification == true
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -760,15 +1003,22 @@ jobs:
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
+      - name: Restore Managed Worker guest rootfs
+        id: guest-rootfs-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/shejane-managed-worker-vm-inputs
+          key: release-asset-v2-darwin-arm64-vm-inputs-${{ hashFiles('client/vm-assets/darwin-arm64.lock.json', 'client/vm-assets/build_guest_rootfs.py') }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: Fetch locked guest rootfs build inputs
+        if: steps.guest-rootfs-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
           lock="client/vm-assets/darwin-arm64.lock.json"
-          inputs="${RUNNER_TEMP}/shejane-guest-rootfs-inputs"
+          inputs="${RUNNER_TEMP}/shejane-managed-worker-vm-inputs"
           mkdir -p "${inputs}"
           fetch() {
             local query="$1"
@@ -779,27 +1029,58 @@ jobs:
           fetch '.e2fsprogs.source.url' e2fsprogs.tar.xz
           fetch '.e2fsprogs.signature.url' e2fsprogs.tar.sign
           fetch '.e2fsprogs.signing_key.url' e2fsprogs-signing-key.asc
+          fetch '.fedora.kernel_core.url' kernel-core.rpm
+          fetch '.fedora.kernel_modules_core.url' kernel-modules-core.rpm
+          fetch '.fedora.kernel_srpm.url' kernel.src.rpm
+          fetch '.fedora.keyring.url' fedora.gpg
           mkdir "${inputs}/runtime-packages"
           while IFS=$'\t' read -r url filename; do
             curl --fail --location --retry 5 --proto '=https' --proto-redir '=https' --tlsv1.2 \
               "${url}" --output "${inputs}/runtime-packages/${filename}"
           done < <(jq -r '.rootfs.runtime_packages[] | [.url, .filename] | @tsv' "${lock}")
       - name: Build reproducible Linux arm64 guest rootfs
+        if: steps.guest-rootfs-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
-          inputs="${RUNNER_TEMP}/shejane-guest-rootfs-inputs"
+          inputs="${RUNNER_TEMP}/shejane-managed-worker-vm-inputs"
           python client/vm-assets/build_guest_rootfs.py \
             --e2fs-source "${inputs}/e2fsprogs.tar.xz" \
             --e2fs-signature "${inputs}/e2fsprogs.tar.sign" \
             --e2fs-signing-key "${inputs}/e2fsprogs-signing-key.asc" \
             --runtime-packages "${inputs}/runtime-packages" \
-            --output "${RUNNER_TEMP}/guest-rootfs.ext4"
-      - uses: actions/upload-artifact@v4
+            --output "${inputs}/guest-rootfs.ext4"
+          rm -rf "${inputs}/runtime-packages"
+      - name: Verify Managed Worker guest rootfs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - "${RUNNER_TEMP}/shejane-managed-worker-vm-inputs/guest-rootfs.ext4" client/vm-assets/darwin-arm64.lock.json <<'PY'
+          import hashlib
+          import json
+          import sys
+          from pathlib import Path
+
+          image = Path(sys.argv[1])
+          expected = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))["rootfs"]["image"]
+          with image.open("rb") as source:
+              digest = hashlib.file_digest(source, "sha256").hexdigest()
+          if image.stat().st_size != expected["size"] or digest != expected["sha256"]:
+              raise SystemExit("cached guest rootfs does not match its locked identity")
+          PY
+      - name: Save Managed Worker guest rootfs
+        if: github.ref == 'refs/heads/main' && steps.guest-rootfs-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
         with:
-          name: managed-worker-guest-rootfs-arm64
-          path: ${{ runner.temp }}/guest-rootfs.ext4
+          path: ${{ runner.temp }}/shejane-managed-worker-vm-inputs
+          key: ${{ steps.guest-rootfs-cache.outputs.cache-primary-key }}
+      - uses: actions/upload-artifact@v4
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+        with:
+          name: managed-worker-vm-inputs-arm64
+          path: ${{ runner.temp }}/shejane-managed-worker-vm-inputs
           if-no-files-found: error
+          retention-days: 1
 
   build:
     needs:
@@ -810,7 +1091,7 @@ jobs:
       - linux-arm64-media-worker
       - linux-arm64-node-runtime
       - linux-arm64-ocr-runtime
-      - darwin-arm64-ocr-runtime
+      - darwin-arm64-fixed-plugins
       - windows-amd64-fixed-plugins
       - linux-arm64-ocr-worker
       - linux-arm64-office-runtime
@@ -821,6 +1102,11 @@ jobs:
       - linux-arm64-speech-worker
       - linux-arm64-spreadsheets-worker
       - linux-arm64-vision-worker
+    if: >-
+      always() &&
+      (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch') &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled')
     strategy:
       fail-fast: false
       matrix:
@@ -935,114 +1221,93 @@ jobs:
       - name: Prepare unsupported macOS VM asset directory
         if: matrix.platform == 'macos' && matrix.arch != 'arm64'
         run: mkdir -p client/build/vm-assets-${{ matrix.arch }}
-      - name: Fetch locked macOS Managed Worker VM sources
-        if: matrix.platform == 'macos' && matrix.arch == 'arm64'
-        shell: bash
-        run: |
-          set -euo pipefail
-          lock="client/vm-assets/darwin-arm64.lock.json"
-          inputs="${RUNNER_TEMP}/shejane-managed-worker-vm-inputs"
-          mkdir -p "${inputs}"
-          fetch() {
-            local query="$1"
-            local output="$2"
-            curl --fail --location --retry 5 --proto '=https' --proto-redir '=https' --tlsv1.2 \
-              "$(jq -r "${query}" "${lock}")" --output "${inputs}/${output}"
-          }
-          fetch '.fedora.kernel_core.url' kernel-core.rpm
-          fetch '.fedora.kernel_modules_core.url' kernel-modules-core.rpm
-          fetch '.fedora.kernel_srpm.url' kernel.src.rpm
-          fetch '.fedora.keyring.url' fedora.gpg
-          fetch '.e2fsprogs.source.url' e2fsprogs.tar.xz
-          fetch '.e2fsprogs.signature.url' e2fsprogs.tar.sign
-          fetch '.e2fsprogs.signing_key.url' e2fsprogs-signing-key.asc
       - uses: actions/download-artifact@v4
         if: matrix.platform == 'macos' && matrix.arch == 'arm64'
         with:
-          name: managed-worker-guest-rootfs-arm64
+          name: managed-worker-vm-inputs-arm64
           path: ${{ runner.temp }}/shejane-managed-worker-vm-inputs
       - uses: actions/download-artifact@v4
-        if: matrix.platform == 'macos' && matrix.arch == 'arm64'
+        if: matrix.platform == 'macos' && matrix.arch == 'arm64' && inputs.extended_asset_verification == true
         with:
           name: documents-worker-linux-arm64
           path: ${{ runner.temp }}/shejane-documents-worker
       - uses: actions/download-artifact@v4
-        if: matrix.platform == 'macos' && matrix.arch == 'arm64'
+        if: matrix.platform == 'macos' && matrix.arch == 'arm64' && inputs.extended_asset_verification == true
         with:
           name: spreadsheets-worker-linux-arm64
           path: ${{ runner.temp }}/shejane-spreadsheets-worker
       - uses: actions/download-artifact@v4
-        if: matrix.platform == 'macos' && matrix.arch == 'arm64'
+        if: matrix.platform == 'macos' && matrix.arch == 'arm64' && inputs.extended_asset_verification == true
         with:
           name: presentations-worker-linux-arm64
           path: ${{ runner.temp }}/shejane-presentations-worker
       - uses: actions/download-artifact@v4
-        if: matrix.platform == 'macos' && matrix.arch == 'arm64'
+        if: matrix.platform == 'macos' && matrix.arch == 'arm64' && inputs.extended_asset_verification == true
         with:
           name: pdf-worker-linux-arm64
           path: ${{ runner.temp }}/shejane-pdf-worker
       - uses: actions/download-artifact@v4
-        if: matrix.platform == 'macos' && matrix.arch == 'arm64'
+        if: matrix.platform == 'macos' && matrix.arch == 'arm64' && inputs.extended_asset_verification == true
         with:
           name: media-foundation-worker-linux-arm64
           path: ${{ runner.temp }}/shejane-media-worker
       - uses: actions/download-artifact@v4
-        if: matrix.platform == 'macos' && matrix.arch == 'arm64'
+        if: matrix.platform == 'macos' && matrix.arch == 'arm64' && inputs.extended_asset_verification == true
         with:
           name: ocr-worker-linux-arm64
           path: ${{ runner.temp }}/shejane-ocr-worker
       - uses: actions/download-artifact@v4
-        if: matrix.platform == 'macos' && matrix.arch == 'arm64'
+        if: matrix.platform == 'macos' && matrix.arch == 'arm64' && inputs.extended_asset_verification == true
         with:
           name: speech-worker-linux-arm64
           path: ${{ runner.temp }}/shejane-speech-worker
       - uses: actions/download-artifact@v4
-        if: matrix.platform == 'macos' && matrix.arch == 'arm64'
+        if: matrix.platform == 'macos' && matrix.arch == 'arm64' && inputs.extended_asset_verification == true
         with:
           name: vision-worker-linux-arm64
           path: ${{ runner.temp }}/shejane-vision-worker
       - uses: actions/download-artifact@v4
-        if: matrix.platform == 'macos' && matrix.arch == 'arm64'
+        if: matrix.platform == 'macos' && matrix.arch == 'arm64' && inputs.extended_asset_verification == true
         with:
           name: office-runtime-linux-arm64
           path: ${{ runner.temp }}/shejane-office-runtime
       - uses: actions/download-artifact@v4
-        if: matrix.platform == 'macos' && matrix.arch == 'arm64'
+        if: matrix.platform == 'macos' && matrix.arch == 'arm64' && inputs.extended_asset_verification == true
         with:
           name: mupdf-runtime-linux-arm64
           path: ${{ runner.temp }}/shejane-mupdf-runtime
       - uses: actions/download-artifact@v4
-        if: matrix.platform == 'macos' && matrix.arch == 'arm64'
+        if: matrix.platform == 'macos' && matrix.arch == 'arm64' && inputs.extended_asset_verification == true
         with:
           name: ffmpeg-runtime-linux-arm64
           path: ${{ runner.temp }}/shejane-ffmpeg-runtime
       - uses: actions/download-artifact@v4
-        if: matrix.platform == 'macos' && matrix.arch == 'arm64'
+        if: matrix.platform == 'macos' && matrix.arch == 'arm64' && inputs.extended_asset_verification == true
         with:
           name: rapidocr-runtime-linux-arm64
           path: ${{ runner.temp }}/shejane-rapidocr-runtime
       - uses: actions/download-artifact@v4
         if: matrix.platform == 'macos' && matrix.arch == 'arm64'
         with:
-          name: rapidocr-runtime-darwin-arm64
-          path: ${{ runner.temp }}/shejane-rapidocr-runtime-darwin
+          name: fixed-plugins-darwin-arm64
+          path: ${{ runner.temp }}/shejane-fixed-plugins-darwin
       - uses: actions/download-artifact@v4
         if: matrix.platform == 'windows' && matrix.arch == 'x64'
         with:
           name: fixed-plugins-windows-amd64
           path: ${{ runner.temp }}/shejane-fixed-plugins-windows
       - uses: actions/download-artifact@v4
-        if: matrix.platform == 'macos' && matrix.arch == 'arm64'
+        if: matrix.platform == 'macos' && matrix.arch == 'arm64' && inputs.extended_asset_verification == true
         with:
           name: whisper-runtime-linux-arm64
           path: ${{ runner.temp }}/shejane-whisper-runtime
       - uses: actions/download-artifact@v4
-        if: matrix.platform == 'macos' && matrix.arch == 'arm64'
+        if: matrix.platform == 'macos' && matrix.arch == 'arm64' && inputs.extended_asset_verification == true
         with:
           name: node-runtime-linux-arm64
           path: ${{ runner.temp }}/shejane-node-runtime
       - name: Extract Linux arm64 Managed Workers
-        if: matrix.platform == 'macos' && matrix.arch == 'arm64'
+        if: matrix.platform == 'macos' && matrix.arch == 'arm64' && inputs.extended_asset_verification == true
         shell: bash
         run: |
           set -euo pipefail
@@ -1071,7 +1336,7 @@ jobs:
           test -x "${RUNNER_TEMP}/shejane-speech-worker/speech-worker/speech-worker"
           test -x "${RUNNER_TEMP}/shejane-vision-worker/vision-worker/vision-worker"
       - name: Install verified Linux arm64 Office Runtime Asset
-        if: matrix.platform == 'macos' && matrix.arch == 'arm64'
+        if: matrix.platform == 'macos' && matrix.arch == 'arm64' && inputs.extended_asset_verification == true
         working-directory: runtime
         shell: bash
         run: |
@@ -1087,7 +1352,7 @@ jobs:
           (root / "shejane-office-runtime-digest").write_text(installed.digest, encoding="utf-8")
           PY
       - name: Install verified Linux arm64 MuPDF Runtime Asset
-        if: matrix.platform == 'macos' && matrix.arch == 'arm64'
+        if: matrix.platform == 'macos' && matrix.arch == 'arm64' && inputs.extended_asset_verification == true
         working-directory: runtime
         shell: bash
         run: |
@@ -1102,7 +1367,7 @@ jobs:
           (root / "shejane-mupdf-runtime-digest").write_text(installed.digest, encoding="utf-8")
           PY
       - name: Install verified Linux arm64 media Runtime Assets
-        if: matrix.platform == 'macos' && matrix.arch == 'arm64'
+        if: matrix.platform == 'macos' && matrix.arch == 'arm64' && inputs.extended_asset_verification == true
         working-directory: runtime
         shell: bash
         run: |
@@ -1125,7 +1390,7 @@ jobs:
               )
           PY
       - name: Build and inspect Linux arm64 Office plugin packages
-        if: matrix.platform == 'macos' && matrix.arch == 'arm64'
+        if: matrix.platform == 'macos' && matrix.arch == 'arm64' && inputs.extended_asset_verification == true
         working-directory: runtime
         shell: bash
         run: |
@@ -1152,7 +1417,7 @@ jobs:
             uv run shejane-plugin inspect "${package}"
           done
       - name: Build and inspect Linux arm64 PDF plugin package
-        if: matrix.platform == 'macos' && matrix.arch == 'arm64'
+        if: matrix.platform == 'macos' && matrix.arch == 'arm64' && inputs.extended_asset_verification == true
         working-directory: runtime
         shell: bash
         run: |
@@ -1166,7 +1431,7 @@ jobs:
             --output "${output}"
           uv run shejane-plugin inspect "${output}"
       - name: Build and inspect Linux arm64 Media, Speech, and Cloud Vision packages
-        if: matrix.platform == 'macos' && matrix.arch == 'arm64'
+        if: matrix.platform == 'macos' && matrix.arch == 'arm64' && inputs.extended_asset_verification == true
         working-directory: runtime
         shell: bash
         run: |
@@ -1215,14 +1480,20 @@ jobs:
             --output ../client/build/vm-assets-arm64
       - name: Build Runtime with fixed capability packages
         shell: bash
-        env:
-          SHEJANE_RAPIDOCR_RUNTIME_ASSET: ${{ runner.temp }}/shejane-rapidocr-runtime-darwin/rapidocr-runtime-darwin-arm64-a.shejane-runtime-asset
         run: |
           set -euo pipefail
           if [[ "${{ matrix.platform }}" == "macos" && "${{ matrix.arch }}" == "arm64" ]]; then
-            ./scripts/build-computer-use-builtin.sh
-            ./scripts/build-browser-qa-builtin.sh
-            ./scripts/build-ocr-builtin.sh
+            mkdir -p runtime/plugins/computer-use/dist runtime/plugins/browser-qa/dist runtime/plugins/ocr/dist
+            cp "${RUNNER_TEMP}/shejane-fixed-plugins-darwin/computer-use-0.2.0-darwin-arm64.shejane-plugin" \
+              runtime/plugins/computer-use/dist/
+            cp "${RUNNER_TEMP}/shejane-fixed-plugins-darwin/browser-qa-0.1.0-darwin-arm64.shejane-plugin" \
+              runtime/plugins/browser-qa/dist/
+            cp "${RUNNER_TEMP}/shejane-fixed-plugins-darwin/browser-qa-runtime-1.61.1-darwin-arm64.shejane-runtime-asset" \
+              runtime/plugins/browser-qa/dist/
+            cp "${RUNNER_TEMP}/shejane-fixed-plugins-darwin/ocr-0.1.0-darwin-arm64.shejane-plugin" \
+              runtime/plugins/ocr/dist/
+            cp "${RUNNER_TEMP}/shejane-fixed-plugins-darwin/rapidocr-runtime-3.9.1-darwin-arm64.shejane-runtime-asset" \
+              runtime/plugins/ocr/dist/
           elif [[ "${{ matrix.platform }}" == "windows" && "${{ matrix.arch }}" == "x64" ]]; then
             mkdir -p runtime/plugins/ocr/dist
             cp "${RUNNER_TEMP}/shejane-fixed-plugins-windows/ocr-0.1.0-windows-amd64.shejane-plugin" \
