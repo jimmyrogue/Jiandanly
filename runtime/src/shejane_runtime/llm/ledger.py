@@ -86,9 +86,9 @@ class LedgerChatModel(BaseChatModel):
     def _provider_model(
         self,
         messages: list[BaseMessage],
-    ) -> tuple[BaseChatModel, int, dict[str, str]]:
+    ) -> tuple[BaseChatModel, int, dict[str, str], dict[str, str]]:
         if not self.bound_tools:
-            return self.delegate, self.tool_schema_tokens, {}
+            return self.delegate, self.tool_schema_tokens, {}, {}
         visible_tools = visible_tools_for_messages(self.bound_tools, messages)
         provider_tools, aliases, choices = _provider_tools(visible_tools)
         return (
@@ -99,6 +99,7 @@ class LedgerChatModel(BaseChatModel):
             ),
             _estimate_tool_tokens(visible_tools),
             aliases,
+            choices,
         )
 
     async def _reserve(self) -> dict[str, Any]:
@@ -120,12 +121,13 @@ class LedgerChatModel(BaseChatModel):
         run_manager: AsyncCallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> ChatResult:
-        provider_model, tool_schema_tokens, aliases = self._provider_model(messages)
+        provider_model, tool_schema_tokens, aliases, choices = self._provider_model(messages)
         messages = self._bounded_messages(messages, tool_schema_tokens=tool_schema_tokens)
+        messages = [_rewrite_tool_names(message, choices) for message in messages]
         receipt = await self._reserve()
         output_started = False
         try:
-            message = _restore_tool_names(
+            message = _rewrite_tool_names(
                 await provider_model.ainvoke(
                     messages,
                     stop=stop,
@@ -167,8 +169,9 @@ class LedgerChatModel(BaseChatModel):
         run_manager: AsyncCallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[ChatGenerationChunk]:
-        provider_model, tool_schema_tokens, aliases = self._provider_model(messages)
+        provider_model, tool_schema_tokens, aliases, choices = self._provider_model(messages)
         messages = self._bounded_messages(messages, tool_schema_tokens=tool_schema_tokens)
+        messages = [_rewrite_tool_names(message, choices) for message in messages]
         receipt = await self._reserve()
         output_started = False
         usage: dict[str, int | None] = {}
@@ -180,7 +183,7 @@ class LedgerChatModel(BaseChatModel):
                 config={"callbacks": [], "tags": [TAG_NOSTREAM]},
                 **kwargs,
             ):
-                message = _restore_tool_names(provider_message, aliases)
+                message = _rewrite_tool_names(provider_message, aliases)
                 if not output_started and _has_visible_output(message):
                     await self.store.mark_model_call_output(
                         run_id=self.run_id,
@@ -307,10 +310,37 @@ def _provider_tools(
     return schemas, aliases, choices
 
 
-def _restore_tool_names(message: BaseMessage, aliases: dict[str, str]) -> BaseMessage:
-    if not aliases or not isinstance(message, (AIMessage, AIMessageChunk)):
+def _rewrite_tool_names(message: BaseMessage, aliases: dict[str, str]) -> BaseMessage:
+    if not aliases:
+        return message
+    if isinstance(message, ToolMessage):
+        additional_kwargs = message.additional_kwargs
+        raw_name = additional_kwargs.get("name")
+        return message.model_copy(
+            update={
+                "name": aliases.get(message.name, message.name),
+                "additional_kwargs": (
+                    {**additional_kwargs, "name": aliases.get(raw_name, raw_name)}
+                    if isinstance(raw_name, str)
+                    else additional_kwargs
+                ),
+            }
+        )
+    if not isinstance(message, (AIMessage, AIMessageChunk)):
         return message
     updates: dict[str, Any] = {}
+    if isinstance(message.content, list):
+        updates["content"] = [
+            {
+                **block,
+                "name": aliases.get(block.get("name"), block.get("name")),
+            }
+            if isinstance(block, dict)
+            and block.get("type") in {"tool_call", "function_call", "tool_use"}
+            and isinstance(block.get("name"), str)
+            else block
+            for block in message.content
+        ]
     for field in ("tool_calls", "invalid_tool_calls", "tool_call_chunks"):
         calls = getattr(message, field, None)
         if calls:

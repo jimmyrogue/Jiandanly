@@ -4,6 +4,8 @@
 
 范围：只核对 Tuzi 已发布的 Apifox 文档，以及必要的 OpenAI 官方协议。本文不把中转站的实际行为等同于 OpenAI 官方实现；凡是文档没有明确说明的部分，均标记为推断。
 
+> 落地状态（2026-07-28）：Runtime 已在共享 Provider 边界修复工具定义、历史 assistant tool call 和 `ToolMessage.name` 的可逆别名，并把兼容性探针改为带点号的 `shejane.ping` 两轮闭环；OpenAI Responses 也已成为可冻结的明确协议。Tuzi 的具体模型仍须用对应连接真实验证，不能由本次代码修复直接标记兼容。
+
 ## 结论
 
 1. **Tuzi 没有公开 `gpt-5.6-luna` 专属的工具调用第二回合格式。**它的 Chat Completions 文档说明了首轮的 `tools` 和 `tool_choice`，但没有完整写出第二轮所需的 `assistant.tool_calls`、`role: "tool"` 和 `tool_call_id`。

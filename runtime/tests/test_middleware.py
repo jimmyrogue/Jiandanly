@@ -26,8 +26,7 @@ def test_permission_policy_auto_allows_sandboxed_commands_but_not_deletion() -> 
     assert approval_policy_decision("execute", "sandboxed_command", "ask").decision == "ask"
     assert approval_policy_decision("clipboard.read", "runtime_state", "auto").decision == "ask"
     assert (
-        approval_policy_decision("image.generate", "external_or_unknown", "ask").decision
-        == "allow"
+        approval_policy_decision("image.generate", "external_or_unknown", "ask").decision == "allow"
     )
     assert (
         approval_policy_decision("image.generate", "external_or_unknown", "auto").decision
@@ -930,10 +929,22 @@ def test_completion_router_rejects_empty_truncated_and_invalid_outputs() -> None
         },
         runtime=None,
     )
+    provider_protocol_error = mw.after_model(
+        {
+            "messages": [
+                AIMessage(
+                    content="",
+                    response_metadata={"finish_reason": "MISSING_THOUGHT_SIGNATURE"},
+                )
+            ]
+        },
+        runtime=None,
+    )
 
     assert empty["completion_route"]["reason"] == "empty_model_output"
     assert truncated["completion_route"]["reason"] == "model_output_truncated"
     assert invalid["completion_route"]["reason"] == "invalid_tool_calls"
+    assert provider_protocol_error["completion_route"]["reason"] == "provider_protocol_error"
 
 
 def test_completion_router_decision_is_part_of_compiled_graph_state() -> None:

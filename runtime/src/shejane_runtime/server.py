@@ -134,6 +134,7 @@ from .auth import LOCAL_OWNER_PRINCIPAL_ID, PairingTokenAuthMiddleware
 from .config import Settings, get_settings
 from .diagnostics_trace import build_run_trace
 from .failure_policy import classify_failure_payload
+from .llm.ledger import _provider_tools, _rewrite_tool_names
 from .middleware.tool_execution import serialize_tool_result
 from .model_credentials import (
     CredentialStoreError,
@@ -393,6 +394,9 @@ async def _refresh_model_service_models(
         )
         headers["anthropic-version"] = "2023-06-01"
         headers["x-api-key"] = api_key
+    elif adapter_id == "google_genai":
+        discovery_url = f"{base_url.rstrip('/')}/v1beta/models?pageSize=1000"
+        headers["x-goog-api-key"] = api_key
     else:
         headers["Authorization"] = f"Bearer {api_key}"
 
@@ -414,7 +418,13 @@ async def _refresh_model_service_models(
         payload = response.json()
     except ValueError:
         return bundled, "stale" if bundled else "unavailable"
-    candidates = payload.get("data") if isinstance(payload, dict) else None
+    candidates = (
+        payload.get("models")
+        if adapter_id == "google_genai" and isinstance(payload, dict)
+        else payload.get("data")
+        if isinstance(payload, dict)
+        else None
+    )
     if not isinstance(candidates, list):
         return bundled, "stale" if bundled else "unavailable"
 
@@ -424,7 +434,11 @@ async def _refresh_model_service_models(
     for candidate in candidates:
         if not isinstance(candidate, dict):
             continue
-        model_id = candidate.get("id")
+        model_id = (
+            candidate.get("baseModelId") or str(candidate.get("name") or "").removeprefix("models/")
+            if adapter_id == "google_genai"
+            else candidate.get("id")
+        )
         if (
             not isinstance(model_id, str)
             or not model_id
@@ -434,11 +448,24 @@ async def _refresh_model_service_models(
         ):
             continue
         seen.add(model_id)
-        raw_name = candidate.get("name") or candidate.get("display_name")
+        raw_name = (
+            candidate.get("displayName")
+            if adapter_id == "google_genai"
+            else candidate.get("name") or candidate.get("display_name")
+        )
         display_name = raw_name.strip() if isinstance(raw_name, str) else model_id
         known = bundled_by_id.get(model_id)
+        normalized_candidate = (
+            {
+                **candidate,
+                "context_length": candidate.get("inputTokenLimit"),
+                "max_output_tokens": candidate.get("outputTokenLimit"),
+            }
+            if adapter_id == "google_genai"
+            else candidate
+        )
         profile = discovered_model_profile(
-            candidate,
+            normalized_candidate,
             model_id=model_id,
             display_name=display_name[:100] or model_id[:100],
             service_base_url=base_url,
@@ -476,6 +503,7 @@ async def _verify_model_service_compatibility(
     settings: Settings,
     base_url: str,
     adapter_id: str,
+    protocol: str | None = None,
     api_key: str,
     model_id: str,
 ) -> None:
@@ -484,7 +512,7 @@ async def _verify_model_service_compatibility(
     success_signal = "SHEJANE_MODEL_TOOL_LOOP_OK"
     ping = StructuredTool.from_function(
         lambda: success_signal,
-        name="ping",
+        name="shejane.ping",
         description="Return a compatibility signal.",
     )
     try:
@@ -492,6 +520,7 @@ async def _verify_model_service_compatibility(
             settings=settings,
             model_binding={
                 "adapter_id": adapter_id,
+                "protocol": protocol or default_model_protocol(adapter_id, "agent_chat"),
                 "base_url": base_url,
                 "model_id": model_id,
                 "profile": {
@@ -508,10 +537,11 @@ async def _verify_model_service_compatibility(
                 f"answer exactly {success_signal}."
             )
         )
-        bound = model.bind_tools([ping])
-        tool_request = await bound.ainvoke([prompt])
+        provider_tools, aliases, choices = _provider_tools([ping])
+        bound = model.bind_tools(provider_tools)
+        tool_request = _rewrite_tool_names(await bound.ainvoke([prompt]), aliases)
         calls = list(getattr(tool_request, "tool_calls", ()) or ())
-        if len(calls) != 1 or calls[0].get("name") != "ping" or not calls[0].get("id"):
+        if len(calls) != 1 or calls[0].get("name") != "shejane.ping" or not calls[0].get("id"):
             raise HTTPException(
                 status_code=409,
                 detail={
@@ -520,16 +550,24 @@ async def _verify_model_service_compatibility(
                 },
             )
         result = ping.invoke(calls[0].get("args") or {})
-        final = await bound.ainvoke(
-            [
-                prompt,
-                tool_request,
-                ToolMessage(
-                    content=result,
-                    name="ping",
-                    tool_call_id=str(calls[0]["id"]),
-                ),
-            ]
+        provider_tool_request = _rewrite_tool_names(tool_request, choices)
+        provider_result = _rewrite_tool_names(
+            ToolMessage(
+                content=result,
+                name="shejane.ping",
+                tool_call_id=str(calls[0]["id"]),
+            ),
+            choices,
+        )
+        final = _rewrite_tool_names(
+            await bound.ainvoke(
+                [
+                    prompt,
+                    provider_tool_request,
+                    provider_result,
+                ]
+            ),
+            aliases,
         )
     except HTTPException:
         raise
@@ -600,10 +638,12 @@ async def _verify_model_service_compatibility(
 
 
 def _adapter_for_model_protocol(protocol: str) -> str:
-    if protocol == "openai_chat_completions":
+    if protocol in {"openai_chat_completions", "openai_responses"}:
         return "openai_chat"
     if protocol == "anthropic_messages":
         return "anthropic_messages"
+    if protocol == "google_generate_content":
+        return "google_genai"
     raise HTTPException(status_code=422, detail="selected protocol is not a chat protocol")
 
 
@@ -724,6 +764,7 @@ async def _verify_model_image_understanding(
             settings=settings,
             model_binding={
                 "adapter_id": _adapter_for_model_protocol(protocol),
+                "protocol": protocol,
                 "base_url": base_url,
                 "model_id": model_id,
                 "profile": {"image_inputs": True, "max_output_tokens": 64},
@@ -885,6 +926,7 @@ async def _verify_model_service_capability(
             settings=settings,
             base_url=base_url,
             adapter_id=_adapter_for_model_protocol(protocol),
+            protocol=protocol,
             api_key=api_key,
             model_id=model_id,
         )
@@ -1715,43 +1757,60 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             name = body.name.strip()
             region = "custom"
             base_url = _model_service_base_url(body.base_url)
-            detected: dict[str, tuple[list[dict[str, Any]], str]] = {}
-            credential_error: HTTPException | None = None
-            for candidate in ("openai_chat", "anthropic_messages"):
-                try:
-                    candidate_models, candidate_status = await _refresh_model_service_models(
-                        preset=preset,
-                        base_url=base_url,
-                        adapter_id=candidate,
-                        api_key=api_key,
-                    )
-                except HTTPException as exc:
-                    if exc.status_code == 401:
-                        credential_error = exc
-                    continue
-                if candidate_status == "ready":
-                    detected[candidate] = (candidate_models, candidate_status)
-            adapter_id = body.adapter_id or adapter_for_custom_service(
-                openai_chat_available="openai_chat" in detected,
-                anthropic_messages_available="anthropic_messages" in detected,
-            )
-            if adapter_id is None:
-                if credential_error is not None:
-                    raise credential_error
-                raise HTTPException(
-                    status_code=422,
-                    detail={
-                        "code": "adapter_detection_failed",
-                        "message": "无法自动识别接口格式，请在高级设置中选择接口格式。",
-                    },
+            if body.adapter_id == "google_genai":
+                models, catalog_status = await _refresh_model_service_models(
+                    preset=preset,
+                    base_url=base_url,
+                    adapter_id="google_genai",
+                    api_key=api_key,
                 )
-            if (
-                body.adapter_id is not None
-                and adapter_id not in detected
-                and credential_error is not None
-            ):
-                raise credential_error
-            models, catalog_status = detected.get(adapter_id, ([], "unavailable"))
+                if catalog_status != "ready":
+                    raise HTTPException(
+                        status_code=422,
+                        detail={
+                            "code": "adapter_detection_failed",
+                            "message": "无法通过 Google GenerateContent 接口读取模型列表。",
+                        },
+                    )
+                adapter_id = "google_genai"
+            else:
+                detected: dict[str, tuple[list[dict[str, Any]], str]] = {}
+                credential_error: HTTPException | None = None
+                for candidate in ("openai_chat", "anthropic_messages"):
+                    try:
+                        candidate_models, candidate_status = await _refresh_model_service_models(
+                            preset=preset,
+                            base_url=base_url,
+                            adapter_id=candidate,
+                            api_key=api_key,
+                        )
+                    except HTTPException as exc:
+                        if exc.status_code == 401:
+                            credential_error = exc
+                        continue
+                    if candidate_status == "ready":
+                        detected[candidate] = (candidate_models, candidate_status)
+                adapter_id = body.adapter_id or adapter_for_custom_service(
+                    openai_chat_available="openai_chat" in detected,
+                    anthropic_messages_available="anthropic_messages" in detected,
+                )
+                if adapter_id is None:
+                    if credential_error is not None:
+                        raise credential_error
+                    raise HTTPException(
+                        status_code=422,
+                        detail={
+                            "code": "adapter_detection_failed",
+                            "message": "无法自动识别接口格式，请在高级设置中选择接口格式。",
+                        },
+                    )
+                if (
+                    body.adapter_id is not None
+                    and adapter_id not in detected
+                    and credential_error is not None
+                ):
+                    raise credential_error
+                models, catalog_status = detected.get(adapter_id, ([], "unavailable"))
         else:
             if body.name is not None or body.adapter_id is not None:
                 raise HTTPException(
@@ -2124,6 +2183,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 protocol=(
                     str(capability["protocol"])
                     if capability is not None
+                    else "openai_responses"
+                    if row.get("preset_id") == "openai"
                     else default_model_protocol(str(row.get("adapter_id")), "agent_chat")
                 ),
             )

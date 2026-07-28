@@ -214,6 +214,7 @@ async def test_run_admission_freezes_required_image_generation_binding(
 
         settings = json.loads(run["settings_json"])
         assert settings["_required_tools"] == ["image.generate"]
+        assert settings["_model_binding"]["protocol"] == "openai_chat_completions"
         assert settings["_capability_bindings"]["image_generation"]["model_id"] == "image-model"
     finally:
         await store.close()

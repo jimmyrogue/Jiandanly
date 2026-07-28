@@ -12,8 +12,9 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, ToolMessage
 
 import shejane_runtime.server as server_module
+from shejane_runtime.auth import LOCAL_OWNER_PRINCIPAL_ID
 from shejane_runtime.config import reset_settings_for_tests
-from shejane_runtime.model_profiles import discovered_model_profile
+from shejane_runtime.model_profiles import default_model_protocol, discovered_model_profile
 from shejane_runtime.model_services import (
     adapter_for_custom_service,
     list_model_service_presets,
@@ -34,13 +35,154 @@ def test_model_service_presets_prioritize_china_and_expose_editable_addresses() 
         "glm",
         "minimax",
         "siliconflow",
+        "openai",
+        "anthropic",
+        "google",
         "custom",
     ]
-    for preset in presets[:-1]:
+    for preset in presets[:6]:
         assert preset["regions"][0]["id"] == "cn"
         assert preset["regions"][0]["default"] is True
         assert preset["regions"][0]["base_url"].startswith("https://")
+    for preset in presets[6:-1]:
+        assert preset["regions"][0]["id"] == "intl"
+        assert preset["regions"][0]["default"] is True
+        assert preset["regions"][0]["base_url"].startswith("https://")
+    for preset in presets[:-1]:
         assert "adapter_id" not in preset
+
+
+def test_native_overseas_adapters_have_explicit_default_protocols() -> None:
+    assert default_model_protocol("openai_chat", "agent_chat") == "openai_chat_completions"
+    assert default_model_protocol("anthropic_messages", "agent_chat") == "anthropic_messages"
+    assert default_model_protocol("google_genai", "agent_chat") == "google_generate_content"
+
+
+@pytest.mark.asyncio
+async def test_google_catalog_discovery_uses_native_models_endpoint(monkeypatch) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == (
+            "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000"
+        )
+        assert request.headers["x-goog-api-key"] == "secret"
+        return httpx.Response(
+            200,
+            json={
+                "models": [
+                    {
+                        "name": "models/gemini-test",
+                        "baseModelId": "gemini-test",
+                        "displayName": "Gemini Test",
+                        "inputTokenLimit": 1_000_000,
+                        "outputTokenLimit": 65_536,
+                    }
+                ]
+            },
+        )
+
+    class PatchedClient(httpx.AsyncClient):
+        def __init__(self, **kwargs) -> None:
+            super().__init__(transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(server_module.httpx, "AsyncClient", PatchedClient)
+
+    models, status = await server_module._refresh_model_service_models(
+        preset=model_service_preset("google") or {},
+        base_url="https://generativelanguage.googleapis.com",
+        adapter_id="google_genai",
+        api_key="secret",
+    )
+
+    assert status == "ready"
+    assert models[0]["model_id"] == "gemini-test"
+    assert models[0]["display_name"] == "Gemini Test"
+    assert models[0]["max_input_tokens"] == 1_000_000
+    assert models[0]["max_output_tokens"] == 65_536
+
+
+@pytest.mark.asyncio
+async def test_model_connection_store_accepts_native_google_adapter(tmp_path: Path) -> None:
+    store = await LocalStore.open(tmp_path / "runtime.db")
+    try:
+        row = await store.create_model_connection(
+            principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+            connection_id=f"conn_{'c' * 32}",
+            preset_id="google",
+            name="Google Gemini",
+            region="intl",
+            adapter_id="google_genai",
+            base_url="https://generativelanguage.googleapis.com",
+            requires_api_key=True,
+            credential_ref="model-service:test",
+            models=[],
+            catalog_status="ready",
+        )
+        assert row["adapter_id"] == "google_genai"
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_model_connection_adapter_migration_preserves_existing_rows(tmp_path: Path) -> None:
+    db_path = tmp_path / "runtime.db"
+    connection = sqlite3.connect(db_path)
+    connection.execute(
+        "CREATE TABLE model_connections ("
+        "principal_id TEXT NOT NULL, id TEXT NOT NULL, preset_id TEXT NOT NULL, "
+        "name TEXT NOT NULL, region TEXT NOT NULL, adapter_id TEXT NOT NULL "
+        "CHECK (adapter_id IN ('openai_chat', 'anthropic_messages')), "
+        "base_url TEXT NOT NULL, requires_api_key INTEGER NOT NULL, "
+        "credential_ref TEXT NOT NULL, models_json TEXT NOT NULL, "
+        "catalog_status TEXT NOT NULL, version INTEGER NOT NULL, "
+        "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, "
+        "PRIMARY KEY (principal_id, id))"
+    )
+    connection.execute(
+        "INSERT INTO model_connections VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            LOCAL_OWNER_PRINCIPAL_ID,
+            f"conn_{'d' * 32}",
+            "deepseek",
+            "DeepSeek",
+            "cn",
+            "openai_chat",
+            "https://api.deepseek.com/v1",
+            1,
+            "model-service:existing",
+            "[]",
+            "ready",
+            1,
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:00:00Z",
+        ),
+    )
+    connection.commit()
+    connection.close()
+
+    store = await LocalStore.open(db_path)
+    try:
+        existing = await store.get_model_connection(
+            principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+            connection_id=f"conn_{'d' * 32}",
+        )
+        assert existing is not None
+        assert existing["adapter_id"] == "openai_chat"
+        created = await store.create_model_connection(
+            principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+            connection_id=f"conn_{'e' * 32}",
+            preset_id="google",
+            name="Google Gemini",
+            region="intl",
+            adapter_id="google_genai",
+            base_url="https://generativelanguage.googleapis.com",
+            requires_api_key=True,
+            credential_ref="model-service:google",
+            models=[],
+            catalog_status="ready",
+        )
+        assert created["adapter_id"] == "google_genai"
+    finally:
+        await store.close()
 
 
 def test_custom_service_adapter_detection_prefers_openai_chat_on_a_tie() -> None:
@@ -763,7 +905,7 @@ async def test_compatibility_verification_completes_model_tool_model_loop(
             return self
 
         def bind_tools(self, tools, **_kwargs):
-            assert [tool.name for tool in tools] == ["ping"]
+            assert [tool["function"]["name"] for tool in tools] == ["shejane_ping"]
             return self
 
         async def ainvoke(self, messages):
@@ -772,7 +914,7 @@ async def test_compatibility_verification_completes_model_tool_model_loop(
                 return AIMessage(
                     content="",
                     additional_kwargs={"reasoning_content": "keep me"},
-                    tool_calls=[{"id": "call-ping", "name": "ping", "args": {}}],
+                    tool_calls=[{"id": "call-ping", "name": "shejane_ping", "args": {}}],
                 )
             return AIMessage(content="SHEJANE_MODEL_TOOL_LOOP_OK")
 
@@ -788,7 +930,9 @@ async def test_compatibility_verification_completes_model_tool_model_loop(
 
     assert len(rounds) == 2
     assert rounds[1][1].additional_kwargs["reasoning_content"] == "keep me"
+    assert rounds[1][1].tool_calls[0]["name"] == "shejane_ping"
     assert isinstance(rounds[1][2], ToolMessage)
+    assert rounds[1][2].name == "shejane_ping"
     assert rounds[1][2].tool_call_id == "call-ping"
 
 
@@ -842,7 +986,7 @@ async def test_compatibility_verification_rejects_missing_final_answer(
             if len(messages) == 1:
                 return AIMessage(
                     content="",
-                    tool_calls=[{"id": "call-ping", "name": "ping", "args": {}}],
+                    tool_calls=[{"id": "call-ping", "name": "shejane_ping", "args": {}}],
                 )
             return AIMessage(content="")
 
@@ -975,7 +1119,10 @@ def test_deepseek_v4_verification_does_not_force_tool_choice(
                                     "index": 0,
                                     "id": "call-ping",
                                     "type": "function",
-                                    "function": {"name": "ping", "arguments": "{}"},
+                                    "function": {
+                                        "name": "shejane_ping",
+                                        "arguments": "{}",
+                                    },
                                 }
                             ]
                         },
@@ -1035,6 +1182,70 @@ def test_glm_tool_stream_is_shared_by_probe_and_agent_requests(monkeypatch) -> N
     )
 
     assert captured["extra_body"] == {"tool_stream": True}
+
+
+def test_openai_responses_protocol_uses_responses_api_without_provider_session_state(
+    monkeypatch,
+) -> None:
+    import langchain_openai
+
+    captured: dict = {}
+
+    class FakeChatOpenAI:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(langchain_openai, "ChatOpenAI", FakeChatOpenAI)
+
+    server_module._build_byok_chat_model(
+        settings=reset_settings_for_tests(),
+        model_binding={
+            "adapter_id": "openai_chat",
+            "protocol": "openai_responses",
+            "base_url": "https://api.openai.com/v1",
+            "model_id": "gpt-test",
+            "profile": {},
+        },
+        model_api_key="secret",
+    )
+
+    assert captured["use_responses_api"] is True
+    assert captured["use_previous_response_id"] is False
+    assert captured["output_version"] == "v1"
+
+
+def test_google_generate_content_protocol_uses_native_google_adapter(monkeypatch) -> None:
+    import langchain_google_genai
+
+    captured: dict = {}
+
+    class FakeChatGoogleGenerativeAI:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(
+        langchain_google_genai,
+        "ChatGoogleGenerativeAI",
+        FakeChatGoogleGenerativeAI,
+    )
+
+    server_module._build_byok_chat_model(
+        settings=reset_settings_for_tests(),
+        model_binding={
+            "adapter_id": "google_genai",
+            "protocol": "google_generate_content",
+            "base_url": "https://generativelanguage.googleapis.com",
+            "model_id": "gemini-test",
+            "profile": {},
+        },
+        model_api_key="secret",
+    )
+
+    assert captured["model"] == "gemini-test"
+    assert captured["client_options"] == "https://generativelanguage.googleapis.com"
+    assert captured["retries"] == 0
+    assert captured["streaming"] is True
+    assert captured["output_version"] == "v1"
 
 
 def test_manual_model_becomes_available_only_after_compatibility_verification(

@@ -30,6 +30,7 @@ from shejane_runtime.llm.ledger import (
     _enforce_context_envelope,
     _estimate_tool_tokens,
     _provider_tools,
+    _rewrite_tool_names,
     _truncate_large_message,
 )
 from shejane_runtime.store.sqlite import LocalStore, ModelCallBudgetExceeded
@@ -144,6 +145,40 @@ class _StrictToolStreamingModel(_StreamingModel):
                 ],
             )
         )
+
+
+class _StrictTwoRoundToolStreamingModel(_StrictToolStreamingModel):
+    async def _astream(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
+        **kwargs: object,
+    ) -> AsyncIterator[ChatGenerationChunk]:
+        del stop, run_manager, kwargs
+        prior_assistant = next(
+            (message for message in messages if isinstance(message, AIMessage)),
+            None,
+        )
+        if prior_assistant is None:
+            yield ChatGenerationChunk(
+                message=AIMessageChunk(
+                    content="",
+                    tool_call_chunks=[
+                        {
+                            "name": self.bound_tool_name,
+                            "args": "{}",
+                            "id": "call-1",
+                            "index": 0,
+                        }
+                    ],
+                )
+            )
+            return
+        assert prior_assistant.tool_calls[0]["name"] == self.bound_tool_name
+        prior_result = next(message for message in messages if isinstance(message, ToolMessage))
+        assert prior_result.name == self.bound_tool_name
+        yield ChatGenerationChunk(message=AIMessageChunk(content="done"))
 
 
 class _SlowReviewModel(BaseChatModel):
@@ -414,7 +449,7 @@ async def test_provider_boundary_filters_office_schema_for_plain_subagent_task(
         model = unbound.bind_tools([_office_read, _workspace_read])
         assert isinstance(model, LedgerChatModel)
 
-        provider_model, schema_tokens, aliases = model._provider_model(
+        provider_model, schema_tokens, aliases, _ = model._provider_model(
             [HumanMessage(content="Review this Python function and report the bug.")]
         )
 
@@ -444,7 +479,7 @@ async def test_provider_boundary_aliases_and_restores_dotted_tool_names(tmp_path
             profile={"max_input_tokens": 8_192},
         ).bind_tools([_workspace_read])
 
-        provider_model, _, aliases = model._provider_model([HumanMessage(content="read it")])
+        provider_model, _, aliases, _ = model._provider_model([HumanMessage(content="read it")])
         assert isinstance(provider_model, _StrictToolStreamingModel)
         assert provider_model.bound_tool_name == "workspace_read"
         assert aliases["workspace_read"] == "workspace.read"
@@ -453,6 +488,56 @@ async def test_provider_boundary_aliases_and_restores_dotted_tool_names(tmp_path
 
         chunks = [chunk async for chunk in model.astream([HumanMessage(content="read it")])]
         assert chunks[0].tool_call_chunks[0]["name"] == "workspace.read"
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_provider_boundary_reencodes_tool_names_in_second_round_history(
+    tmp_path: Path,
+) -> None:
+    store, run = await _store_and_run(tmp_path)
+    try:
+        model = LedgerChatModel(
+            delegate=_StrictTwoRoundToolStreamingModel(),
+            store=store,
+            run_id=str(run["id"]),
+            execution_attempt_id="job-1:1",
+            model_name="local:test:strict-two-round-tools",
+            max_calls=2,
+            profile={"max_input_tokens": 8_192},
+        ).bind_tools([_workspace_read])
+        prompt = HumanMessage(content="read it")
+
+        first = [chunk async for chunk in model.astream([prompt])]
+        tool_call = first[0].tool_call_chunks[0]
+        assert tool_call["name"] == "workspace.read"
+
+        second = [
+            chunk
+            async for chunk in model.astream(
+                [
+                    prompt,
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "name": tool_call["name"],
+                                "args": {},
+                                "id": tool_call["id"],
+                            }
+                        ],
+                    ),
+                    ToolMessage(
+                        content="contents",
+                        name=tool_call["name"],
+                        tool_call_id=tool_call["id"],
+                    ),
+                ]
+            )
+        ]
+
+        assert second[0].content == "done"
     finally:
         await store.close()
 
@@ -466,6 +551,70 @@ def test_provider_boundary_hashes_only_colliding_tool_aliases() -> None:
     assert len(set(names)) == 2
     assert aliases[names[0]] == "workspace.read"
     assert aliases[names[1]] == "workspace_read"
+
+
+def test_provider_boundary_preserves_parallel_ids_order_and_provider_state() -> None:
+    message = AIMessage(
+        content=[
+            {"type": "thinking", "thinking": "private", "signature": "signed"},
+            {
+                "type": "tool_call",
+                "name": "workspace.read",
+                "id": "call-1",
+                "args": {},
+                "extras": {"item_id": "fc-1", "arguments": "{}"},
+            },
+        ],
+        additional_kwargs={
+            "__gemini_function_call_thought_signatures__": {
+                "call-1": "signature-1",
+                "call-2": "signature-2",
+            },
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "workspace.read", "arguments": "{}"},
+                    "extra_content": {"google": {"thought_signature": "signature-1"}},
+                },
+                {
+                    "id": "call-2",
+                    "type": "function",
+                    "function": {"name": "office.read", "arguments": "{}"},
+                },
+            ],
+        },
+        tool_calls=[
+            {"id": "call-1", "name": "workspace.read", "args": {}},
+            {"id": "call-2", "name": "office.read", "args": {}},
+        ],
+    )
+
+    rewritten = _rewrite_tool_names(
+        message,
+        {"workspace.read": "workspace_read", "office.read": "office_read"},
+    )
+
+    assert [(call["id"], call["name"]) for call in rewritten.tool_calls] == [
+        ("call-1", "workspace_read"),
+        ("call-2", "office_read"),
+    ]
+    assert rewritten.content[0] == message.content[0]
+    assert rewritten.content[1] == {
+        **message.content[1],
+        "name": "workspace_read",
+    }
+    assert (
+        rewritten.additional_kwargs["__gemini_function_call_thought_signatures__"]
+        == message.additional_kwargs["__gemini_function_call_thought_signatures__"]
+    )
+    assert rewritten.additional_kwargs["tool_calls"][0]["extra_content"] == {
+        "google": {"thought_signature": "signature-1"}
+    }
+    assert [call["function"]["name"] for call in rewritten.additional_kwargs["tool_calls"]] == [
+        "workspace_read",
+        "office_read",
+    ]
 
 
 def test_provider_boundary_hashes_tool_names_longer_than_wire_limit() -> None:

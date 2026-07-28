@@ -647,6 +647,7 @@ def _build_byok_chat_model(
     if not model_binding or model_binding.get("adapter_id") not in {
         "openai_chat",
         "anthropic_messages",
+        "google_genai",
     }:
         raise RuntimeError("Runtime BYOK model binding is required")
     raw_profile = model_binding.get("profile")
@@ -682,6 +683,20 @@ def _build_byok_chat_model(
             timeout=settings.model_request_timeout_seconds,
             profile=profile,
         )
+    if model_binding["adapter_id"] == "google_genai":
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
+        return ChatGoogleGenerativeAI(
+            model=str(model_binding["model_id"]),
+            api_key=model_api_key or "local",
+            client_options=str(model_binding["base_url"]),
+            streaming=True,
+            retries=0,
+            max_tokens=int(profile["max_output_tokens"]),
+            request_timeout=settings.model_request_timeout_seconds,
+            output_version="v1",
+            profile=profile,
+        )
 
     from langchain_openai import ChatOpenAI
 
@@ -691,6 +706,7 @@ def _build_byok_chat_model(
         if urlparse(base_url).hostname in {"open.bigmodel.cn", "api.z.ai"}
         else None
     )
+    responses = model_binding.get("protocol") == "openai_responses"
     return ChatOpenAI(
         model=str(model_binding["model_id"]),
         base_url=base_url,
@@ -704,6 +720,15 @@ def _build_byok_chat_model(
         timeout=settings.model_request_timeout_seconds,
         profile=profile,
         extra_body=extra_body,
+        **(
+            {
+                "use_responses_api": True,
+                "use_previous_response_id": False,
+                "output_version": "v1",
+            }
+            if responses
+            else {}
+        ),
     )
 
 

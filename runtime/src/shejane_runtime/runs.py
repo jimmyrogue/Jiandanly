@@ -792,8 +792,11 @@ class RunCoordinator:
         return {
             "adapter_id": {
                 "openai_chat_completions": "openai_chat",
+                "openai_responses": "openai_chat",
                 "anthropic_messages": "anthropic_messages",
+                "google_generate_content": "google_genai",
             }.get(str(agent_capability.get("protocol")), str(connection["adapter_id"])),
+            "protocol": str(agent_capability.get("protocol")),
             "connection_id": connection_id,
             "connection_version": int(connection.get("version") or 1),
             "base_url": str(connection["base_url"]),
@@ -822,7 +825,11 @@ class RunCoordinator:
             return (
                 (None, None) if self.settings.fake_llm else ("fake model service is disabled", None)
             )
-        if binding.get("adapter_id") in {"openai_chat", "anthropic_messages"}:
+        if binding.get("adapter_id") in {
+            "openai_chat",
+            "anthropic_messages",
+            "google_genai",
+        }:
             connection_id = binding.get("connection_id")
             if not isinstance(connection_id, str):
                 return "run model credential reference is invalid", None

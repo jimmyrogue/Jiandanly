@@ -23,7 +23,11 @@ def default_model_protocol(adapter_id: str, capability: str) -> str:
         return "openai_images_generations"
     if capability == "image_editing":
         return "openai_images_edits"
-    return "anthropic_messages" if adapter_id == "anthropic_messages" else "openai_chat_completions"
+    if adapter_id == "anthropic_messages":
+        return "anthropic_messages"
+    if adapter_id == "google_genai":
+        return "google_generate_content"
+    return "openai_chat_completions"
 
 
 def normalized_model_capabilities(

@@ -106,6 +106,20 @@ class CompletionRouterMiddleware(AgentMiddleware):
                 recoverable=False,
                 run_id=run_id,
             )
+        if finish_reason in {
+            "malformed_function_call",
+            "unexpected_tool_call",
+            "too_many_tool_calls",
+            "missing_thought_signature",
+            "malformed_response",
+        }:
+            return _terminal_route(
+                "failed",
+                "provider_protocol_error",
+                f"The model service ended the turn with {finish_reason}.",
+                recoverable=False,
+                run_id=run_id,
+            )
 
         text = _assistant_text(getattr(last, "content", None))
         if not text.strip():

@@ -610,6 +610,7 @@ def _last_tool_result(
     *,
     tool_call_id: str | None = None,
 ) -> BaseMessage | None:
+    provider_name = re.sub(r"[^a-zA-Z0-9_-]+", "_", name).strip("_") or "tool"
     return next(
         (
             message
@@ -618,7 +619,7 @@ def _last_tool_result(
             and (
                 getattr(message, "tool_call_id", None) == tool_call_id
                 if tool_call_id is not None
-                else getattr(message, "name", None) == name
+                else getattr(message, "name", None) in {name, provider_name}
             )
         ),
         None,

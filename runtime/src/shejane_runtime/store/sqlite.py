@@ -103,7 +103,9 @@ CREATE TABLE IF NOT EXISTS model_connections (
     preset_id TEXT NOT NULL,
     name TEXT NOT NULL,
     region TEXT NOT NULL CHECK (region IN ('cn', 'intl', 'custom')),
-    adapter_id TEXT NOT NULL CHECK (adapter_id IN ('openai_chat', 'anthropic_messages')),
+    adapter_id TEXT NOT NULL CHECK (
+        adapter_id IN ('openai_chat', 'anthropic_messages', 'google_genai')
+    ),
     base_url TEXT NOT NULL,
     requires_api_key INTEGER NOT NULL DEFAULT 1,
     credential_ref TEXT NOT NULL,
@@ -843,6 +845,7 @@ class LocalStore:
         try:
             await _configure_connection(conn)
             await conn.executescript(SCHEMA)
+            await cls._ensure_model_connection_adapters(conn)
             await cls._ensure_plugin_execution_kinds(conn)
             await cls._delete_legacy_model_provider_credentials(conn)
             await conn.execute("BEGIN IMMEDIATE")
@@ -856,6 +859,42 @@ class LocalStore:
                 await conn.rollback()
             await conn.close()
             raise
+
+    @staticmethod
+    async def _ensure_model_connection_adapters(conn: aiosqlite.Connection) -> None:
+        row = await (
+            await conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'model_connections'"
+            )
+        ).fetchone()
+        if row is None or "google_genai" in str(row[0]):
+            return
+        await conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            await conn.execute("BEGIN IMMEDIATE")
+            await conn.execute(
+                "CREATE TABLE model_connections_next ("
+                "principal_id TEXT NOT NULL, id TEXT NOT NULL, preset_id TEXT NOT NULL, "
+                "name TEXT NOT NULL, region TEXT NOT NULL "
+                "CHECK (region IN ('cn', 'intl', 'custom')), adapter_id TEXT NOT NULL "
+                "CHECK (adapter_id IN ('openai_chat', 'anthropic_messages', 'google_genai')), "
+                "base_url TEXT NOT NULL, requires_api_key INTEGER NOT NULL DEFAULT 1, "
+                "credential_ref TEXT NOT NULL, models_json TEXT NOT NULL, "
+                "catalog_status TEXT NOT NULL "
+                "CHECK (catalog_status IN ('ready', 'stale', 'unavailable')), "
+                "version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, "
+                "updated_at TEXT NOT NULL, PRIMARY KEY (principal_id, id))"
+            )
+            await conn.execute("INSERT INTO model_connections_next SELECT * FROM model_connections")
+            await conn.execute("DROP TABLE model_connections")
+            await conn.execute("ALTER TABLE model_connections_next RENAME TO model_connections")
+            await conn.commit()
+        except BaseException:
+            if conn.in_transaction:
+                await conn.rollback()
+            raise
+        finally:
+            await conn.execute("PRAGMA foreign_keys = ON")
 
     @staticmethod
     async def _delete_legacy_model_provider_credentials(

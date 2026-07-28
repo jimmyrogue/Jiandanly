@@ -231,7 +231,8 @@
               {
                 "enum": [
                   "openai_chat",
-                  "anthropic_messages"
+                  "anthropic_messages",
+                  "google_genai"
                 ],
                 "type": "string"
               },
@@ -1807,7 +1808,8 @@
           "adapter_id": {
             "enum": [
               "openai_chat",
-              "anthropic_messages"
+              "anthropic_messages",
+              "google_genai"
             ],
             "title": "Adapter Id",
             "type": "string"
@@ -3418,7 +3420,9 @@
           "protocol": {
             "enum": [
               "openai_chat_completions",
+              "openai_responses",
               "anthropic_messages",
+              "google_generate_content",
               "openai_images_generations",
               "openai_images_edits"
             ],
@@ -3473,7 +3477,9 @@
           "protocol": {
             "enum": [
               "openai_chat_completions",
+              "openai_responses",
               "anthropic_messages",
+              "google_generate_content",
               "openai_images_generations",
               "openai_images_edits"
             ],
@@ -3517,7 +3523,8 @@
           "adapter_id": {
             "enum": [
               "openai_chat",
-              "anthropic_messages"
+              "anthropic_messages",
+              "google_genai"
             ],
             "title": "Adapter Id",
             "type": "string"
@@ -6295,7 +6302,9 @@
           "protocol": {
             "enum": [
               "openai_chat_completions",
+              "openai_responses",
               "anthropic_messages",
+              "google_generate_content",
               "openai_images_generations",
               "openai_images_edits"
             ],

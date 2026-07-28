@@ -1,6 +1,6 @@
 # SheJane 路线图
 
-> 更新于 2026-07-26。当前能力基线和源码证据见 [Agent Harness 能力审计](./agent-harness-capabilities-latest-2026-07-26.md)。Runtime 的 P1–P12 只表示 [`harness-runtime-stages.md`](./harness-runtime-stages.md) 中的请求阶段；本路线图使用 Now / Next / Later / Explore，不另建一套阶段编号。
+> 更新于 2026-07-28。当前能力基线和源码证据见 [Agent Harness 能力审计](./agent-harness-capabilities-latest-2026-07-26.md)。Runtime 的 P1–P12 只表示 [`harness-runtime-stages.md`](./harness-runtime-stages.md) 中的请求阶段；本路线图使用 Now / Next / Later / Explore，不另建一套阶段编号。
 
 ## 当前基线
 
@@ -36,7 +36,7 @@ SheJane 已经具备本地 Agent Harness 的主干，不需要继续以“增加
 
 完成标准：新增或编辑模型后无需人工猜测“测试兼容性”为何失败；失败原因可操作，成功模型可直接进入 Agent Run。
 
-实现结果：预置模型不再凭静态目录标记 `verified`。连接或更新官方服务时，Runtime 会让每个 bundled model 使用正式 Agent 共用的 Provider 适配器，完整执行两轮流式 `模型 → ping 工具 → 工具结果 → 最终标记`；DeepSeek 等 thinking 模型不再被强制 `tool_choice` 误判，GLM 的 `tool_stream` 同时作用于探测和正式 Agent。鉴权、权限、余额、限流、临时不可用和格式不兼容分别返回可操作错误。
+实现结果：预置模型不再凭静态目录标记 `verified`。连接或更新官方服务时，Runtime 会让每个 bundled model 使用正式 Agent 共用的 Provider 适配器，完整执行两轮流式 `模型 → shejane.ping 工具 → 工具结果 → 最终标记`；点号内部名称在工具定义、历史调用和工具结果上使用同一可逆别名。国内 OpenAI-compatible 服务、OpenAI Chat/Responses、Anthropic Messages 与 Google GenerateContent 共用该边界，Run 会冻结明确协议；reasoning/thinking/thought signature、call ID 和并行顺序保持不变。DeepSeek 等 thinking 模型不再被强制 `tool_choice` 误判，GLM 的 `tool_stream` 同时作用于探测和正式 Agent；Gemini 的协议级 finish reason 也会 fail closed。鉴权、权限、余额、限流、临时不可用和格式不兼容分别返回可操作错误。具体连接仍只有通过真实两轮探针后才标记 `verified`。
 
 ### 2. Agent Eval 发布门禁（已完成）
 

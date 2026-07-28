@@ -6,7 +6,7 @@ from copy import deepcopy
 from typing import Any, Literal
 from urllib.parse import urlparse
 
-ModelAdapterID = Literal["openai_chat", "anthropic_messages"]
+ModelAdapterID = Literal["openai_chat", "anthropic_messages", "google_genai"]
 
 
 def openai_compatible_endpoint(base_url: str, path: str) -> str:
@@ -14,6 +14,7 @@ def openai_compatible_endpoint(base_url: str, path: str) -> str:
     if not urlparse(base).path:
         base = f"{base}/v1"
     return f"{base}/{path.lstrip('/')}"
+
 
 _PRESETS: tuple[dict[str, Any], ...] = (
     {
@@ -223,6 +224,57 @@ _PRESETS: tuple[dict[str, Any], ...] = (
                 "image_inputs": False,
             },
         ),
+    },
+    {
+        "id": "openai",
+        "name": "OpenAI",
+        "description": "OpenAI 官方模型服务，支持 Chat Completions 与 Responses。",
+        "api_key_url": "https://platform.openai.com/api-keys",
+        "billing_url": "https://platform.openai.com/usage",
+        "adapter_id": "openai_chat",
+        "regions": (
+            {
+                "id": "intl",
+                "name": "国际站",
+                "default": True,
+                "base_url": "https://api.openai.com/v1",
+            },
+        ),
+        "models": (),
+    },
+    {
+        "id": "anthropic",
+        "name": "Anthropic",
+        "description": "Anthropic 官方 Claude Messages API。",
+        "api_key_url": "https://console.anthropic.com/settings/keys",
+        "billing_url": "https://console.anthropic.com/settings/billing",
+        "adapter_id": "anthropic_messages",
+        "regions": (
+            {
+                "id": "intl",
+                "name": "国际站",
+                "default": True,
+                "base_url": "https://api.anthropic.com/v1",
+            },
+        ),
+        "models": (),
+    },
+    {
+        "id": "google",
+        "name": "Google Gemini",
+        "description": "Google 官方 Gemini GenerateContent API。",
+        "api_key_url": "https://aistudio.google.com/app/apikey",
+        "billing_url": "https://aistudio.google.com/usage",
+        "adapter_id": "google_genai",
+        "regions": (
+            {
+                "id": "intl",
+                "name": "国际站",
+                "default": True,
+                "base_url": "https://generativelanguage.googleapis.com",
+            },
+        ),
+        "models": (),
     },
     {
         "id": "custom",

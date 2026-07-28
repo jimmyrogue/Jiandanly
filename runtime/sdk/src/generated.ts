@@ -1109,7 +1109,7 @@ export interface components {
         /** ConnectModelServiceRequest */
         ConnectModelServiceRequest: {
             /** Adapter Id */
-            adapter_id?: ("openai_chat" | "anthropic_messages") | null;
+            adapter_id?: ("openai_chat" | "anthropic_messages" | "google_genai") | null;
             /** Api Key */
             api_key: string;
             /** Base Url */
@@ -1643,7 +1643,7 @@ export interface components {
              * Adapter Id
              * @enum {string}
              */
-            adapter_id: "openai_chat" | "anthropic_messages";
+            adapter_id: "openai_chat" | "anthropic_messages" | "google_genai";
             /** Base Url */
             base_url: string;
             /** Id */
@@ -2246,7 +2246,7 @@ export interface components {
              * Protocol
              * @enum {string}
              */
-            protocol: "openai_chat_completions" | "anthropic_messages" | "openai_images_generations" | "openai_images_edits";
+            protocol: "openai_chat_completions" | "openai_responses" | "anthropic_messages" | "google_generate_content" | "openai_images_generations" | "openai_images_edits";
             /**
              * Verification
              * @default unverified
@@ -2273,7 +2273,7 @@ export interface components {
              * Protocol
              * @enum {string}
              */
-            protocol: "openai_chat_completions" | "anthropic_messages" | "openai_images_generations" | "openai_images_edits";
+            protocol: "openai_chat_completions" | "openai_responses" | "anthropic_messages" | "google_generate_content" | "openai_images_generations" | "openai_images_edits";
             /** Revision */
             revision: number;
             /**
@@ -2290,7 +2290,7 @@ export interface components {
              * Adapter Id
              * @enum {string}
              */
-            adapter_id: "openai_chat" | "anthropic_messages";
+            adapter_id: "openai_chat" | "anthropic_messages" | "google_genai";
             /** Base Url */
             base_url: string;
             /**
@@ -3396,7 +3396,7 @@ export interface components {
              * Protocol
              * @enum {string}
              */
-            protocol: "openai_chat_completions" | "anthropic_messages" | "openai_images_generations" | "openai_images_edits";
+            protocol: "openai_chat_completions" | "openai_responses" | "anthropic_messages" | "google_generate_content" | "openai_images_generations" | "openai_images_edits";
         };
     };
     responses: never;

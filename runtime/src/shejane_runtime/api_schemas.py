@@ -119,7 +119,9 @@ ModelCapabilityName = Literal[
 ]
 ModelProtocol = Literal[
     "openai_chat_completions",
+    "openai_responses",
     "anthropic_messages",
+    "google_generate_content",
     "openai_images_generations",
     "openai_images_edits",
 ]
@@ -136,8 +138,18 @@ class ModelCapability(BaseModel):
     @model_validator(mode="after")
     def validate_protocol(self) -> ModelCapability:
         valid = {
-            "agent_chat": {"openai_chat_completions", "anthropic_messages"},
-            "image_understanding": {"openai_chat_completions", "anthropic_messages"},
+            "agent_chat": {
+                "openai_chat_completions",
+                "openai_responses",
+                "anthropic_messages",
+                "google_generate_content",
+            },
+            "image_understanding": {
+                "openai_chat_completions",
+                "openai_responses",
+                "anthropic_messages",
+                "google_generate_content",
+            },
             "image_generation": {"openai_images_generations"},
             "image_editing": {"openai_images_edits"},
         }[self.capability]
@@ -200,7 +212,7 @@ class ModelServicePresetCatalog(BaseModel):
     services: list[ModelServicePreset]
 
 
-ModelAdapterID = Literal["openai_chat", "anthropic_messages"]
+ModelAdapterID = Literal["openai_chat", "anthropic_messages", "google_genai"]
 ModelCatalogStatus = Literal["ready", "stale", "unavailable"]
 ModelSource = Literal["bundled", "discovered", "manual"]
 

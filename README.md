@@ -27,7 +27,7 @@ flowchart LR
     C["Client<br/>Electron + React"] -->|"Loopback HTTP + SSE"| R["Runtime<br/>Python + LangGraph"]
     R --> W["Local workspace<br/>Files · Tools · Checkpoints"]
     R --> E["Extensions<br/>Skills · MCP · Plugins · Subagents"]
-    R --> B["BYOK providers<br/>OpenAI-compatible APIs · Anthropic"]
+    R --> B["BYOK providers<br/>OpenAI Chat/Responses · Anthropic · Google · compatible APIs"]
 ```
 
 Client and Runtime communicate over loopback HTTP with a pairing token. A failed Runtime surfaces as a local error and never switches execution paths silently.

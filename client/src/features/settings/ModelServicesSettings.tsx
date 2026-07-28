@@ -68,6 +68,8 @@ function defaultModelProtocol(
 ): ModelProtocol {
   if (capability === 'image_generation') return 'openai_images_generations'
   if (capability === 'image_editing') return 'openai_images_edits'
+  if (service.adapter_id === 'google_genai') return 'google_generate_content'
+  if (service.preset_id === 'openai') return 'openai_responses'
   return service.adapter_id === 'anthropic_messages'
     ? 'anthropic_messages'
     : 'openai_chat_completions'
@@ -111,7 +113,7 @@ export function ModelServicesSettings({
   const [region, setRegion] = useState('cn')
   const [name, setName] = useState('')
   const [baseURL, setBaseURL] = useState('')
-  const [adapterID, setAdapterID] = useState<'openai_chat' | 'anthropic_messages'>()
+  const [adapterID, setAdapterID] = useState<ModelServiceConnection['adapter_id']>()
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [manualModels, setManualModels] = useState<Record<string, string>>({})
   const [modelCapabilities, setModelCapabilities] = useState<Record<string, ModelCapabilityName>>({})
@@ -709,6 +711,7 @@ export function ModelServicesSettings({
                         <SelectGroup>
                           <SelectItem value="openai_chat">OpenAI Chat</SelectItem>
                           <SelectItem value="anthropic_messages">Anthropic Messages</SelectItem>
+                          <SelectItem value="google_genai">Google GenerateContent</SelectItem>
                         </SelectGroup>
                       </SelectContent>
                     </Select>
@@ -942,7 +945,9 @@ export function ModelServicesSettings({
                                     ) : (
                                       <>
                                         <SelectItem value="openai_chat_completions">OpenAI Chat</SelectItem>
+                                        <SelectItem value="openai_responses">OpenAI Responses</SelectItem>
                                         <SelectItem value="anthropic_messages">Anthropic Messages</SelectItem>
+                                        <SelectItem value="google_generate_content">Google GenerateContent</SelectItem>
                                       </>
                                     )}
                                   </SelectGroup>
