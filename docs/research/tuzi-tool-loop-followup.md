@@ -173,6 +173,25 @@ Tuzi 官方文档本身已经体现出协议分离：
 - 用户直接调用图片能力时，可以在图片生成完成后直接结束，不必额外调用主对话模型；
 - 若要支持 Tuzi 的 Chat 图片协议，应为它建立独立适配器，并先用真实成功响应固化返回格式，不能依据文档中的空 schema 猜测。
 
+## 4. 上传参考图反馈复核与兼容落地
+
+用户反馈同时出现了“同类请求偶尔成功”“大量未知失败”和“上传图片后结果与原图无关”。对照当前 Runtime 与 Tuzi 文档，确认是三个独立问题：
+
+1. 当 `gpt-image-2` 只验证并绑定“图片生成”时，Runtime 只向 Agent 暴露 `image.generate`；原实现没有参考图参数，因此上传附件不会进入图片请求。
+2. 即使另行绑定“图片编辑”，原 `image.edit` 也只接受之前生成的 Runtime Artifact，不接受本次 Run 的上传附件。
+3. 图片请求把所有 HTTP 与 JSON 错误统一转换为 `image_provider_failed`，丢失状态码、上游错误码和 `request_id`，最终只能分类为“未知失败”。由于反馈环境没有保留原始响应，不能反推出每一次失败究竟是余额、限流、无渠道还是参数错误。
+
+Tuzi 的 [GPT IMAGE 生成接口](https://tuzi-api.apifox.cn/448333922e0) 支持在 `/v1/images/generations` 的 JSON `image` 数组中传参考图，但已发布示例只展示公网 URL；没有确认私有本地文件或 Data URL。Tuzi 的 [图片编辑接口](https://tuzi-api.apifox.cn/343647072e0) 虽建议优先使用生成接口，仍明确支持 `/v1/images/edits` 的 multipart 本地文件上传。因此当前兼容策略是：
+
+- 无参考图时继续使用已验证的 `/images/generations`；
+- `image.generate` 收到当前 Run 的一个 `/attachments/...` 图片时，复用同一图片生成绑定，以 multipart 调用 `/images/edits`；
+- `image.edit` 同时接受当前 Run 附件或既有图片 Artifact；
+- 只从 Runtime 已冻结的附件快照解析私有源文件，不接受模型提供的任意本地路径；
+- 不把未被 Tuzi 文档确认的 Base64/Data URL 行为当作兼容能力；
+- 非 2xx 响应保留稳定错误类别、脱敏上游消息和 `request_id`，供 UI 分类及供应商排查。
+
+Client 已经支持把文件拖入 Composer 并显示附件，不需要新增第二套“多模态上传”组件。此次只修复附件进入图片请求的语义断点。
+
 ## 对 SheJane 的实现含义
 
 以下是基于上述协议差异得出的产品建议，不是 Tuzi 文档原文：

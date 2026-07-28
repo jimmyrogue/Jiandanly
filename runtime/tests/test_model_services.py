@@ -695,6 +695,117 @@ def test_model_service_can_replace_its_api_key(
     assert list(credential_vault.values()) == ["new-secret"]
 
 
+def test_model_service_list_keeps_inaccessible_connections_recoverable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    credential_vault: dict[str, str],
+) -> None:
+    settings = reset_settings_for_tests(
+        SHEJANE_RUNTIME_TOKEN="tok",
+        data_dir=tmp_path,
+    )
+    monkeypatch.setattr(RunCoordinator, "start", lambda _self: None)
+
+    async def refresh(**kwargs):
+        return [dict(model) for model in kwargs["preset"]["models"]], "ready"
+
+    monkeypatch.setattr(server_module, "_refresh_model_service_models", refresh)
+    original_get_model_api_key = server_module.get_model_api_key
+
+    with TestClient(create_app(settings)) as client:
+        inaccessible = client.post(
+            "/v1/model-services",
+            headers={"Authorization": "Bearer tok"},
+            json={"preset_id": "deepseek", "api_key": "old-secret"},
+        ).json()
+        accessible = client.post(
+            "/v1/model-services",
+            headers={"Authorization": "Bearer tok"},
+            json={"preset_id": "kimi", "api_key": "working-secret"},
+        ).json()
+
+        async def load_key(
+            principal_id: str,
+            connection_id: str,
+            credential_reference: str | None = None,
+        ) -> str | None:
+            if connection_id == inaccessible["id"]:
+                raise server_module.CredentialStoreError("system credential store is unavailable")
+            return await original_get_model_api_key(
+                principal_id,
+                connection_id,
+                credential_reference,
+            )
+
+        monkeypatch.setattr(server_module, "get_model_api_key", load_key)
+        response = client.get(
+            "/v1/model-services",
+            headers={"Authorization": "Bearer tok"},
+        )
+
+    assert response.status_code == 200
+    services = {service["id"]: service for service in response.json()["services"]}
+    assert services[inaccessible["id"]]["credential_configured"] is False
+    assert services[accessible["id"]]["credential_configured"] is True
+
+
+def test_model_service_reconnects_when_old_credential_cannot_be_deleted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    credential_vault: dict[str, str],
+) -> None:
+    settings = reset_settings_for_tests(
+        SHEJANE_RUNTIME_TOKEN="tok",
+        data_dir=tmp_path,
+    )
+    monkeypatch.setattr(RunCoordinator, "start", lambda _self: None)
+
+    async def refresh(**kwargs):
+        return [dict(model) for model in kwargs["preset"]["models"]], "ready"
+
+    monkeypatch.setattr(server_module, "_refresh_model_service_models", refresh)
+    original_delete_model_api_key = server_module.delete_model_api_key
+
+    with TestClient(create_app(settings)) as client:
+        connection = client.post(
+            "/v1/model-services",
+            headers={"Authorization": "Bearer tok"},
+            json={"preset_id": "deepseek", "api_key": "old-secret"},
+        ).json()
+        old_credential_ref = server_module.credential_ref(connection["id"])
+
+        async def delete_key(
+            principal_id: str,
+            connection_id: str,
+            credential_reference: str | None = None,
+        ) -> None:
+            if credential_reference == old_credential_ref:
+                raise server_module.CredentialStoreError("system credential store is unavailable")
+            await original_delete_model_api_key(
+                principal_id,
+                connection_id,
+                credential_reference,
+            )
+
+        monkeypatch.setattr(server_module, "delete_model_api_key", delete_key)
+        replaced = client.put(
+            f"/v1/model-services/{connection['id']}/credential",
+            headers={"Authorization": "Bearer tok"},
+            json={"api_key": "new-secret"},
+        )
+        listed = client.get(
+            "/v1/model-services",
+            headers={"Authorization": "Bearer tok"},
+        )
+
+    assert replaced.status_code == 200
+    assert replaced.json()["credential_configured"] is True
+    assert replaced.json()["version"] == connection["version"] + 1
+    assert listed.status_code == 200
+    assert listed.json()["services"][0]["credential_configured"] is True
+    assert set(credential_vault.values()) == {"old-secret", "new-secret"}
+
+
 def test_model_service_keeps_old_api_key_when_database_replace_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

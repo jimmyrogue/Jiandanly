@@ -71,7 +71,14 @@ def classify_failure_payload(event_type: str, payload: dict[str, Any]) -> dict[s
         category = "auth"
         recoverable = True
         suggested_action = "Check the Runtime model-service API Key, then retry."
-    elif _contains_any(haystack, "not_configured", "missing_api_key", "api key", "configuration"):
+    elif _contains_any(
+        haystack,
+        "not_configured",
+        "missing_api_key",
+        "model_unavailable",
+        "api key",
+        "configuration",
+    ):
         category = "configuration"
         recoverable = True
         suggested_action = "Connect the missing model service or API Key, then retry."

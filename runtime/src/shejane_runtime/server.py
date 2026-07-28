@@ -313,13 +313,16 @@ async def _model_service_response(
 ) -> ModelServiceConnection:
     configured = credential_configured
     if configured is None:
-        configured = bool(
-            await get_model_api_key(
-                str(row["principal_id"]),
-                str(row["id"]),
-                str(row["credential_ref"]),
+        try:
+            configured = bool(
+                await get_model_api_key(
+                    str(row["principal_id"]),
+                    str(row["id"]),
+                    str(row["credential_ref"]),
+                )
             )
-        )
+        except CredentialStoreError:
+            configured = False
     return ModelServiceConnection(
         id=str(row["id"]),
         preset_id=str(row["preset_id"]),
@@ -2014,20 +2017,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             previous_credential_ref,
                         )
                     except CredentialStoreError:
-                        await store.replace_model_connection_credential(
-                            principal_id=principal_id,
-                            connection_id=connection_id,
-                            credential_ref=previous_credential_ref,
-                            base_url=str(current["base_url"]),
-                            models=_model_connection_models(current),
-                            catalog_status=str(current["catalog_status"]),
+                        log.warning(
+                            "old model-service credential remains after reconnect",
+                            extra={"connection_id": connection_id},
                         )
-                        await delete_model_api_key(
-                            principal_id,
-                            connection_id,
-                            next_credential_ref,
-                        )
-                        raise
             except BaseException:
                 if not credential_swapped:
                     await delete_model_api_key(

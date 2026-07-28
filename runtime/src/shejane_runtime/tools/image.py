@@ -6,6 +6,7 @@ import base64
 import binascii
 import json
 import logging
+import re
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -31,13 +32,29 @@ _CAPABILITY_PROTOCOLS = {
     "image_editing": "openai_images_edits",
 }
 _FORMAT_MEDIA_TYPES = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}
+_PROVIDER_STATUS_ERRORS = {
+    400: ("image_provider_invalid_request", "image provider rejected the request (400)", False),
+    401: ("image_provider_unauthorized", "image provider rejected the API key", False),
+    402: ("provider_quota_exceeded", "image provider quota or balance is insufficient", False),
+    403: ("image_provider_permission_denied", "image provider denied access to the model", False),
+    408: ("image_provider_unavailable", "image provider unavailable (408)", True),
+    429: ("image_provider_rate_limited", "image provider rate limit (429)", True),
+}
 
 
 class ImageToolError(RuntimeError):
-    def __init__(self, code: str, message: str, *, retryable: bool = False) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        retryable: bool = False,
+        request_id: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.retryable = retryable
+        self.request_id = request_id
 
 
 def make_image_tools() -> list[BaseTool]:
@@ -49,25 +66,28 @@ def make_image_tools() -> list[BaseTool]:
         size: str | None = None,
         quality: str | None = None,
         background: str | None = None,
+        source_attachment_path: str | None = None,
     ) -> dict[str, Any]:
-        """Generate images from a text prompt and save them as Runtime Artifacts."""
+        """Generate images, optionally using one uploaded `/attachments/...` image as reference."""
         return await _run_image_tool(
             capability="image_generation",
             prompt=prompt,
             runtime=runtime,
             n=n,
             options={"size": size, "quality": quality, "background": background},
+            source_attachment_path=source_attachment_path,
         )
 
     @tool("image.edit")
     async def image_edit(
-        source_artifact_id: str,
         prompt: str,
         runtime: ToolRuntime[Any] = None,  # type: ignore[assignment]
         n: int = 1,
         size: str | None = None,
+        source_artifact_id: str | None = None,
+        source_attachment_path: str | None = None,
     ) -> dict[str, Any]:
-        """Edit an image Artifact and save each result as a new Runtime Artifact."""
+        """Edit one image Artifact or uploaded `/attachments/...` image."""
         return await _run_image_tool(
             capability="image_editing",
             prompt=prompt,
@@ -75,6 +95,7 @@ def make_image_tools() -> list[BaseTool]:
             n=n,
             options={"size": size},
             source_artifact_id=source_artifact_id,
+            source_attachment_path=source_attachment_path,
         )
 
     return [image_generate, image_edit]
@@ -88,6 +109,7 @@ async def _run_image_tool(
     n: int,
     options: dict[str, str | None],
     source_artifact_id: str | None = None,
+    source_attachment_path: str | None = None,
 ) -> dict[str, Any]:
     context = getattr(runtime, "context", None)
     store = getattr(context, "store", None)
@@ -103,14 +125,44 @@ async def _run_image_tool(
         binding, api_key = await _active_binding(context, capability)
         payload = {"model": binding["model_id"], "prompt": prompt, "n": count}
         payload.update({key: value for key, value in options.items() if value})
+        source_request: tuple[Path, str, str] | None = None
         if capability == "image_editing":
-            source = await _owned_image_artifact(
-                store,
-                principal_id=str(principal_id),
-                artifact_id=str(source_artifact_id or ""),
+            if bool(source_artifact_id) == bool(source_attachment_path):
+                raise ImageToolError(
+                    "image_source_required",
+                    "provide exactly one source_artifact_id or source_attachment_path",
+                )
+            if source_attachment_path:
+                source_request = _bound_image_attachment(
+                    context,
+                    source_attachment_path,
+                )
+            else:
+                source = await _owned_image_artifact(
+                    store,
+                    principal_id=str(principal_id),
+                    artifact_id=str(source_artifact_id or ""),
+                )
+                source_path = store.artifact_body_path(source)
+                source_request = (
+                    source_path,
+                    str(source.get("title") or source_path.name),
+                    str(source.get("content_type") or "application/octet-stream"),
+                )
+        elif source_attachment_path:
+            source_request = _bound_image_attachment(
+                context,
+                source_attachment_path,
             )
+        if source_request is not None:
+            source_path, source_name, source_media_type = source_request
             results = await _request_edit(
-                binding, api_key, payload, store.artifact_body_path(source)
+                binding,
+                api_key,
+                payload,
+                source_path,
+                source_name=source_name,
+                source_media_type=source_media_type,
             )
         else:
             results = await _request_generation(binding, api_key, payload)
@@ -132,7 +184,12 @@ async def _run_image_tool(
             },
         }
     except ImageToolError as exc:
-        return _failure(exc.code, str(exc), retryable=exc.retryable)
+        return _failure(
+            exc.code,
+            str(exc),
+            retryable=exc.retryable,
+            request_id=exc.request_id,
+        )
     except (ArtifactConflictError, ArtifactQuotaError) as exc:
         return _failure("image_artifact_failed", str(exc))
     except Exception:
@@ -219,6 +276,28 @@ async def _owned_image_artifact(
     return artifact
 
 
+def _bound_image_attachment(context: Any, virtual_path: str) -> tuple[Path, str, str]:
+    inputs = getattr(context, "plugin_inputs", ())
+    source = next(
+        (
+            item
+            for item in inputs
+            if isinstance(item, dict) and item.get("virtual_path") == virtual_path
+        ),
+        None,
+    )
+    if source is None:
+        raise ImageToolError("image_source_not_found", "source image attachment was not found")
+    media_type = str(source.get("media_type") or "")
+    source_path = source.get("source_path")
+    if not media_type.startswith("image/") or not isinstance(source_path, str):
+        raise ImageToolError("image_source_invalid", "source attachment is not an image")
+    path = Path(source_path)
+    if not path.is_file():
+        raise ImageToolError("image_source_invalid", "source image attachment could not be read")
+    return path, Path(virtual_path).name, media_type
+
+
 async def _request_generation(
     binding: dict[str, Any],
     api_key: str,
@@ -236,6 +315,9 @@ async def _request_edit(
     api_key: str,
     payload: dict[str, Any],
     source_path: Path,
+    *,
+    source_name: str | None = None,
+    source_media_type: str | None = None,
 ) -> list[dict[str, Any]]:
     try:
         source = source_path.read_bytes()
@@ -247,9 +329,9 @@ async def _request_edit(
         form_payload={key: str(value) for key, value in payload.items()},
         files={
             "image": (
-                source_path.name,
+                source_name or source_path.name,
                 source,
-                _media_type_for_path(source_path),
+                source_media_type or _media_type_for_path(source_path),
             )
         },
     )
@@ -277,16 +359,24 @@ async def _request_provider(
                 files=files,
             )
         response.raise_for_status()
-        body = response.json()
-    except (httpx.HTTPError, ValueError) as exc:
+    except httpx.HTTPStatusError as exc:
+        raise _provider_http_error(exc.response, api_key) from exc
+    except httpx.RequestError as exc:
         raise ImageToolError(
-            "image_provider_failed",
-            "image model service request failed",
-            retryable=isinstance(exc, (httpx.TimeoutException, httpx.NetworkError)),
+            "image_provider_unavailable",
+            "image model service network request failed",
+            retryable=True,
+        ) from exc
+    try:
+        body = response.json()
+    except ValueError as exc:
+        raise ImageToolError(
+            "image_provider_invalid_response",
+            "image model service returned invalid JSON",
         ) from exc
     raw = body.get("data") if isinstance(body, dict) else None
     if isinstance(raw, dict):
-        raw = raw.get("images", [raw])
+        raw = raw.get("images") or raw.get("data") or [raw]
     if raw is None and isinstance(body, dict):
         raw = body.get("images")
     results = (
@@ -297,6 +387,71 @@ async def _request_provider(
     ):
         raise ImageToolError("image_provider_invalid_response", "image model returned no images")
     return results[:_MAX_IMAGES]
+
+
+def _provider_http_error(response: httpx.Response, api_key: str) -> ImageToolError:
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    provider_error = payload.get("error") if isinstance(payload, dict) else None
+    provider_code = str(
+        (provider_error.get("code") if isinstance(provider_error, dict) else None)
+        or (payload.get("code") if isinstance(payload, dict) else None)
+        or ""
+    )
+    provider_message = str(
+        (provider_error.get("message") if isinstance(provider_error, dict) else None)
+        or (payload.get("message") if isinstance(payload, dict) else None)
+        or (payload.get("msg") if isinstance(payload, dict) else None)
+        or ""
+    )
+    provider_message = re.sub(
+        r"\s+",
+        " ",
+        provider_message.replace(api_key, "[redacted]"),
+    ).strip()[:240]
+    request_id = next(
+        (
+            str(value)
+            for value in (
+                payload.get("request_id") if isinstance(payload, dict) else None,
+                response.headers.get("x-request-id"),
+                response.headers.get("request-id"),
+            )
+            if value
+        ),
+        None,
+    )
+    status = response.status_code
+    suffix = f" Provider message: {provider_message}" if provider_message else ""
+    if provider_code == "get_channel_failed":
+        return ImageToolError(
+            "image_model_unavailable",
+            "image model has no available provider channel." + suffix,
+            request_id=request_id,
+        )
+    failure = _PROVIDER_STATUS_ERRORS.get(status)
+    if failure is not None:
+        code, message, retryable = failure
+    elif status >= 500:
+        code, message, retryable = (
+            "image_provider_unavailable",
+            f"image provider unavailable ({status})",
+            True,
+        )
+    else:
+        code, message, retryable = (
+            "image_provider_failed",
+            f"image provider request failed ({status})",
+            False,
+        )
+    return ImageToolError(
+        code,
+        message + suffix,
+        retryable=retryable,
+        request_id=request_id,
+    )
 
 
 async def _persist_results(
@@ -421,11 +576,20 @@ def _media_type_for_path(path: Path) -> str:
     )
 
 
-def _failure(code: str, message: str, *, retryable: bool = False) -> dict[str, Any]:
-    return {
+def _failure(
+    code: str,
+    message: str,
+    *,
+    retryable: bool = False,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    payload = {
         "ok": "false",
         "error_code": code,
         "message": message,
         "recoverable": True,
         "retryable": retryable,
     }
+    if request_id:
+        payload["request_id"] = request_id
+    return payload

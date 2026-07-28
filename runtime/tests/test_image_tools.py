@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import httpx
 
 from shejane_runtime.auth import LOCAL_OWNER_PRINCIPAL_ID
+from shejane_runtime.failure_policy import classify_failure_payload
 from shejane_runtime.store.sqlite import LocalStore
 
 
@@ -21,10 +22,33 @@ async def test_image_generate_creates_a_file_artifact_without_returning_base64(
         "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR42mP8z4AdMDEMKQkA"
         "zUEBD7t4NqoAAAAASUVORK5CYII="
     )
+    source_path = tmp_path / "uploaded.png"
+    source_path.write_bytes(png)
+    requested_paths: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        requested_paths.append(request.url.path)
+        if request.url.path == "/v1/images/edits":
+            assert b'filename="uploaded.png"' in request.content
+            assert png in request.content
+            return httpx.Response(
+                200,
+                json={"data": [{"b64_json": base64.b64encode(png).decode()}]},
+            )
+        payload = json.loads(request.content)
+        if payload["prompt"] == "fail":
+            return httpx.Response(
+                500,
+                json={
+                    "request_id": "tuzi-request-123",
+                    "error": {
+                        "code": "get_channel_failed",
+                        "message": "模型 gpt-image-2 的可用渠道不存在",
+                    },
+                },
+            )
         assert request.url.path == "/v1/images/generations"
-        assert json.loads(request.content)["model"] == "image-model"
+        assert payload["model"] == "image-model"
         return httpx.Response(200, json={"data": [{"b64_json": base64.b64encode(png).decode()}]})
 
     class PatchedClient(httpx.AsyncClient):
@@ -86,6 +110,13 @@ async def test_image_generate_creates_a_file_artifact_without_returning_base64(
                     "revision": 1,
                 }
             },
+            plugin_inputs=(
+                {
+                    "virtual_path": "/attachments/uploaded.png",
+                    "source_path": str(source_path),
+                    "media_type": "image/png",
+                },
+            ),
         )
         generate = next(
             tool for tool in image_tools.make_image_tools() if tool.name == "image.generate"
@@ -100,6 +131,26 @@ async def test_image_generate_creates_a_file_artifact_without_returning_base64(
         assert artifact is not None
         assert artifact["storage_kind"] == "blob"
         assert store.artifact_body_path(artifact).read_bytes() == png
+
+        referenced = await generate.coroutine(
+            "use the uploaded style",
+            runtime=SimpleNamespace(context=context),
+            source_attachment_path="/attachments/uploaded.png",
+        )
+        assert referenced["ok"] == "true"
+        assert requested_paths[-1] == "/v1/images/edits"
+
+        rejected = await generate.coroutine(
+            "read an arbitrary path",
+            runtime=SimpleNamespace(context=context),
+            source_attachment_path=str(source_path),
+        )
+        assert rejected["error_code"] == "image_source_not_found"
+
+        failed = await generate.coroutine("fail", runtime=SimpleNamespace(context=context))
+        assert failed["error_code"] == "image_model_unavailable"
+        assert failed["request_id"] == "tuzi-request-123"
+        assert classify_failure_payload("tool.failed", failed)["category"] == "configuration"
     finally:
         await store.close()
 

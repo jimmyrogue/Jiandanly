@@ -55,6 +55,8 @@ Runtime 默认不要求用户环境变量。
 
 Client 的“模型服务”设置调用 Runtime 的 `/v1/model-services` 接口。API Key 只写入操作系统凭据库；连接配置和缓存模型目录写入 Runtime SQLite。
 
+若某个旧凭据因系统授权或开发版可执行身份变化而不可读，Runtime 仍返回其他模型服务，并把该连接标记为“需要 API Key”。用户可在原连接上重新填写 Key；新凭据验证并切换成功后，即使旧凭据暂时无法由 Runtime 删除，也不会回滚可用的新连接。旧条目仍留在操作系统凭据库中，可由用户之后通过系统凭据管理工具清理。
+
 入口包括 DeepSeek、Kimi、千问、GLM、MiniMax、硅基流动、OpenAI、Anthropic、Google Gemini 和“连接已有服务”。官方服务的地址与接口格式由 Runtime 固定，用户只选择区域并填写 API Key；已有服务会先自动识别 OpenAI Chat 或 Anthropic Messages 格式，也可在高级设置中明确选择 Google GenerateContent。
 
 OpenAI 官方连接默认使用 Responses，也可按模型选择 Chat Completions；Anthropic 使用原生 Messages；Google Gemini 使用原生 GenerateContent。Runtime 在 Run 接纳时冻结具体协议，不会按品牌猜测或在失败后静默换协议。这些工具调用路径共用同一套可逆 wire name：工具定义、`tool_choice`、历史 assistant 调用和 `ToolMessage.name` 一致编码，返回 Runtime 后恢复内部点号名称；改名不会改变 call ID、调用顺序、OpenAI reasoning item、Anthropic thinking/signature 或 Gemini thought signature。
@@ -63,7 +65,9 @@ Runtime 不在 Client 启动时访问外部服务。新增或更新官方连接�
 
 中转站返回的模型只作为候选目录，不再默认声明能力。一个模型可以分别验证多项能力：Agent 对话执行完整工具闭环，图片理解发送最小内联图片，图片生成调用 OpenAI-compatible `/images/generations`，图片编辑调用 `/images/edits`。图片生成和编辑测试都会产生一次真实请求，可能计费。只有验证过 Agent 对话能力的模型进入主模型选择器；图片生成和编辑模型在设置中分别选择默认绑定，不与主模型混列。
 
-Client 的“生图”入口发送结构化的 `required_tools: ["image.generate"]`，不再向用户文本拼接隐藏提示词。Runtime 在 Run 接纳时冻结默认图片模型的连接版本、模型 ID、协议和绑定修订；Agent 通过 `image.generate` 或 `image.edit` 调用该模型，结果下载并校验后保存为 Runtime Artifact，对话只接收 Artifact 元数据并通过鉴权接口显示图片，不在事件或模型上下文中传递 Base64。模型服务或绑定在执行前发生变化时，旧 Run 会安全失效，不会静默切换到另一个模型。
+Client 的“生图”入口发送结构化的 `required_tools: ["image.generate"]`，不再向用户文本拼接隐藏提示词。Runtime 在 Run 接纳时冻结默认图片模型的连接版本、模型 ID、协议和绑定修订；Agent 通过 `image.generate` 或 `image.edit` 调用该模型，结果下载并校验后保存为 Runtime Artifact，对话只接收 Artifact 元数据并通过鉴权接口显示图片，不在事件或模型上下文中传递 Base64。`image.generate` 可把当前 Run 的一个 `/attachments/...` 图片作为参考图，经同一图片生成绑定调用 OpenAI-compatible `/images/edits`；`image.edit` 也接受当前 Run 附件或既有图片 Artifact。两者只解析 Runtime 已冻结的附件快照，不接受任意本地路径。模型服务或绑定在执行前发生变化时，旧 Run 会安全失效，不会静默切换到另一个模型。
+
+图片供应商非 2xx 响应会保留脱敏后的稳定错误类别和 `request_id`：401/402/403/429、400、5xx 与 NewAPI/Tuzi 的 `get_channel_failed` 不再统一显示为“未知失败”。排查 Tuzi 问题时，应把界面或诊断事件中的 `request_id`、发生时间、接口和脱敏请求体一起提交给供应商。
 
 任务使用明确的 `local:<连接编号>:<模型编号>`。Runtime 不自动选择模型，也不会在连接之间静默切换。API Key 失效时，可在原连接上更新，不需要删除连接。
 
