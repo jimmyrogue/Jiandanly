@@ -387,6 +387,78 @@ async def test_completion_router_blocks_after_bounded_completion_repair() -> Non
     assert result["completion_route"]["reason"] == "completion_review_failed"
 
 
+async def test_completion_router_review_sees_source_backed_image_tool_evidence() -> None:
+    from shejane_runtime.middleware.completion_router import CompletionRouterMiddleware
+
+    class Reviewer:
+        async def ainvoke(self, messages: list[Any], **_kwargs: Any) -> AIMessage:
+            payload = json.loads(messages[-1].content)
+            evidence = json.dumps(payload["conversation_and_tool_evidence"], ensure_ascii=False)
+            decision = (
+                "allow"
+                if "source_attachment_path" in evidence
+                and "/attachments/logo.png" in evidence
+                and "effective_operation" in evidence
+                and "image.edit" in evidence
+                else "repair"
+            )
+            return AIMessage(
+                content=json.dumps(
+                    {
+                        "decision": decision,
+                        "reason": "The source-backed image edit is visible."
+                        if decision == "allow"
+                        else "The source attachment evidence is missing.",
+                    }
+                )
+            )
+
+    state = {
+        "completion_review_state": {"run_id": "run-image-edit", "attempts": 1},
+        "messages": [
+            HumanMessage(
+                content="把上传图片中的红色圆点改成方形印章。",
+                additional_kwargs={
+                    "runtime_kind": "task_input",
+                    "runtime_run_id": "run-image-edit",
+                },
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "image-edit-1",
+                        "name": "image.generate",
+                        "args": {
+                            "prompt": "Replace only the red dot with a square seal.",
+                            "source_attachment_path": "/attachments/logo.png",
+                        },
+                    }
+                ],
+            ),
+            ToolMessage(
+                content=(
+                    '{"ok":"true","artifacts":[{"artifact_id":"art-1","media_type":"image/png"}]}'
+                ),
+                name="image.generate",
+                tool_call_id="image-edit-1",
+            ),
+            AIMessage(content="已将红色圆点改为方形印章，其余构图保持不变。"),
+        ],
+    }
+    runtime = SimpleNamespace(
+        context=SimpleNamespace(
+            completion_model=Reviewer(),
+            task_goal="把上传图片中的红色圆点改成方形印章。",
+        )
+    )
+
+    result = await CompletionRouterMiddleware().aafter_model(state, runtime)
+
+    assert result["completion_route"]["decision"] == "final"
+    assert result["completion_review_state"]["decision"] == "allow"
+
+
 async def test_completion_router_does_not_review_a_plain_chat_answer() -> None:
     from shejane_runtime.middleware.completion_router import CompletionRouterMiddleware
 
