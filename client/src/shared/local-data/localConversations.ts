@@ -1,5 +1,4 @@
-import type { ImportModelServiceRequest } from '../../runtime/client'
-import type { Conversation, ConversationExport } from './types'
+import type { Conversation, ConversationExport, ExportedModelService } from './types'
 import type { PendingRuntimeCommand, PendingRunStartCommand } from '../../runtime/client'
 
 const STORE_NAME = 'conversations'
@@ -149,7 +148,7 @@ export class LocalConversationStore {
     await transactionToPromise(transaction)
   }
 
-  async exportAll(modelServices: ImportModelServiceRequest[] = []): Promise<ConversationExport> {
+  async exportAll(modelServices: ExportedModelService[] = []): Promise<ConversationExport> {
     return {
       version: 1,
       exportedAt: new Date().toISOString(),
@@ -158,7 +157,7 @@ export class LocalConversationStore {
     }
   }
 
-  async importAll(payload: ConversationExport | string): Promise<ImportModelServiceRequest[]> {
+  async importAll(payload: ConversationExport | string): Promise<ExportedModelService[]> {
     const parsed = typeof payload === 'string' ? (JSON.parse(payload) as ConversationExport) : payload
     if (parsed.version !== 1 || !Array.isArray(parsed.conversations)) {
       throw new Error('Unsupported SheJane conversation export')

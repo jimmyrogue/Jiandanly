@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import os
 from collections.abc import Sequence
 from pathlib import Path
 
 import uvicorn
 
 from .config import get_settings
+from .crash_reporting import install_local_crash_reporting
 from .observability import configure_logging
 from .plugins.macos_vm import load_macos_vm_resources
 from .server import create_app
@@ -60,13 +62,17 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="validate the bundled macOS VM asset set and exit",
     )
+    parser.add_argument("--crash-report-self-test", action="store_true", help=argparse.SUPPRESS)
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    args = _parse_args(argv)
+    install_local_crash_reporting(os.environ.get("SHEJANE_RUNTIME_CRASH_DIRECTORY"))
+    if args.crash_report_self_test:
+        os.abort()
     configure_logging()
     settings = get_settings()
-    args = _parse_args(argv)
     overrides = {
         key: value
         for key, value in {

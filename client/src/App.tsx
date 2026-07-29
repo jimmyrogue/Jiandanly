@@ -55,7 +55,7 @@ import type { AgentRunEvent } from '@shejane/runtime-sdk'
 import { I18nProvider } from './shared/i18n/I18nProvider'
 import { useI18n, type Translator } from './shared/i18n/i18n'
 import { createLocalID, LocalConversationStore } from './shared/local-data/localConversations'
-import type { AgentTimelineItem, ChatMessage, ChatMode, Conversation, ConversationProject, ConversationWorkspace, LocalAttachmentRef, LocalFileRef, OpenDocument } from './shared/local-data/types'
+import type { AgentTimelineItem, ChatMessage, ChatMode, Conversation, ConversationProject, ConversationWorkspace, ExportedModelService, LocalAttachmentRef, LocalFileRef, OpenDocument } from './shared/local-data/types'
 import {
   authorizeLocalWorkspace,
   advanceLocalPluginSetupCommand,
@@ -138,7 +138,6 @@ import {
   type LocalScheduledRun,
   type LocalWorkspaceDiagnosis,
   type LocalWorkspaceAuthorization,
-  type ImportModelServiceRequest,
 } from './runtime/client'
 import { filePreviewKind } from './shared/files/filePreview'
 import { downloadFile } from './shared/files/downloadFile'
@@ -2816,8 +2815,13 @@ function useAppContentViewModel() {
         (await listModelServices(runtimeConnection)).map((service) => service.id),
       )
       for (const service of modelServices) {
-        if (service.preset_id !== 'custom' && !existing.has(service.id)) {
-          await importModelService(service, runtimeConnection)
+        if (
+          service.preset_id !== 'custom'
+          && service.preset_id !== 'shejane-official'
+          && service.region !== 'official'
+          && !existing.has(service.id)
+        ) {
+          await importModelService({ ...service, region: service.region }, runtimeConnection)
         }
       }
       setModelCatalogVersion((current) => current + 1)
@@ -2827,7 +2831,7 @@ function useAppContentViewModel() {
   }
 
   async function exportLocalData() {
-    const modelServices: ImportModelServiceRequest[] = runtimeConnection
+    const modelServices: ExportedModelService[] = runtimeConnection
       ? (await listModelServices(runtimeConnection)).map((service) => ({
           id: service.id,
           preset_id: service.preset_id,

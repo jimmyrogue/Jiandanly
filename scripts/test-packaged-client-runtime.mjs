@@ -51,6 +51,7 @@ const smokeFile = join(temporaryRoot, 'runtime.json')
 const quitFile = join(temporaryRoot, 'quit')
 const home = join(temporaryRoot, 'home')
 const userData = join(temporaryRoot, 'user-data')
+const nativeCrashDirectory = join(temporaryRoot, 'native-crashes')
 const resourcesPath = isMacOSApp
   ? join(packagedPath, 'Contents', 'Resources')
   : join(dirname(packagedPath), 'resources')
@@ -148,11 +149,19 @@ try {
     handoff.token.length < 32 ||
     resolve(handoff.resourcesPath) !== resolve(resourcesPath) ||
     !Number.isSafeInteger(handoff.runtimePid) ||
-    handoff.runtimePid <= 0
+    handoff.runtimePid <= 0 ||
+    typeof handoff.crashDirectory !== 'string' ||
+    handoff.crashDirectory.length === 0
   ) {
     throw new Error('packaged app published an invalid Runtime handoff')
   }
   runtimePid = handoff.runtimePid
+  await access(handoff.crashDirectory, constants.R_OK | constants.W_OK)
+  const bundledRuntimeCrashFiles = (await readdir(handoff.crashDirectory))
+    .filter((filename) => filename.startsWith('runtime-native-') && filename.endsWith('.log'))
+  if (bundledRuntimeCrashFiles.length === 0) {
+    throw new Error('packaged Client did not inject the native crash directory into Runtime')
+  }
   const headers = { Authorization: `Bearer ${handoff.token}` }
   const health = await fetch(`${handoff.baseURL}/v1/health`, { headers })
   if (!health.ok || (await health.json()).status !== 'ok') {
@@ -161,6 +170,33 @@ try {
   const plugins = await fetch(`${handoff.baseURL}/v1/plugins`, { headers })
   if (!plugins.ok || !Array.isArray((await plugins.json()).plugins)) {
     throw new Error(`packaged Runtime plugin catalog failed with HTTP ${plugins.status}`)
+  }
+  const presets = await fetch(`${handoff.baseURL}/v1/model-services/presets`, { headers })
+  const presetCatalog = presets.ok ? await presets.json() : null
+  const official = presetCatalog?.services?.[0]
+  if (
+    official?.id !== 'shejane-official'
+    || official.connection_method !== 'browser_authorization'
+    || official.regions?.length !== 0
+  ) {
+    throw new Error(`packaged Runtime official-service preset failed with HTTP ${presets.status}`)
+  }
+  const authorization = await fetch(
+    `${handoff.baseURL}/v1/model-services/shejane/authorization`,
+    { method: 'POST', headers },
+  )
+  const authorizationBody = await authorization.json()
+  if (authorization.status !== 201) {
+    throw new Error(`packaged Runtime authorization start failed with HTTP ${authorization.status}`)
+  }
+  const authorizationURL = new URL(authorizationBody.authorization_url)
+  const callbackURL = new URL(authorizationURL.searchParams.get('redirect_uri') || '')
+  if (
+    authorizationURL.origin !== 'https://app.shejane.com'
+    || callbackURL.hostname !== '127.0.0.1'
+    || callbackURL.pathname !== '/shejane/auth/callback'
+  ) {
+    throw new Error('packaged Runtime published an invalid official authorization URL')
   }
 
   if (process.platform === 'darwin') {
@@ -191,6 +227,39 @@ try {
     async () => !processExists(runtimePid),
     { timeoutMs: 10_000, failure: 'packaged app left its bundled Runtime running after quit' },
   )
+
+  const nativeCrashProcess = spawn(runtimeExecutable, ['--crash-report-self-test'], {
+    env: {
+      ...process.env,
+      HOME: home,
+      USERPROFILE: home,
+      SHEJANE_RUNTIME_CRASH_DIRECTORY: nativeCrashDirectory,
+      SHEJANE_CRASH_CANARY_SECRET: 'must-not-enter-native-crash-report',
+    },
+    stdio: 'ignore',
+  })
+  const nativeCrashResult = await new Promise((resolveCrash, rejectCrash) => {
+    nativeCrashProcess.once('error', rejectCrash)
+    nativeCrashProcess.once('exit', (code, signal) => resolveCrash({ code, signal }))
+  })
+  if (nativeCrashResult.code === 0) {
+    throw new Error('packaged Runtime native crash self-test exited successfully')
+  }
+  const nativeCrashFiles = (await readdir(nativeCrashDirectory))
+    .filter((filename) => filename.startsWith('runtime-native-') && filename.endsWith('.log'))
+  if (nativeCrashFiles.length !== 1) {
+    throw new Error('packaged Runtime native crash self-test did not create exactly one dump')
+  }
+  const nativeCrash = await readFile(join(nativeCrashDirectory, nativeCrashFiles[0]), 'utf8')
+  if (
+    !nativeCrash.includes('Fatal Python error:') ||
+    nativeCrash.includes('must-not-enter-native-crash-report')
+  ) {
+    throw new Error('packaged Runtime native crash dump failed content boundaries')
+  }
+  if (isMacOSApp) {
+    await execFileAsync('/usr/bin/codesign', ['--verify', '--deep', '--strict', packagedPath])
+  }
   process.stdout.write(`packaged Client Runtime smoke passed: ${basename(packagedPath)}\n`)
 } catch (error) {
   primaryError = error

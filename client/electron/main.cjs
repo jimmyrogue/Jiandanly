@@ -1,6 +1,7 @@
 const {
   app,
   BrowserWindow,
+  crashReporter,
   dialog,
   ipcMain,
   Menu,
@@ -18,6 +19,7 @@ const crypto = require('node:crypto')
 const net = require('node:net')
 const { installLocalRuntimeAuthorization } = require('./runtime-auth.cjs')
 const { materializeFileCopy } = require('./file-open.cjs')
+const { recordLocalCrash, recordRuntimeFailure } = require('./local-crash-reporting.cjs')
 const {
   installUpdateAfterRuntimeStop,
   isPortConflictError,
@@ -47,9 +49,28 @@ const {
   writeDesktopSmokeConfig,
 } = require('./smoke-support.cjs')
 
+crashReporter.start({
+  uploadToServer: false,
+  compress: true,
+  globalExtra: {
+    component: 'client',
+    release: app.getVersion(),
+  },
+})
+const crashDirectory = app.getPath('crashDumps')
+
+function recordClientProcessFailure(component, category) {
+  recordLocalCrash({
+    directory: crashDirectory,
+    component,
+    category,
+    release: app.getVersion(),
+  })
+}
+
 const isDev = process.env.ELECTRON_DEV === 'true'
 const dockLangFile =
-  process.env.SHEJANE_DOCK_LANG_FILE || path.resolve(__dirname, '..', '..', '.tmp', 'dev', 'dock-lang')
+  process.env.SHEJANE_DOCK_LANG_FILE || path.join(app.getPath('userData'), 'dock-lang')
 function readDockLocale() {
   try {
     const value = fs.readFileSync(dockLangFile, 'utf8').trim()
@@ -389,6 +410,7 @@ async function spawnBundledRuntime() {
   ], {
     env: runtimeEnv({
       PYTHONUNBUFFERED: '1',
+      SHEJANE_RUNTIME_CRASH_DIRECTORY: crashDirectory,
       SHEJANE_MANAGED_WORKER_SANDBOX_COMMAND: managedWorkerSandboxCommand(),
       SHEJANE_RUNTIME_NODE_PATH: process.execPath,
     }),
@@ -410,6 +432,13 @@ async function spawnBundledRuntime() {
     process.stderr.write(`[runtime] ${chunk}`)
   })
   child.on('error', (err) => {
+    recordRuntimeFailure({
+      child,
+      directory: crashDirectory,
+      release: app.getVersion(),
+      wasReady: false,
+      isQuitting: app.isQuitting,
+    })
     console.error('[runtime] failed:', err && err.message)
   })
   child.on('exit', (code, signal) => {
@@ -419,6 +448,13 @@ async function spawnBundledRuntime() {
     const wasReady = runtimeReady
     runtimeReady = false
     runtimeSessionReady = false
+    recordRuntimeFailure({
+      child,
+      directory: crashDirectory,
+      release: app.getVersion(),
+      wasReady,
+      isQuitting: app.isQuitting,
+    })
     if (wasReady && !app.isQuitting) {
       dialog.showErrorBox(currentAppName(), desktopText(currentLocale, 'runtime.exited', { code, signal }))
     }
@@ -596,6 +632,7 @@ async function checkClientUpdate() {
   try {
     await clientAutoUpdater.checkForUpdates()
   } catch (error) {
+    recordClientProcessFailure('updater', 'update_error')
     console.warn('[updater] check failed:', error && error.message)
     publishClientUpdateState({ status: 'error', progress: undefined })
   }
@@ -618,6 +655,7 @@ async function installClientUpdate() {
     })
     return true
   } catch (error) {
+    recordClientProcessFailure('updater', 'install_error')
     app.isQuitting = false
     publishClientUpdateState({ status: 'error', progress: undefined })
     console.error('[updater] install failed:', error)
@@ -686,11 +724,13 @@ function startClientUpdater() {
       })
     })
     autoUpdater.on('error', (error) => {
+      recordClientProcessFailure('updater', 'update_error')
       console.warn('[updater] failed:', error && error.message)
       publishClientUpdateState({ status: 'error', progress: undefined })
     })
     void checkClientUpdate()
   } catch (error) {
+    recordClientProcessFailure('updater', 'update_error')
     console.warn('[updater] unavailable:', error && error.message)
     publishClientUpdateState({ status: 'error' })
   }
@@ -756,6 +796,7 @@ app.whenReady().then(async () => {
         token: runtimeConnection.token,
         resourcesPath: process.resourcesPath,
         runtimePid: runtimeProcess.pid || 0,
+        crashDirectory,
       })
       if (smokeConfigWritten) {
         installDesktopSmokeQuitWatcher({ quit: () => app.quit() })
@@ -780,6 +821,7 @@ app.whenReady().then(async () => {
     createTray()
   }
   if (runtimeConnectionError) {
+    console.error('[runtime] startup failed:', runtimeConnectionError)
     dialog.showErrorBox(
       currentAppName(),
       desktopText(currentLocale, 'runtime.startFailed', { message: runtimeConnectionError }),

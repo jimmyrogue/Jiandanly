@@ -92,18 +92,26 @@ describe.skipIf(!BASE_URL)('flow:P1-P6 > contract: Runtime catalogs (live runtim
     ]))
   })
 
-  it('publishes China-first model service presets and cached connections', async () => {
+  it('publishes official and China-first model service presets with cached connections', async () => {
     const presets = await listModelServicePresets(config)
     expect(presets.map((preset) => preset.id)).toEqual([
+      'shejane-official',
       'deepseek',
       'kimi',
       'qwen',
       'glm',
       'minimax',
       'siliconflow',
+      'openai',
+      'anthropic',
+      'google',
       'custom',
     ])
-    expect(presets[0]?.regions[0]).toMatchObject({ id: 'cn', default: true })
+    expect(presets[0]).toMatchObject({
+      connection_method: 'browser_authorization',
+      regions: [],
+    })
+    expect(presets[1]?.regions[0]).toMatchObject({ id: 'cn', default: true })
     await expect(listModelServices(config)).resolves.toEqual(expect.any(Array))
     await expect(listLocalRuntimeModels(config)).resolves.toEqual(expect.any(Array))
   })

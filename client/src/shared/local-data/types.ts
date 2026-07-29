@@ -268,5 +268,9 @@ export interface ConversationExport {
   version: 1
   exportedAt: string
   conversations: Conversation[]
-  modelServices?: ImportModelServiceRequest[]
+  modelServices?: ExportedModelService[]
+}
+
+export type ExportedModelService = Omit<ImportModelServiceRequest, 'region'> & {
+  region: ImportModelServiceRequest['region'] | 'official'
 }

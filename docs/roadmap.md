@@ -1,6 +1,6 @@
 # SheJane 路线图
 
-> 更新于 2026-07-28。当前能力基线和源码证据见 [Agent Harness 能力审计](./agent-harness-capabilities-latest-2026-07-26.md)。Runtime 的 P1–P12 只表示 [`harness-runtime-stages.md`](./harness-runtime-stages.md) 中的请求阶段；本路线图使用 Now / Next / Later / Explore，不另建一套阶段编号。
+> 更新于 2026-07-29。当前能力基线和源码证据见 [Agent Harness 能力审计](./agent-harness-capabilities-latest-2026-07-26.md)。Runtime 的 P1–P12 只表示 [`harness-runtime-stages.md`](./harness-runtime-stages.md) 中的请求阶段；本路线图使用 Now / Next / Later / Explore，不另建一套阶段编号。
 
 ## 当前基线
 
@@ -22,6 +22,31 @@ SheJane 已经具备本地 Agent Harness 的主干，不需要继续以“增加
 - **不把依赖中的 Beta/Preview 自动算作产品能力。** 接入前必须补齐 Runtime 状态、权限、事件、取消、恢复和测试。
 
 ## Now：真实可用性与质量门禁
+
+### 0. SheJane 官方服务授权（真实 Cloud 核心链路已验收，平台发布门禁待完成）
+
+Runtime 已拥有固定 origin、PKCE、动态 IPv4 loopback callback、一次性 code exchange、
+系统凭据库和普通 `ModelServiceConnection` 的完整链路；Client 已接入系统浏览器与成功、
+拒绝、超时和失败状态。普通 API Key 创建、导入和替换接口不能修改官方托管凭据，BYOK
+与显式 `local:<connection>:<model>` 选择保持不变。
+
+正式 Cloud origin 已冻结为 `https://app.shejane.com`，`admin.shejane.com` 只保留同路径
+重定向。2026-07-29 的公开邀请环境已经通过邀请码注册、密码登录、动态 loopback、PKCE、
+一次性 code、拒绝、本地超时、重放、交换响应体丢失、跨 Runtime 进程凭据读取，以及网页
+撤销后旧 token 立即返回 401，并分别验证 2FA 与虚拟平台认证器 Passkey 登录后继续同一
+授权流；测试设备和测试账号已清理。发布 Gate 仍等待 Windows 最终安装包、Developer ID/
+公证包，以及真实硬件 Passkey 和外部 OAuth 返回链路的独立证据。
+
+运维方配置 DeepSeek 渠道后，源码 Runtime 与重新冻结的 macOS arm64 0.1.19 包内 Runtime
+均已以固定 `/v1` 推理地址完成官方授权、两个模型的完整工具回环、跨 Runtime 进程凭据读取、
+模型目录刷新和撤销后 401；临时连接、凭据和设备均已清理。该技术验收不替代上游授权或
+价格/预算决定。
+
+2026-07-29 已在 macOS arm64 本机构建 0.1.19 ad-hoc 签名本地预览包并通过最终
+`.app` 的 `make test-packaged`：包内 Runtime、VM manifest、官方 preset、固定
+`https://app.shejane.com`、仅绑定 loopback 的 callback、本地 crash dump 和正常退出清理均
+通过。该证据不包含 Developer ID、公证或 Windows；公开 Cloud 核心流程的后续验收不能
+替代这些平台发布证据，因此发布状态保持不变。
 
 ### 1. 真实 BYOK 模型工具回环（已完成）
 

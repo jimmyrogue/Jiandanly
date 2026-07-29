@@ -29,6 +29,7 @@ def test_model_service_presets_prioritize_china_and_expose_editable_addresses() 
     presets = list_model_service_presets()
 
     assert [preset["id"] for preset in presets] == [
+        "shejane-official",
         "deepseek",
         "kimi",
         "qwen",
@@ -40,15 +41,25 @@ def test_model_service_presets_prioritize_china_and_expose_editable_addresses() 
         "google",
         "custom",
     ]
-    for preset in presets[:6]:
+    official = presets[0]
+    assert official == {
+        "id": "shejane-official",
+        "name": "SheJane 官方服务（推荐）",
+        "description": "登录 SheJane Cloud 使用官方托管的模型服务。",
+        "connection_method": "browser_authorization",
+        "api_key_url": None,
+        "billing_url": None,
+        "regions": [],
+    }
+    for preset in presets[1:7]:
         assert preset["regions"][0]["id"] == "cn"
         assert preset["regions"][0]["default"] is True
         assert preset["regions"][0]["base_url"].startswith("https://")
-    for preset in presets[6:-1]:
+    for preset in presets[7:-1]:
         assert preset["regions"][0]["id"] == "intl"
         assert preset["regions"][0]["default"] is True
         assert preset["regions"][0]["base_url"].startswith("https://")
-    for preset in presets[:-1]:
+    for preset in presets[1:-1]:
         assert "adapter_id" not in preset
 
 
@@ -129,7 +140,8 @@ async def test_model_connection_adapter_migration_preserves_existing_rows(tmp_pa
     connection.execute(
         "CREATE TABLE model_connections ("
         "principal_id TEXT NOT NULL, id TEXT NOT NULL, preset_id TEXT NOT NULL, "
-        "name TEXT NOT NULL, region TEXT NOT NULL, adapter_id TEXT NOT NULL "
+        "name TEXT NOT NULL, region TEXT NOT NULL "
+        "CHECK (region IN ('cn', 'intl', 'custom')), adapter_id TEXT NOT NULL "
         "CHECK (adapter_id IN ('openai_chat', 'anthropic_messages')), "
         "base_url TEXT NOT NULL, requires_api_key INTEGER NOT NULL, "
         "credential_ref TEXT NOT NULL, models_json TEXT NOT NULL, "
@@ -181,6 +193,20 @@ async def test_model_connection_adapter_migration_preserves_existing_rows(tmp_pa
             catalog_status="ready",
         )
         assert created["adapter_id"] == "google_genai"
+        official = await store.create_model_connection(
+            principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+            connection_id=f"conn_{'f' * 32}",
+            preset_id="shejane-official",
+            name="SheJane 官方服务（推荐）",
+            region="official",
+            adapter_id="openai_chat",
+            base_url="https://cloud.example.test",
+            requires_api_key=True,
+            credential_ref="model-service:official",
+            models=[],
+            catalog_status="ready",
+        )
+        assert official["region"] == "official"
     finally:
         await store.close()
 
@@ -364,11 +390,22 @@ def test_model_service_presets_are_runtime_owned(
         )
 
     assert response.status_code == 200
-    deepseek = response.json()["services"][0]
+    services = response.json()["services"]
+    assert services[0] == {
+        "id": "shejane-official",
+        "name": "SheJane 官方服务（推荐）",
+        "description": "登录 SheJane Cloud 使用官方托管的模型服务。",
+        "connection_method": "browser_authorization",
+        "api_key_url": None,
+        "billing_url": None,
+        "regions": [],
+    }
+    deepseek = services[1]
     assert deepseek == {
         "id": "deepseek",
         "name": "DeepSeek",
         "description": "推理和通用任务，按 DeepSeek 官方价格计费。",
+        "connection_method": "api_key",
         "api_key_url": "https://platform.deepseek.com/api_keys",
         "billing_url": "https://platform.deepseek.com/usage",
         "regions": [
@@ -380,6 +417,27 @@ def test_model_service_presets_are_runtime_owned(
             }
         ],
     }
+
+
+def test_browser_authorization_preset_rejects_api_key_connection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = reset_settings_for_tests(
+        SHEJANE_RUNTIME_TOKEN="tok",
+        data_dir=tmp_path,
+    )
+    monkeypatch.setattr(RunCoordinator, "start", lambda _self: None)
+
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/v1/model-services",
+            headers={"Authorization": "Bearer tok"},
+            json={"preset_id": "shejane-official", "api_key": "must-not-be-used"},
+        )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "model service requires browser authorization"}
 
 
 def test_legacy_provider_secrets_are_deleted_before_legacy_table(

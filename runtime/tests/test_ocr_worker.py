@@ -145,7 +145,7 @@ def invocation(
         "operation_id": "run_01:ocr.recognize_images:001",
         "action": {
             "plugin_id": "org.shejane.ocr",
-            "plugin_version": "0.1.0",
+            "plugin_version": "0.1.1",
             "plugin_digest": "sha256:" + "b" * 64,
             "action_id": "ocr.recognize_images",
         },
@@ -200,7 +200,7 @@ def action_descriptor(tmp_path: Path, asset: RuntimeAssetHandle) -> PluginAction
     worker.chmod(0o600)
     return PluginActionDescriptor(
         plugin_id="org.shejane.ocr",
-        plugin_version="0.1.0",
+        plugin_version="0.1.1",
         plugin_digest="sha256:" + "b" * 64,
         action_id=action["id"],
         tool_name="plugin.org.shejane.ocr.ocr.recognize_images",

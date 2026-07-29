@@ -11,20 +11,13 @@ Two-part design:
    and error gets a structured log line tagged with `run_id` + `module`
    for cross-correlation with the runtime's other logs.
 
-Optional integrations
----------------------
-- `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY` set ⇒ a `langfuse` callback
-  is added alongside `RuntimeObserver` automatically (vendor SDK must be
-  installed separately; we don't pin it to keep the default footprint small).
-- `SHEJANE_DISABLE_OBSERVABILITY=1` turns the whole layer into no-ops —
+`SHEJANE_DISABLE_OBSERVABILITY=1` turns the whole layer into no-ops —
   useful for benchmarking the cold-path overhead.
 
-The handler is intentionally lightweight: each event becomes one log line.
-For deep tracing (intermediate state, full prompts), set
-`LANGSMITH_TRACING=true` and use LangSmith — we don't ship LangSmith
-credentials, but the handler is additive so they coexist. The pytest suite
-forces LangSmith/LangChain tracing env vars off in `tests/conftest.py` so local
-verification stays hermetic.
+The handler is intentionally metadata-only. External tracing inherited from a
+developer shell is disabled; centralized diagnostics use SheJane's explicit,
+redacted relay instead of vendor callbacks that can capture prompt or tool
+content.
 """
 
 from __future__ import annotations
@@ -102,28 +95,14 @@ def is_disabled() -> bool:
 
 
 def build_callbacks() -> list[AsyncCallbackHandler]:
-    """Construct the callback list used at agent invocation time.
-
-    Always includes `RuntimeObserver`. Conditionally appends Langfuse if the
-    vendor SDK is installed and credentials are present.
-    """
+    """Construct the metadata-only callback list used at agent invocation time."""
+    os.environ["LANGSMITH_TRACING"] = "false"
+    os.environ["LANGCHAIN_TRACING_V2"] = "false"
+    os.environ.pop("LANGSMITH_API_KEY", None)
+    os.environ.pop("LANGCHAIN_API_KEY", None)
     if is_disabled():
         return []
-
-    callbacks: list[AsyncCallbackHandler] = [RuntimeObserver()]
-
-    if os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY"):
-        try:
-            from langfuse.callback import CallbackHandler as LangfuseCallback
-
-            callbacks.append(LangfuseCallback())  # type: ignore[arg-type]
-        except ImportError:
-            structlog.get_logger("shejane_runtime.observability").warning(
-                "langfuse_credentials_set_but_sdk_missing",
-                hint="pip install langfuse to enable",
-            )
-
-    return callbacks
+    return [RuntimeObserver()]
 
 
 class RuntimeObserver(AsyncCallbackHandler):
@@ -222,7 +201,6 @@ class RuntimeObserver(AsyncCallbackHandler):
             run_id=str(run_id),
             parent_run_id=str(parent_run_id) if parent_run_id else None,
             tool=serialized.get("name", "unknown"),
-            input_preview=_clip(input_str, 200),
         )
 
     async def on_tool_end(
@@ -240,7 +218,6 @@ class RuntimeObserver(AsyncCallbackHandler):
             run_id=str(run_id),
             parent_run_id=str(parent_run_id) if parent_run_id else None,
             elapsed_ms=round(elapsed_ms, 2) if elapsed_ms is not None else None,
-            output_preview=_clip(str(output), 200),
         )
 
     async def on_tool_error(
@@ -257,7 +234,6 @@ class RuntimeObserver(AsyncCallbackHandler):
             run_id=str(run_id),
             parent_run_id=str(parent_run_id) if parent_run_id else None,
             error_type=type(error).__name__,
-            error_message=str(error),
         )
 
     # --- agent lifecycle (high level signal only) ---
@@ -273,7 +249,6 @@ class RuntimeObserver(AsyncCallbackHandler):
         self._log.info(
             "agent.finish",
             run_id=str(run_id),
-            output_preview=_clip(str(getattr(finish, "return_values", "")), 200),
         )
 
 
@@ -286,9 +261,3 @@ def _extract_model_name(serialized: dict[str, Any]) -> str:
     if "id" in serialized and isinstance(serialized["id"], list):
         return ".".join(str(x) for x in serialized["id"])
     return "unknown"
-
-
-def _clip(text: str, limit: int) -> str:
-    if len(text) <= limit:
-        return text
-    return text[: limit - 1] + "…"

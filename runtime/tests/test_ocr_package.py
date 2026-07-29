@@ -9,11 +9,25 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from shejane_runtime.plugins.manifest import PluginManifest, load_plugin_manifest
+from shejane_runtime.plugins.ocr import is_allowed_ocr_package
 from shejane_runtime.plugins.package import extract_plugin_archive
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ROOT = REPO_ROOT / "runtime" / "plugins" / "ocr"
 BUILDER = ROOT / "build_package.py"
+
+
+def test_runtime_accepts_only_the_current_ocr_package_version() -> None:
+    assert is_allowed_ocr_package(
+        plugin_id="org.shejane.ocr",
+        version="0.1.1",
+        handler="ocr",
+    )
+    assert not is_allowed_ocr_package(
+        plugin_id="org.shejane.ocr",
+        version="0.1.0",
+        handler="ocr",
+    )
 
 
 def test_ocr_manifest_and_action_schemas_are_strict() -> None:
@@ -75,6 +89,7 @@ def test_ocr_package_is_deterministic_and_preserves_onedir_worker(
     extracted = tmp_path / "extracted"
     extract_plugin_archive(outputs[0], extracted)
     manifest = load_plugin_manifest(extracted)
+    assert manifest.version == "0.1.1"
     assert manifest.runtime.execution.platforms == [target_platform]
     assert (extracted / "payload" / entrypoint).read_bytes() == b"worker"
     assert (extracted / "payload/_internal" / library).read_bytes() == b"library"
@@ -181,5 +196,6 @@ def test_release_does_not_package_builtin_ocr_as_a_linux_worker() -> None:
         encoding="utf-8"
     )
 
-    assert "ocr-0.1.0-linux-arm64.shejane-plugin" not in workflow
+    assert "ocr-0.1.0-" not in workflow
+    assert "ocr-0.1.1-linux-arm64.shejane-plugin" not in workflow
     assert "Run Linux arm64 OCR production gate in packaged macOS VM" in workflow

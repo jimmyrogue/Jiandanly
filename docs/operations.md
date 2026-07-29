@@ -71,6 +71,68 @@ Client 的“生图”入口发送结构化的 `required_tools: ["image.generate
 
 任务使用明确的 `local:<连接编号>:<模型编号>`。Runtime 不自动选择模型，也不会在连接之间静默切换。API Key 失效时，可在原连接上更新，不需要删除连接。
 
+## 连接 SheJane 官方服务
+
+SheJane 官方服务是可选的 `browser_authorization` preset；BYOK 和无 Cloud 账号路径保持
+不变。Runtime 是授权状态所有者：它生成 `state` 与 PKCE、监听动态 IPv4 loopback
+callback、交换一次性 code，并把 inference token 写入操作系统凭据库。Client 只打开
+Runtime 返回的系统浏览器 URL 并轮询本地状态，不能提供 Cloud origin、redirect URI、
+client ID 或 PKCE 参数。
+
+正式 Cloud origin 只有一个源码常量：
+`runtime/src/shejane_runtime/shejane_authorization.py` 中的
+`OFFICIAL_CLOUD_ORIGIN`。它必须是运营方批准的 HTTPS origin，不能改成环境变量、CLI
+参数、远程配置或网页返回值。正式 origin 已确定为 `https://app.shejane.com`；
+`admin.shejane.com` 只重定向到该 origin，不构成第二个授权入口。发布前必须重生成安装包，
+并在 macOS 与 Windows 包内验证：
+
+- 授权 URL 只使用该 origin，callback 只绑定 `127.0.0.1` 和固定路径；
+- 登录、拒绝、超时、错误 state、code 重放与交换响应丢失；
+- Runtime 重启后系统凭据仍可调用 `/v1/models`；
+- Cloud 网页撤销设备后，旧 token 立即失效；
+- HTTP、SQLite、Client 状态和日志均不包含 inference token。
+
+回滚官方服务时把编译常量恢复为空值并先停止 Client 入口发布；这不会删除现有 BYOK
+连接。已经签发但不再使用的设备必须在 Cloud 设备页撤销，不能依赖卸载 Client。
+
+### 邀请内测发布门禁
+
+发布负责人必须保存 Cloud/Client/Runtime 版本、平台与架构、安装包摘要、测试账号、设备
+记录编号和每个用例的时间戳；不得保存 inference token、授权 code、PKCE verifier、prompt、
+输出或本地文件内容。源码门禁依次运行 `make lint`、`make test`、`make build` 和
+`make test-contract`；macOS 与 Windows 分别对最终安装包运行
+`make test-packaged APP=<path>`。打包 smoke 会验证官方 preset、固定 HTTPS origin 和仅绑定
+`127.0.0.1` 的 callback，但不能替代真实账号验收。
+
+2026-07-29 的本地 macOS arm64 0.1.19 ad-hoc 签名预览包已使用固定
+`https://app.shejane.com` 重新构建并通过 packaged smoke。该预览包不是 Developer ID/公证
+证据，也不覆盖 Windows，邀请内测发布 Gate 仍关闭。
+
+同日公开邀请环境已通过邀请码注册、密码登录、Runtime 动态 loopback/PKCE、明确拒绝、
+本地超时、code 重放、交换响应体丢失、跨 Runtime 进程的系统凭据读取，以及设备撤销后的
+旧 token 401；2FA 与 Chrome 虚拟平台认证器 Passkey 登录也分别继续了原授权流。临时测试
+账号、设备和本地测试凭据均已清理。尚未取得 Windows 最终安装包、Developer ID/公证包、
+真实硬件 Passkey 和外部 OAuth 返回链路证据，不能据此打开发布 Gate。
+
+同日运维方配置 DeepSeek 渠道后，源码 Runtime 与重新冻结的 macOS arm64 0.1.19 包内
+Runtime 均完成真实官方授权：连接固定使用 `https://app.shejane.com/v1`，成功拉取
+`deepseek-v4-flash` 与 `deepseek-v4-pro`，两个模型均通过完整的流式工具回环验证；Runtime
+重启后仍能从系统凭据库刷新目录，网页撤销设备后刷新立即返回 401。测试连接、系统凭据和
+设备随后均已删除。该结果只证明技术链路，不替代上游授权、价格与内测预算记录。
+
+真实 Cloud 环境必须逐项通过：邀请注册和已有账号登录；2FA、Passkey、外部 OAuth 返回后
+继续同一授权；明确同意与拒绝；十分钟超时；错误 state；同一 code 重放；交换响应丢失后
+显示失败且不自动重试；浏览器 callback 成功但 Client 首次轮询响应丢失后可从 Runtime 终态
+恢复；Runtime 重启后凭据仍能刷新 `/v1/models`；网页撤销设备后旧 token 在当前请求、Redis
+缓存命中和缓存重建三条路径都返回 401；BYOK、导入导出、模型选择和显式
+`local:<connection>:<model>` 不回归。任何一项缺少真实平台证据都保持发布 Gate 关闭。
+
+支持排障只收集版本、平台、时间、`authorization_id`、Cloud `request_id`、设备记录编号和
+脱敏错误码。支持人员不得要求用户发送 token、code、verifier、系统凭据库导出、prompt、
+模型输出或本地文件。怀疑凭据泄露时先在 Cloud 设备页撤销，再确认旧 token 返回 401；若
+需要回滚，停止分发带官方入口的新包、把固定 origin 恢复为空值并重新构建，BYOK 数据与
+连接保持原样。
+
 ## 自动审批
 
 Client 新对话默认使用“自动审批”。Runtime 会先执行确定性安全规则，只把外部或未知灰区交给当前 Run 已冻结的具体模型；审查器没有工具，也不能授予插件 capability、扩大工作区或绕过沙箱。审查超时、供应商失败、无效 JSON 或不完整决定都会回退到人工审批，不会自动放行或切换模型。
@@ -187,6 +249,26 @@ make package-runtime
 
 构建结果位于 `runtime/dist/shejane-runtime/`。其中包含平台相关的原生依赖，不能用于其他操作系统或 CPU 架构。
 
+## 集中诊断
+
+集中诊断默认关闭，只能在已有的 SheJane 官方服务连接上由用户明确开启。开启时 Runtime
+用托管 inference Token 向固定 Cloud origin 换取独立的 `st-` 诊断凭据，并把它写入与模型
+凭据不同的系统 keyring service；SQLite、Client 状态和日志都不保存或返回原始凭据。关闭后先
+删除本地诊断凭据，再停止上报。
+
+首版只上报失败、取消和 cleanup-required 的终态；成功采样率默认是 0。Run 结果先提交到本地
+数据库，再启动一个无重试、两秒超时的后台上报。上报只含版本、平台、终态、时间、Token 数、
+工具名称和脱敏失败分类，不含 prompt、输出、工具参数/结果、文件名/路径、模型 ID 或任一凭据。
+Runtime 跟踪诊断凭据过期时间，过期时从固定官方连接续签，ingestion `401` 只立即续签重试一次；
+这不是离线重试队列。Cloud 和 LangSmith 不可用不得改变或延迟 Agent Run。
+
+Electron crash reporter 与 Agent 诊断完全分离。当前只在操作系统 crash 目录本地收集 dump，
+`uploadToServer=false`；Runtime native fault 写入同一私有目录，Launcher 和更新器只追加固定枚举
+的组件、错误分类、版本和时间，不记录错误文本、参数、环境变量或路径。打包 smoke 会让一个隔离
+的 Runtime 进程主动 native crash，验证真实 dump 已生成且不含环境 canary。所有远端 crash
+上报必须等 crash vendor、endpoint、隐私告知、采样和保留期确定后再接入，不能复用 `st-` 或
+LangSmith service key。
+
 ## 发布
 
 公开发布使用两个标签：
@@ -243,6 +325,8 @@ git diff --check
 - 仓库没有根 `.env.example`、模块 `package-lock.json` 或旧目录引用；
 - Client 源码只连接 Runtime；
 - Client 安装包包含由同一次提交构建的 Runtime。
+- 官方服务诊断默认关闭；开启/关闭不会影响 BYOK，Cloud 失败不会改变 Run 终态。
+- 打包版创建了本地 crash dump 目录，但在未配置独立 crash vendor 前不会上传。
 
 ## 安全边界
 

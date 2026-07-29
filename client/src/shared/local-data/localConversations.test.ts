@@ -39,15 +39,26 @@ describe('LocalConversationStore', () => {
     expect(await store.list()).toHaveLength(1)
     expect(await store.get('conv-1')).toMatchObject({ title: '客户跟进' })
 
-    const modelServices = [{
-      id: `conn_${'a'.repeat(32)}`,
-      preset_id: 'deepseek',
-      name: 'DeepSeek',
-      region: 'cn' as const,
-      adapter_id: 'openai_chat' as const,
-      base_url: 'https://api.deepseek.com/v1',
-      models: [],
-    }]
+    const modelServices = [
+      {
+        id: `conn_${'a'.repeat(32)}`,
+        preset_id: 'deepseek',
+        name: 'DeepSeek',
+        region: 'cn' as const,
+        adapter_id: 'openai_chat' as const,
+        base_url: 'https://api.deepseek.com/v1',
+        models: [],
+      },
+      {
+        id: `conn_${'b'.repeat(32)}`,
+        preset_id: 'shejane-official',
+        name: 'SheJane 官方服务（推荐）',
+        region: 'official' as const,
+        adapter_id: 'openai_chat' as const,
+        base_url: '',
+        models: [],
+      },
+    ]
     const exported = await store.exportAll(modelServices)
     expect(JSON.stringify(exported)).not.toContain('api_key')
     await store.delete('conv-1')

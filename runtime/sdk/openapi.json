@@ -203,6 +203,43 @@
         "title": "CancelRunResponse",
         "type": "object"
       },
+      "CentralDiagnosticsStatusResponse": {
+        "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "pattern": "^conn_[a-f0-9]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id"
+          },
+          "credential_configured": {
+            "title": "Credential Configured",
+            "type": "boolean"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "success_sample_rate": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Success Sample Rate",
+            "type": "number"
+          }
+        },
+        "required": [
+          "enabled",
+          "success_sample_rate",
+          "credential_configured"
+        ],
+        "title": "CentralDiagnosticsStatusResponse",
+        "type": "object"
+      },
       "ClearMemoryResponse": {
         "description": "DELETE /v1/memory — wipes the agent's long-term notes.\n\nReported back so the renderer can show \"cleared N memories\" toast\ninstead of a generic \"done\" message.",
         "properties": {
@@ -3573,7 +3610,8 @@
             "enum": [
               "cn",
               "intl",
-              "custom"
+              "custom",
+              "official"
             ],
             "title": "Region",
             "type": "string"
@@ -3725,6 +3763,14 @@
             ],
             "title": "Billing Url"
           },
+          "connection_method": {
+            "enum": [
+              "api_key",
+              "browser_authorization"
+            ],
+            "title": "Connection Method",
+            "type": "string"
+          },
           "description": {
             "title": "Description",
             "type": "string"
@@ -3749,6 +3795,7 @@
           "id",
           "name",
           "description",
+          "connection_method",
           "api_key_url",
           "billing_url",
           "regions"
@@ -5805,6 +5852,78 @@
         "title": "SetModelCapabilityBindingRequest",
         "type": "object"
       },
+      "SheJaneAuthorizationStartResponse": {
+        "properties": {
+          "authorization_id": {
+            "pattern": "^auth_[a-f0-9]{32}$",
+            "title": "Authorization Id",
+            "type": "string"
+          },
+          "authorization_url": {
+            "title": "Authorization Url",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorization_id",
+          "authorization_url",
+          "expires_at"
+        ],
+        "title": "SheJaneAuthorizationStartResponse",
+        "type": "object"
+      },
+      "SheJaneAuthorizationStatusResponse": {
+        "properties": {
+          "authorization_id": {
+            "pattern": "^auth_[a-f0-9]{32}$",
+            "title": "Authorization Id",
+            "type": "string"
+          },
+          "connection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelServiceConnection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "succeeded",
+              "denied",
+              "expired",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorization_id",
+          "status"
+        ],
+        "title": "SheJaneAuthorizationStatusResponse",
+        "type": "object"
+      },
       "SkillDeleteResponse": {
         "properties": {
           "deleted": {
@@ -6024,6 +6143,39 @@
           "resumed"
         ],
         "title": "ToolReconciliationResolution",
+        "type": "object"
+      },
+      "UpdateCentralDiagnosticsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "pattern": "^conn_[a-f0-9]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "success_sample_rate": {
+            "default": 0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Success Sample Rate",
+            "type": "number"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "UpdateCentralDiagnosticsRequest",
         "type": "object"
       },
       "UpdateLocalThreadRequest": {
@@ -6907,6 +7059,63 @@
           }
         },
         "summary": "List Model Services Presets"
+      }
+    },
+    "/v1/model-services/shejane/authorization": {
+      "post": {
+        "operationId": "start_shejane_authorization_v1_model_services_shejane_authorization_post",
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SheJaneAuthorizationStartResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Start Shejane Authorization"
+      }
+    },
+    "/v1/model-services/shejane/authorization/{authorization_id}": {
+      "get": {
+        "operationId": "get_shejane_authorization_v1_model_services_shejane_authorization__authorization_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "authorization_id",
+            "required": true,
+            "schema": {
+              "title": "Authorization Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SheJaneAuthorizationStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Shejane Authorization"
       }
     },
     "/v1/model-services/{connection_id}": {
@@ -8109,6 +8318,60 @@
           }
         },
         "summary": "Update Runtime Settings"
+      }
+    },
+    "/v1/shejane/diagnostics": {
+      "get": {
+        "operationId": "get_central_diagnostics_v1_shejane_diagnostics_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CentralDiagnosticsStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Central Diagnostics"
+      },
+      "put": {
+        "operationId": "update_central_diagnostics_v1_shejane_diagnostics_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCentralDiagnosticsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CentralDiagnosticsStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Central Diagnostics"
       }
     },
     "/v1/skills": {

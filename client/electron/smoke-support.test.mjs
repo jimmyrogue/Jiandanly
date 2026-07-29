@@ -31,6 +31,7 @@ describe('desktop smoke support', () => {
         token: 'secret-token',
         resourcesPath: '/tmp/resources',
         runtimePid: 456,
+        crashDirectory: '/tmp/crashes',
       }),
     ).toBe(true)
 
@@ -42,6 +43,7 @@ describe('desktop smoke support', () => {
       token: 'secret-token',
       resourcesPath: '/tmp/resources',
       runtimePid: 456,
+      crashDirectory: '/tmp/crashes',
     })
     expect(payload.writtenAt).toMatch(/^\d{4}-\d{2}-\d{2}T/)
   })

@@ -70,16 +70,15 @@ def test_build_callbacks_empty_when_disabled(monkeypatch: Any) -> None:
     assert build_callbacks() == []
 
 
-def test_build_callbacks_skips_langfuse_when_sdk_missing(monkeypatch: Any) -> None:
-    """If credentials are set but the langfuse SDK isn't installed, we should
-    log a warning but still return the runtime observer."""
+def test_build_callbacks_disables_inherited_external_tracing(monkeypatch: Any) -> None:
     monkeypatch.delenv("SHEJANE_DISABLE_OBSERVABILITY", raising=False)
-    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk_test")
-    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk_test")
+    monkeypatch.setenv("LANGSMITH_TRACING", "true")
+    monkeypatch.setenv("LANGSMITH_API_KEY", "must-not-be-used")
     callbacks = build_callbacks()
-    # Either 1 (no SDK) or 2 (SDK present). Both are acceptable.
-    assert len(callbacks) in (1, 2)
+    assert len(callbacks) == 1
     assert isinstance(callbacks[0], RuntimeObserver)
+    assert os.environ["LANGSMITH_TRACING"] == "false"
+    assert "LANGSMITH_API_KEY" not in os.environ
 
 
 # --- RuntimeObserver event capture ---
@@ -122,7 +121,6 @@ def test_observer_logs_tool_error_clears_timer() -> None:
 
     err_event = next(e for e in captured if e["event"] == "tool.error")
     assert err_event["error_type"] == "RuntimeError"
-    assert err_event["error_message"] == "file not found"
     # Subsequent end events should not show negative elapsed (timer was cleared)
     assert run_id not in obs._timers  # type: ignore[attr-defined]
 
@@ -158,20 +156,22 @@ def test_observer_logs_llm_lifecycle() -> None:
     assert end["elapsed_ms"] is not None
 
 
-def test_observer_truncates_long_payloads() -> None:
+def test_observer_never_logs_model_or_tool_content() -> None:
     obs = RuntimeObserver()
     run_id = uuid4()
-    long_input = "x" * 5000
+    secret = "private prompt, tool result, or credential"
 
     async def run() -> None:
-        await obs.on_tool_start({"name": "noisy"}, long_input, run_id=run_id)
+        await obs.on_tool_start({"name": "noisy"}, secret, run_id=run_id)
+        await obs.on_tool_end(secret, run_id=run_id)
+        await obs.on_tool_error(RuntimeError(secret), run_id=run_id)
+        await obs.on_agent_finish({"output": secret}, run_id=run_id)
 
     with capture_logs() as captured:
         asyncio.run(run())
 
-    start = next(e for e in captured if e["event"] == "tool.start")
-    assert len(start["input_preview"]) <= 200
-    assert start["input_preview"].endswith("…")
+    assert secret not in str(captured)
+    assert not any("input_preview" in event or "output_preview" in event for event in captured)
 
 
 def test_durable_trace_links_redacted_model_tool_checkpoint_and_terminal_spans() -> None:

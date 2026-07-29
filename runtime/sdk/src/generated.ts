@@ -233,6 +233,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/model-services/shejane/authorization": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Shejane Authorization */
+        post: operations["start_shejane_authorization_v1_model_services_shejane_authorization_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/model-services/shejane/authorization/{authorization_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Shejane Authorization */
+        get: operations["get_shejane_authorization_v1_model_services_shejane_authorization__authorization_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/model-services/{connection_id}": {
         parameters: {
             query?: never;
@@ -766,6 +800,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/shejane/diagnostics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Central Diagnostics */
+        get: operations["get_central_diagnostics_v1_shejane_diagnostics_get"];
+        /** Update Central Diagnostics */
+        put: operations["update_central_diagnostics_v1_shejane_diagnostics_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/skills": {
         parameters: {
             query?: never;
@@ -1088,6 +1140,17 @@ export interface components {
         CancelRunResponse: {
             /** Canceled */
             canceled: boolean;
+        };
+        /** CentralDiagnosticsStatusResponse */
+        CentralDiagnosticsStatusResponse: {
+            /** Connection Id */
+            connection_id?: string | null;
+            /** Credential Configured */
+            credential_configured: boolean;
+            /** Enabled */
+            enabled: boolean;
+            /** Success Sample Rate */
+            success_sample_rate: number;
         };
         /**
          * ClearMemoryResponse
@@ -2314,7 +2377,7 @@ export interface components {
              * Region
              * @enum {string}
              */
-            region: "cn" | "intl" | "custom";
+            region: "cn" | "intl" | "custom" | "official";
             /** Updated At */
             updated_at: string;
             /** Version */
@@ -2369,6 +2432,11 @@ export interface components {
             api_key_url: string | null;
             /** Billing Url */
             billing_url: string | null;
+            /**
+             * Connection Method
+             * @enum {string}
+             */
+            connection_method: "api_key" | "browser_authorization";
             /** Description */
             description: string;
             /** Id */
@@ -3225,6 +3293,31 @@ export interface components {
             /** Model Spec */
             model_spec: string;
         };
+        /** SheJaneAuthorizationStartResponse */
+        SheJaneAuthorizationStartResponse: {
+            /** Authorization Id */
+            authorization_id: string;
+            /** Authorization Url */
+            authorization_url: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+        };
+        /** SheJaneAuthorizationStatusResponse */
+        SheJaneAuthorizationStatusResponse: {
+            /** Authorization Id */
+            authorization_id: string;
+            connection?: components["schemas"]["ModelServiceConnection"] | null;
+            /** Error Code */
+            error_code?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "succeeded" | "denied" | "expired" | "failed";
+        };
         /** SkillDeleteResponse */
         SkillDeleteResponse: {
             /**
@@ -3331,6 +3424,18 @@ export interface components {
             resolved: true;
             /** Resumed */
             resumed: boolean;
+        };
+        /** UpdateCentralDiagnosticsRequest */
+        UpdateCentralDiagnosticsRequest: {
+            /** Connection Id */
+            connection_id?: string | null;
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Success Sample Rate
+             * @default 0
+             */
+            success_sample_rate: number;
         };
         /** UpdateLocalThreadRequest */
         UpdateLocalThreadRequest: {
@@ -3847,6 +3952,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ModelServicePresetCatalog"];
+                };
+            };
+        };
+    };
+    start_shejane_authorization_v1_model_services_shejane_authorization_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SheJaneAuthorizationStartResponse"];
+                };
+            };
+        };
+    };
+    get_shejane_authorization_v1_model_services_shejane_authorization__authorization_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                authorization_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SheJaneAuthorizationStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -4756,6 +4912,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RuntimeSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_central_diagnostics_v1_shejane_diagnostics_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CentralDiagnosticsStatusResponse"];
+                };
+            };
+        };
+    };
+    update_central_diagnostics_v1_shejane_diagnostics_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateCentralDiagnosticsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CentralDiagnosticsStatusResponse"];
                 };
             };
             /** @description Validation Error */

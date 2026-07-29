@@ -52,6 +52,55 @@ async def test_accepting_a_command_atomically_creates_one_pending_job(tmp_path: 
         await store.close()
 
 
+async def test_terminal_diagnostics_runs_after_commit_and_cannot_fail_the_run(
+    tmp_path: Path,
+) -> None:
+    store = await LocalStore.open(tmp_path / "local.db")
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def diagnostics(_run_id: str, _status: str, _payload: dict[str, Any]) -> None:
+        started.set()
+        await release.wait()
+        raise RuntimeError("diagnostics unavailable")
+
+    coordinator = RunCoordinator(
+        store=store,
+        checkpointer=None,  # type: ignore[arg-type]
+        terminal_callback=diagnostics,
+    )
+    try:
+        run = await _accepted_run(store, "cmd_diagnostics_post_commit")
+        job = await store.claim_run_job(worker_id=coordinator._worker_id)
+        assert job is not None
+        with store.bind_execution_lease(
+            job_id=str(job["id"]),
+            run_id=str(run["id"]),
+            lease_owner=coordinator._worker_id,
+            lease_generation=int(job["lease_generation"]),
+        ):
+            await coordinator._commit_run_result(
+                asyncio.Event(),
+                str(run["id"]),
+                "run.completed",
+                {"execution": {"attempt_id": "job-id:1"}},
+                status="completed",
+            )
+        await asyncio.wait_for(started.wait(), timeout=1)
+        committed = await store.get_run(str(run["id"]))
+        assert committed is not None
+        assert committed["status"] == "completed"
+        release.set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        persisted = await store.get_run(str(run["id"]))
+        assert persisted is not None
+        assert persisted["status"] == "completed"
+    finally:
+        release.set()
+        await store.close()
+
+
 async def test_pending_job_can_be_claimed_after_store_restart(tmp_path: Path) -> None:
     db_path = tmp_path / "local.db"
     store = await LocalStore.open(db_path)

@@ -32,6 +32,7 @@ function writeDesktopSmokeConfig({
   token,
   resourcesPath,
   runtimePid,
+  crashDirectory,
 } = {}) {
   if (!filePath) {
     return false
@@ -42,6 +43,7 @@ function writeDesktopSmokeConfig({
     token: String(token || ''),
     resourcesPath: String(resourcesPath || ''),
     runtimePid: Number(runtimePid || 0),
+    crashDirectory: String(crashDirectory || ''),
     writtenAt: new Date().toISOString(),
   }
   fs.mkdirSync(path.dirname(filePath), { recursive: true })

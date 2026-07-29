@@ -91,7 +91,7 @@ def _pack_ocr_builtin(destination: Path, digest: str) -> None:
     manifest = {
         "schema_version": 1,
         "id": "org.shejane.ocr",
-        "version": "0.1.0",
+        "version": "0.1.1",
         "name": "OCR",
         "description": "Extract text from images locally.",
         "license": "Apache-2.0",

@@ -35,6 +35,10 @@ export type RuntimeSettings = Schemas['RuntimeSettingsResponse']
 export type UpdateRuntimeSettingsRequest = Schemas['UpdateRuntimeSettingsRequest']
 export type ModelServicePreset = Schemas['ModelServicePreset']
 export type ModelServiceConnection = Schemas['ModelServiceConnection']
+export type SheJaneAuthorizationStart = Schemas['SheJaneAuthorizationStartResponse']
+export type SheJaneAuthorizationStatus = Schemas['SheJaneAuthorizationStatusResponse']
+export type CentralDiagnosticsStatus = Schemas['CentralDiagnosticsStatusResponse']
+export type UpdateCentralDiagnosticsRequest = Schemas['UpdateCentralDiagnosticsRequest']
 export type ModelServiceModel = Schemas['ModelServiceModel']
 export type ConnectModelServiceRequest = Schemas['ConnectModelServiceRequest']
 export type ReconnectModelServiceRequest = Schemas['ReconnectModelServiceRequest']
@@ -234,6 +238,56 @@ export async function listModelServices(
   })
   const body = await decodeLocalResponse<{ services?: ModelServiceConnection[] }>(response)
   return body.services ?? []
+}
+
+export async function startSheJaneAuthorization(
+  config: RuntimeClientConfig,
+  fetcher: Fetcher = fetch,
+): Promise<SheJaneAuthorizationStart> {
+  const response = await fetcher(
+    `${normalizeBaseURL(config.baseURL)}/v1/model-services/shejane/authorization`,
+    { method: 'POST', headers: localHeaders(config, false) },
+  )
+  return decodeLocalResponse<SheJaneAuthorizationStart>(response)
+}
+
+export async function getSheJaneAuthorization(
+  authorizationID: string,
+  config: RuntimeClientConfig,
+  fetcher: Fetcher = fetch,
+): Promise<SheJaneAuthorizationStatus> {
+  const response = await fetcher(
+    `${normalizeBaseURL(config.baseURL)}/v1/model-services/shejane/authorization/${encodeURIComponent(authorizationID)}`,
+    { headers: localHeaders(config, false) },
+  )
+  return decodeLocalResponse<SheJaneAuthorizationStatus>(response)
+}
+
+export async function getCentralDiagnostics(
+  config: RuntimeClientConfig,
+  fetcher: Fetcher = fetch,
+): Promise<CentralDiagnosticsStatus> {
+  const response = await fetcher(
+    `${normalizeBaseURL(config.baseURL)}/v1/shejane/diagnostics`,
+    { headers: localHeaders(config, false) },
+  )
+  return decodeLocalResponse<CentralDiagnosticsStatus>(response)
+}
+
+export async function updateCentralDiagnostics(
+  input: UpdateCentralDiagnosticsRequest,
+  config: RuntimeClientConfig,
+  fetcher: Fetcher = fetch,
+): Promise<CentralDiagnosticsStatus> {
+  const response = await fetcher(
+    `${normalizeBaseURL(config.baseURL)}/v1/shejane/diagnostics`,
+    {
+      method: 'PUT',
+      headers: localHeaders(config, true),
+      body: JSON.stringify(input),
+    },
+  )
+  return decodeLocalResponse<CentralDiagnosticsStatus>(response)
 }
 
 export async function listModelCapabilityBindings(
@@ -1976,6 +2030,24 @@ export class SheJaneRuntimeClient {
 
   listModelServices(): Promise<ModelServiceConnection[]> {
     return listModelServices(this.config, this.fetcher)
+  }
+
+  startSheJaneAuthorization(): Promise<SheJaneAuthorizationStart> {
+    return startSheJaneAuthorization(this.config, this.fetcher)
+  }
+
+  getSheJaneAuthorization(authorizationID: string): Promise<SheJaneAuthorizationStatus> {
+    return getSheJaneAuthorization(authorizationID, this.config, this.fetcher)
+  }
+
+  getCentralDiagnostics(): Promise<CentralDiagnosticsStatus> {
+    return getCentralDiagnostics(this.config, this.fetcher)
+  }
+
+  updateCentralDiagnostics(
+    input: UpdateCentralDiagnosticsRequest,
+  ): Promise<CentralDiagnosticsStatus> {
+    return updateCentralDiagnostics(input, this.config, this.fetcher)
   }
 
   listModelCapabilityBindings(): Promise<ModelCapabilityBinding[]> {

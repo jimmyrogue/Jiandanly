@@ -64,11 +64,12 @@ Client 只展示连接流程和 Runtime 返回的状态，不复制厂商规则�
 
 ```text
 id                    Runtime 生成的稳定 ID
-preset_id             deepseek | kimi | qwen | glm | minimax | siliconflow | custom
+preset_id             shejane-official | deepseek | kimi | qwen | glm | minimax | siliconflow | custom
 name                  用户可识别名称
-region                cn | intl | custom
+region                cn | intl | custom | official
 adapter_id            openai_chat | anthropic_messages
 base_url              Runtime 保存；官方 preset 固定，自定义服务才由用户输入
+connection_method     api_key | browser_authorization；Runtime preset 决定
 credential_ref        只保存在 Runtime；引用操作系统凭据库
 credential_configured 只返回布尔值
 catalog_status        ready | stale | unavailable
@@ -116,6 +117,8 @@ max_output_tokens
 GET    /v1/model-services/presets
 GET    /v1/model-services
 POST   /v1/model-services
+POST   /v1/model-services/shejane/authorization
+GET    /v1/model-services/shejane/authorization/{authorization_id}
 POST   /v1/model-services/import
 PUT    /v1/model-services/{connection_id}/credential
 DELETE /v1/model-services/{connection_id}
@@ -137,7 +140,26 @@ GET    /v1/models
 
 ## 连接流程
 
-### 官方服务
+### SheJane 官方服务
+
+1. Runtime 在 `127.0.0.1` 动态端口监听固定路径 `/shejane/auth/callback`，生成一次性
+   `state` 和 PKCE S256 verifier/challenge。
+2. Client 只接收 Runtime 返回的授权 URL，并通过 Electron 打开系统浏览器；Client
+   不生成安全参数，也不能提交或覆盖 Cloud 地址。
+3. Runtime 严格校验 callback、一次性消费 `state`，再用 `code`、原 redirect URI 和
+   verifier 向固定 Cloud origin 交换 inference token。
+4. inference token 只写入操作系统凭据库。SQLite 和 Client 只得到普通
+   `ModelServiceConnection` 与 `credential_configured`。
+5. Runtime 从同一固定 origin 拉取 `/v1/models`，对首个候选运行现有两轮 Agent 工具
+   回环验证；其余模型仍由用户按现有流程选择和验证。
+6. 拒绝、超时、state 不匹配、交换失败和响应丢失均为终态；不回退到 BYOK Key，也不
+   接受浏览器返回的服务地址。
+
+SheJane 官方服务不能通过普通 `/v1/model-services` API Key 接口创建、导入或替换凭据。
+导出文件保留它的非秘密连接元数据，但导入时跳过该连接并要求重新完成浏览器授权。本地
+删除连接只删除本机凭据；Cloud 设备撤销由 Cloud 设备页完成。
+
+### 厂商官方服务（BYOK）
 
 1. Client 显示厂商说明和“获取 API Key”官方链接。
 2. 系统浏览器完成注册、登录、实名认证、充值和创建 Key。

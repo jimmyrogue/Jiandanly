@@ -5,16 +5,20 @@ import {
   deliverPendingRuntimeCommands,
   fetchRunInput,
   getLocalArtifactContent,
+  getCentralDiagnostics,
   importModelService,
   parseAgentSSEBuffer,
   parseRuntimeModelSpec,
   RuntimeHTTPError,
   SheJaneRuntimeClient,
+  getSheJaneAuthorization,
   listModelServicePresets,
   listModelCapabilityBindings,
   reconnectModelService,
+  startSheJaneAuthorization,
   streamLocalRun,
   updateRuntimeSettings,
+  updateCentralDiagnostics,
   verifyModelServiceModel,
 } from './index'
 
@@ -343,6 +347,87 @@ describe('SheJaneRuntimeClient', () => {
         body: JSON.stringify({ api_key: 'new-secret' }),
       }),
     )
+  })
+
+  it('starts and polls native authorization without sending Cloud configuration', async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        authorization_id: `auth_${'a'.repeat(32)}`,
+        authorization_url: 'https://cloud.example.test/shejane/authorize?...',
+        expires_at: '2026-07-29T00:00:00Z',
+      }), { status: 201, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        authorization_id: `auth_${'a'.repeat(32)}`,
+        status: 'pending',
+        connection: null,
+        error_code: null,
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    const config = { baseURL: 'http://127.0.0.1:17371', token: 'runtime-token' }
+
+    await startSheJaneAuthorization(config, fetcher)
+    await getSheJaneAuthorization(`auth_${'a'.repeat(32)}`, config, fetcher)
+
+    expect(fetcher).toHaveBeenNthCalledWith(
+      1,
+      'http://127.0.0.1:17371/v1/model-services/shejane/authorization',
+      {
+        method: 'POST',
+        headers: { Authorization: 'Bearer runtime-token' },
+      },
+    )
+    expect(fetcher).toHaveBeenNthCalledWith(
+      2,
+      `http://127.0.0.1:17371/v1/model-services/shejane/authorization/auth_${'a'.repeat(32)}`,
+      {
+        headers: { Authorization: 'Bearer runtime-token' },
+      },
+    )
+  })
+
+  it('reads and updates diagnostics consent without exposing a diagnostics token', async () => {
+    const status = {
+      enabled: false,
+      connection_id: null,
+      success_sample_rate: 0,
+      credential_configured: false,
+    }
+    const enabled = {
+      ...status,
+      enabled: true,
+      connection_id: `conn_${'a'.repeat(32)}`,
+      credential_configured: true,
+    }
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(status), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(enabled), { status: 200 }))
+    const config = { baseURL: 'http://127.0.0.1:17371', token: 'runtime-token' }
+
+    await getCentralDiagnostics(config, fetcher)
+    const updated = await updateCentralDiagnostics({
+      enabled: true,
+      connection_id: enabled.connection_id,
+      success_sample_rate: 0,
+    }, config, fetcher)
+
+    expect(updated).toEqual(enabled)
+    expect(fetcher).toHaveBeenNthCalledWith(
+      1,
+      'http://127.0.0.1:17371/v1/shejane/diagnostics',
+      { headers: { Authorization: 'Bearer runtime-token' } },
+    )
+    expect(fetcher).toHaveBeenNthCalledWith(
+      2,
+      'http://127.0.0.1:17371/v1/shejane/diagnostics',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({
+          enabled: true,
+          connection_id: enabled.connection_id,
+          success_sample_rate: 0,
+        }),
+      }),
+    )
+    expect(JSON.stringify(updated)).not.toContain('st-')
   })
 
   it('imports model-service metadata without an API key', async () => {

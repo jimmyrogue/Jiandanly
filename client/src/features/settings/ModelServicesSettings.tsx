@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import {
   IconArrowLeft,
   IconCheck,
@@ -16,6 +16,8 @@ import {
   addModelServiceModel,
   connectModelService,
   deleteModelService,
+  getCentralDiagnostics,
+  getSheJaneAuthorization,
   listModelCapabilityBindings,
   listModelServicePresets,
   listModelServices,
@@ -23,7 +25,10 @@ import {
   refreshModelService,
   RuntimeHTTPError,
   setModelCapabilityBinding,
+  startSheJaneAuthorization,
+  updateCentralDiagnostics,
   verifyModelServiceModel,
+  type CentralDiagnosticsStatus,
   type ModelCapabilityBinding,
   type ModelServiceConnection,
   type ModelServicePreset,
@@ -47,6 +52,7 @@ import {
   FieldLabel,
 } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
+import { Switch } from '@/components/ui/switch'
 import {
   Select,
   SelectContent,
@@ -106,6 +112,7 @@ export function ModelServicesSettings({
   const [presets, setPresets] = useState<ModelServicePreset[]>([])
   const [services, setServices] = useState<ModelServiceConnection[]>([])
   const [bindings, setBindings] = useState<ModelCapabilityBinding[]>([])
+  const [diagnostics, setDiagnostics] = useState<CentralDiagnosticsStatus>()
   const [adding, setAdding] = useState(false)
   const [selected, setSelected] = useState<ModelServicePreset>()
   const [reconnecting, setReconnecting] = useState<ModelServiceConnection>()
@@ -125,6 +132,7 @@ export function ModelServicesSettings({
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [fieldErrors, setFieldErrors] = useState<ConnectionFieldErrors>({})
+  const authorizationRun = useRef(0)
   const defaultBaseURL = reconnecting?.base_url
     ?? selected?.regions.find((item) => item.id === region)?.base_url
     ?? selected?.regions.find((item) => item.default)?.base_url
@@ -136,6 +144,7 @@ export function ModelServicesSettings({
       setPresets([])
       setServices([])
       setBindings([])
+      setDiagnostics(undefined)
       return []
     }
     const [nextPresets, nextServices, nextBindings] = await Promise.all([
@@ -146,12 +155,21 @@ export function ModelServicesSettings({
     setPresets(nextPresets)
     setServices(nextServices)
     setBindings(nextBindings)
+    try {
+      setDiagnostics(await getCentralDiagnostics(config))
+    } catch {
+      setDiagnostics(undefined)
+    }
     return nextServices
   }, [config])
 
   useEffect(() => {
     void load().catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))
   }, [load])
+
+  useEffect(() => () => {
+    authorizationRun.current += 1
+  }, [])
 
   const openAddDialog = () => {
     setAdding(true)
@@ -171,6 +189,50 @@ export function ModelServicesSettings({
     onOpenAdd?.()
   }, [config, onOpenAdd, openAdd])
 
+  const authorizeOfficial = async () => {
+    if (!config) return
+    const run = ++authorizationRun.current
+    setBusy('authorize')
+    setError('')
+    try {
+      const started = await startSheJaneAuthorization(config)
+      if (run !== authorizationRun.current) return
+      if (!window.shejaneClient?.openExternal) {
+        throw new Error(t('settings.modelServices.authorization.browserUnavailable'))
+      }
+      setBusy('authorize:pending')
+      await window.shejaneClient.openExternal(started.authorization_url)
+      while (run === authorizationRun.current) {
+        const status = await getSheJaneAuthorization(started.authorization_id, config)
+        if (status.status === 'pending') {
+          await new Promise((resolve) => globalThis.setTimeout(resolve, 750))
+          continue
+        }
+        if (status.status !== 'succeeded' || !status.connection) {
+          const key = status.status === 'denied'
+            ? 'settings.modelServices.authorization.denied'
+            : status.status === 'expired'
+              ? 'settings.modelServices.authorization.expired'
+              : 'settings.modelServices.authorization.failed'
+          throw new Error(t(key))
+        }
+        setBusy('authorize:syncing')
+        await load()
+        if (run !== authorizationRun.current) return
+        setAdding(false)
+        setSelected(undefined)
+        onChanged?.()
+        return
+      }
+    } catch (reason) {
+      if (run === authorizationRun.current) {
+        setError(reason instanceof Error ? reason.message : String(reason))
+      }
+    } finally {
+      if (run === authorizationRun.current) setBusy('')
+    }
+  }
+
   const openPreset = (preset: ModelServicePreset) => {
     const defaultRegion = preset.regions.find((item) => item.default) ?? preset.regions[0]
     setReconnecting(undefined)
@@ -183,6 +245,9 @@ export function ModelServicesSettings({
     setShowAdvanced(false)
     setError('')
     setFieldErrors({})
+    if (preset.connection_method === 'browser_authorization') {
+      void authorizeOfficial()
+    }
   }
 
   const openReconnect = (service: ModelServiceConnection) => {
@@ -194,6 +259,23 @@ export function ModelServicesSettings({
     setShowAdvanced(false)
     setError('')
     setFieldErrors({})
+  }
+
+  const toggleDiagnostics = async (service: ModelServiceConnection, enabled: boolean) => {
+    if (!config) return
+    setBusy(`diagnostics:${service.id}`)
+    setError('')
+    try {
+      setDiagnostics(await updateCentralDiagnostics({
+        enabled,
+        connection_id: enabled ? service.id : null,
+        success_sample_rate: enabled ? diagnostics?.success_sample_rate ?? 0 : 0,
+      }, config))
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setBusy('')
+    }
   }
 
   const connect = async (event: FormEvent) => {
@@ -402,6 +484,8 @@ export function ModelServicesSettings({
   const customPreset = presets.find((preset) => preset.id === 'custom')
 
   const backToPicker = () => {
+    authorizationRun.current += 1
+    setBusy('')
     setSelected(undefined)
     setAPIKey('')
     setBaseURL('')
@@ -471,7 +555,9 @@ export function ModelServicesSettings({
               ? t('settings.modelServices.international')
               : service.region === 'cn'
                 ? t('settings.modelServices.china')
-                : t('settings.modelServices.custom')
+                : service.region === 'official'
+                  ? t('settings.modelServices.official')
+                  : t('settings.modelServices.custom')
             const statusLabel = service.catalog_status === 'ready'
               ? t('settings.modelServices.status.ready')
               : service.catalog_status === 'stale'
@@ -485,6 +571,24 @@ export function ModelServicesSettings({
                     {enabledModels.map((model) => model.display_name).join('、')
                       || t('settings.modelServices.noModels')}
                   </span>
+                  {service.preset_id === 'shejane-official' && (
+                    <div className="mt-2 flex flex-col gap-1">
+                      <div className="flex items-center gap-2 text-sm font-medium">
+                        <Switch
+                          aria-label={t('settings.modelServices.diagnostics.label')}
+                          checked={diagnostics?.enabled === true
+                            && diagnostics.credential_configured
+                            && diagnostics.connection_id === service.id}
+                          disabled={busy === `diagnostics:${service.id}`}
+                          onCheckedChange={(checked) => void toggleDiagnostics(service, checked)}
+                        />
+                        <span>{t('settings.modelServices.diagnostics.label')}</span>
+                      </div>
+                      <small className="text-muted-foreground">
+                        {t('settings.modelServices.diagnostics.hint')}
+                      </small>
+                    </div>
+                  )}
                 </div>
                 <span className={`settings-model-service-state${service.credential_configured ? '' : ' missing'}`}>
                   {!service.credential_configured
@@ -492,14 +596,16 @@ export function ModelServicesSettings({
                     : `${regionLabel} · ${statusLabel}`}
                 </span>
                 <div className="settings-model-service-actions">
-                  <button
-                    type="button"
-                    className="settings-model-service-models"
-                    disabled={busy === service.id}
-                    onClick={() => openModelPicker(service)}
-                  >
-                    {t('settings.modelServices.manageModels')}
-                  </button>
+                  {service.preset_id !== 'shejane-official' && (
+                    <button
+                      type="button"
+                      className="settings-model-service-models"
+                      disabled={busy === service.id}
+                      onClick={() => openModelPicker(service)}
+                    >
+                      {t('settings.modelServices.manageModels')}
+                    </button>
+                  )}
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <button
@@ -520,10 +626,12 @@ export function ModelServicesSettings({
                           {t('settings.modelServices.openConsole', { name: service.name })}
                         </DropdownMenuItem>
                       )}
-                      <DropdownMenuItem onSelect={() => openReconnect(service)}>
-                        <IconKey size={15} aria-hidden="true" />
-                        {t('settings.modelServices.updateApiKeyAria', { name: service.name })}
-                      </DropdownMenuItem>
+                      {preset?.connection_method !== 'browser_authorization' && (
+                        <DropdownMenuItem onSelect={() => openReconnect(service)}>
+                          <IconKey size={15} aria-hidden="true" />
+                          {t('settings.modelServices.updateApiKeyAria', { name: service.name })}
+                        </DropdownMenuItem>
+                      )}
                       <DropdownMenuItem onSelect={() => void refresh(service)}>
                         <IconRefresh size={15} aria-hidden="true" />
                         {t('settings.modelServices.refresh')}
@@ -616,7 +724,36 @@ export function ModelServicesSettings({
               )}
             </div>
           )}
-          {(selected || reconnecting) && (
+          {selected?.connection_method === 'browser_authorization' && (
+            <div className="settings-model-service-form">
+              <p
+                className="flex items-center justify-center gap-2 text-center text-sm text-muted-foreground"
+                role="status"
+                aria-busy={busy.startsWith('authorize')}
+              >
+                {busy.startsWith('authorize') && (
+                  <IconLoader2 className="animate-spin" size={16} aria-hidden="true" />
+                )}
+                {busy === 'authorize:syncing'
+                  ? t('settings.modelServices.authorization.syncing')
+                  : busy.startsWith('authorize')
+                    ? t('settings.modelServices.authorization.pending')
+                    : t('settings.modelServices.authorization.ready')}
+              </p>
+              {error && <div className="settings-model-service-error" role="alert">{error}</div>}
+              {!busy && (
+                <Button
+                  type="button"
+                  size="lg"
+                  className="h-11 w-full"
+                  onClick={() => void authorizeOfficial()}
+                >
+                  {t('settings.modelServices.authorization.retry')}
+                </Button>
+              )}
+            </div>
+          )}
+          {(reconnecting || (selected && selected.connection_method !== 'browser_authorization')) && (
             <form
               className="settings-model-service-form"
               noValidate

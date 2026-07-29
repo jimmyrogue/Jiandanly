@@ -21,6 +21,7 @@ import tempfile
 import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -48,6 +49,7 @@ from .api_schemas import (
     CancelRunCommand,
     CancelRunCommandReceipt,
     CancelRunResponse,
+    CentralDiagnosticsStatusResponse,
     ClearMemoryResponse,
     ConnectModelServiceRequest,
     CreateRunRequest,
@@ -119,6 +121,8 @@ from .api_schemas import (
     RuntimeInfo,
     RuntimeSettingsResponse,
     SetModelCapabilityBindingRequest,
+    SheJaneAuthorizationStartResponse,
+    SheJaneAuthorizationStatusResponse,
     SkillDeleteResponse,
     SkillFile,
     SkillWriteRequest,
@@ -126,11 +130,17 @@ from .api_schemas import (
     ToolReconcileCommand,
     ToolReconcileCommandReceipt,
     ToolReconciliationResolution,
+    UpdateCentralDiagnosticsRequest,
     UpdateLocalThreadRequest,
     UpdateRuntimeSettingsRequest,
     VerifyModelServiceModelRequest,
 )
 from .auth import LOCAL_OWNER_PRINCIPAL_ID, PairingTokenAuthMiddleware
+from .central_diagnostics import (
+    CentralDiagnosticsConfigurationError,
+    CentralDiagnosticsManager,
+    CentralDiagnosticsUnavailable,
+)
 from .config import Settings, get_settings
 from .diagnostics_trace import build_run_trace
 from .failure_policy import classify_failure_payload
@@ -176,6 +186,11 @@ from .runs import (
     sanitize_run_metadata,
 )
 from .scheduler import ScheduledRunDispatcher
+from .shejane_authorization import (
+    OFFICIAL_CLOUD_ORIGIN,
+    OfficialServiceUnavailable,
+    SheJaneAuthorizationManager,
+)
 from .store.sqlite import (
     ArtifactConflictError,
     CommandConflictError,
@@ -966,11 +981,14 @@ async def _verify_bundled_model_catalog(
     adapter_id: str,
     api_key: str,
     models: list[dict[str, Any]],
+    include_discovered: bool = False,
 ) -> list[dict[str, Any]]:
     verified_models: list[dict[str, Any]] = []
     for raw_model in models:
         model = {**raw_model, "verification": "unverified"}
-        if model.get("source") == "bundled":
+        if model.get("source") == "bundled" or (
+            include_discovered and model.get("source") == "discovered"
+        ):
             model["capabilities"] = normalized_model_capabilities(
                 model,
                 adapter_id=adapter_id,
@@ -998,6 +1016,60 @@ async def _verify_bundled_model_catalog(
                 model.update({"verification": "verified", "tool_calling": True, "streaming": True})
         verified_models.append(model)
     return verified_models
+
+
+async def _complete_shejane_authorization(
+    app: FastAPI,
+    principal_id: str,
+    token: str,
+) -> dict[str, Any]:
+    preset = model_service_preset("shejane-official")
+    assert preset is not None
+    official_api_base_url = openai_compatible_endpoint(OFFICIAL_CLOUD_ORIGIN, "").rstrip("/")
+    connection_id = f"conn_{uuid.uuid4().hex}"
+    next_credential_ref = credential_ref(connection_id)
+    try:
+        await set_model_api_key(
+            principal_id,
+            connection_id,
+            token,
+            next_credential_ref,
+        )
+    except CredentialStoreError as exc:
+        raise RuntimeError("system credential store is unavailable") from exc
+
+    try:
+        models, catalog_status = await _refresh_model_service_models(
+            preset=preset,
+            base_url=official_api_base_url,
+            adapter_id="openai_chat",
+            api_key=token,
+        )
+        models = await _verify_bundled_model_catalog(
+            settings=app.state.settings,
+            base_url=official_api_base_url,
+            adapter_id="openai_chat",
+            api_key=token,
+            models=models,
+            include_discovered=True,
+        )
+        row = await app.state.store.create_model_connection(
+            principal_id=principal_id,
+            connection_id=connection_id,
+            preset_id="shejane-official",
+            name=str(preset["name"]),
+            region="official",
+            adapter_id="openai_chat",
+            base_url=official_api_base_url,
+            requires_api_key=True,
+            credential_ref=next_credential_ref,
+            models=models,
+            catalog_status=catalog_status,
+        )
+    except BaseException:
+        await delete_model_api_key(principal_id, connection_id, next_credential_ref)
+        raise
+    return (await _model_service_response(row, credential_configured=True)).model_dump()
 
 
 class _RequestBodyTooLarge(Exception):
@@ -1432,11 +1504,21 @@ async def lifespan(app: FastAPI):
         settings = _apply_runtime_settings(settings, persisted_settings["settings"])
     checkpointer, ck_stack = await open_checkpointer(settings)
     agent_store, store_stack = await open_store(settings)
+    central_diagnostics = CentralDiagnosticsManager(
+        store=store,
+        cloud_origin=OFFICIAL_CLOUD_ORIGIN,
+        app_version=__version__,
+    )
     coordinator = RunCoordinator(
         store=store,
         checkpointer=checkpointer,
         agent_store=agent_store,
         settings=settings,
+        terminal_callback=lambda run_id, status, payload: central_diagnostics.submit_terminal(
+            run_id=run_id,
+            status=status,
+            payload=payload,
+        ),
     )
     await coordinator.mcp_catalog.hydrate()
     coordinator.mcp_catalog.request_refresh()
@@ -1460,6 +1542,12 @@ async def lifespan(app: FastAPI):
     app.state.coordinator = coordinator
     app.state.mcp_catalog = coordinator.mcp_catalog
     app.state.scheduler = scheduler
+    app.state.shejane_authorization = SheJaneAuthorizationManager(
+        cloud_origin=OFFICIAL_CLOUD_ORIGIN,
+        app_version=__version__,
+        complete=partial(_complete_shejane_authorization, app),
+    )
+    app.state.central_diagnostics = central_diagnostics
     app.state.runtime_settings_lock = asyncio.Lock()
     app.state.runtime_settings_version = int(
         persisted_settings["version"] if persisted_settings is not None else 0
@@ -1481,6 +1569,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        await app.state.shejane_authorization.close()
         await scheduler.stop()
         await coordinator.stop()
         await coordinator.mcp_catalog.close()
@@ -1629,11 +1718,79 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return _runtime_settings_payload(updated, version=int(stored["version"]))
 
     @app.get(
+        "/v1/shejane/diagnostics",
+        response_model=CentralDiagnosticsStatusResponse,
+    )
+    async def get_central_diagnostics(request: Request) -> dict[str, Any]:
+        try:
+            return await app.state.central_diagnostics.status(request.state.principal_id)
+        except CredentialStoreError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.put(
+        "/v1/shejane/diagnostics",
+        response_model=CentralDiagnosticsStatusResponse,
+    )
+    async def update_central_diagnostics(
+        request: Request,
+        body: UpdateCentralDiagnosticsRequest,
+    ) -> dict[str, Any]:
+        try:
+            return await app.state.central_diagnostics.configure(
+                principal_id=request.state.principal_id,
+                enabled=body.enabled,
+                connection_id=body.connection_id,
+                success_sample_rate=body.success_sample_rate,
+            )
+        except CentralDiagnosticsConfigurationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (CentralDiagnosticsUnavailable, CredentialStoreError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.get(
         "/v1/model-services/presets",
         response_model=ModelServicePresetCatalog,
     )
     async def list_model_services_presets() -> dict[str, Any]:
         return {"services": list_model_service_presets()}
+
+    @app.post(
+        "/v1/model-services/shejane/authorization",
+        response_model=SheJaneAuthorizationStartResponse,
+        status_code=201,
+    )
+    async def start_shejane_authorization(request: Request) -> dict[str, Any]:
+        if await request.body():
+            raise HTTPException(
+                status_code=400,
+                detail="authorization start does not accept configuration",
+            )
+        try:
+            return await app.state.shejane_authorization.start(request.state.principal_id)
+        except OfficialServiceUnavailable as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "official_service_unconfigured",
+                    "message": "SheJane 官方服务尚未配置。",
+                },
+            ) from exc
+
+    @app.get(
+        "/v1/model-services/shejane/authorization/{authorization_id}",
+        response_model=SheJaneAuthorizationStatusResponse,
+    )
+    async def get_shejane_authorization(
+        request: Request,
+        authorization_id: str,
+    ) -> dict[str, Any]:
+        try:
+            return app.state.shejane_authorization.status(
+                authorization_id,
+                request.state.principal_id,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="authorization not found") from exc
 
     @app.get(
         "/v1/model-services",
@@ -1748,6 +1905,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         preset = model_service_preset(body.preset_id)
         if preset is None:
             raise HTTPException(status_code=400, detail="model service is not supported")
+        if preset["connection_method"] == "browser_authorization":
+            raise HTTPException(
+                status_code=400,
+                detail="model service requires browser authorization",
+            )
         api_key = body.api_key.strip()
         if not api_key:
             raise HTTPException(status_code=400, detail="API key is required")
@@ -1902,6 +2064,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         preset = model_service_preset(body.preset_id)
         if preset is None:
             raise HTTPException(status_code=400, detail="model service is not supported")
+        if preset["connection_method"] == "browser_authorization":
+            raise HTTPException(
+                status_code=400,
+                detail="official service must be authorized again after import",
+            )
         if body.preset_id == "custom":
             raise HTTPException(
                 status_code=400,
@@ -1953,6 +2120,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         if row is None:
             raise HTTPException(status_code=404, detail="model service not found")
+        if row["preset_id"] == "shejane-official":
+            raise HTTPException(
+                status_code=400,
+                detail="managed official credentials cannot be replaced",
+            )
         api_key = body.api_key.strip()
         if not api_key:
             raise HTTPException(status_code=400, detail="API key is required")
@@ -2070,6 +2242,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             adapter_id=str(row["adapter_id"]),
             api_key=api_key,
         )
+        if row["preset_id"] == "shejane-official":
+            models = await _verify_bundled_model_catalog(
+                settings=app.state.settings,
+                base_url=str(row["base_url"]),
+                adapter_id=str(row["adapter_id"]),
+                api_key=api_key,
+                models=models,
+                include_discovered=True,
+            )
         async with app.state.coordinator.model_connection_catalog_update(
             principal_id=principal_id,
             connection_id=connection_id,

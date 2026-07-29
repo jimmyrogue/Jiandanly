@@ -37,6 +37,7 @@ Conventions:
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -203,6 +204,7 @@ class ModelServicePreset(BaseModel):
     id: str
     name: str
     description: str
+    connection_method: Literal["api_key", "browser_authorization"]
     api_key_url: str | None
     billing_url: str | None
     regions: list[ModelServiceRegion]
@@ -227,7 +229,7 @@ class ModelServiceConnection(BaseModel):
     id: str
     preset_id: str
     name: str
-    region: Literal["cn", "intl", "custom"]
+    region: Literal["cn", "intl", "custom", "official"]
     adapter_id: ModelAdapterID
     base_url: str
     credential_configured: bool
@@ -240,6 +242,37 @@ class ModelServiceConnection(BaseModel):
 
 class ListModelServiceConnectionsResponse(BaseModel):
     services: list[ModelServiceConnection]
+
+
+class SheJaneAuthorizationStartResponse(BaseModel):
+    authorization_id: str = Field(pattern=r"^auth_[a-f0-9]{32}$")
+    authorization_url: str
+    expires_at: datetime
+
+
+class SheJaneAuthorizationStatusResponse(BaseModel):
+    authorization_id: str = Field(pattern=r"^auth_[a-f0-9]{32}$")
+    status: Literal["pending", "succeeded", "denied", "expired", "failed"]
+    connection: ModelServiceConnection | None = None
+    error_code: str | None = None
+
+
+class CentralDiagnosticsStatusResponse(BaseModel):
+    enabled: bool
+    connection_id: str | None = Field(default=None, pattern=r"^conn_[a-f0-9]{32}$")
+    success_sample_rate: float = Field(ge=0, le=1)
+    credential_configured: bool
+
+
+class UpdateCentralDiagnosticsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    connection_id: str | None = Field(
+        default=None,
+        pattern=r"^conn_[a-f0-9]{32}$",
+    )
+    success_sample_rate: float = Field(default=0, ge=0, le=1)
 
 
 class ConnectModelServiceRequest(BaseModel):

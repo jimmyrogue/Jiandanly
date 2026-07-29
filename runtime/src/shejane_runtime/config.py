@@ -78,7 +78,7 @@ def default_ocr_package() -> Path | None:
     frozen_root = getattr(sys, "_MEIPASS", None)
     if not frozen_root:
         return None
-    package = Path(frozen_root) / "builtin-plugins" / f"ocr-0.1.0-{target}.shejane-plugin"
+    package = Path(frozen_root) / "builtin-plugins" / f"ocr-0.1.1-{target}.shejane-plugin"
     return package if package.is_file() else None
 
 

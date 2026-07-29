@@ -98,7 +98,7 @@ def invocation(source: Path) -> dict[str, object]:
         "operation_id": "run_01:ocr.recognize_images:real-asset",
         "action": {
             "plugin_id": "org.shejane.ocr",
-            "plugin_version": "0.1.0",
+            "plugin_version": "0.1.1",
             "plugin_digest": "sha256:" + "b" * 64,
             "action_id": "ocr.recognize_images",
         },

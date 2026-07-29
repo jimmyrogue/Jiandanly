@@ -27,7 +27,7 @@ import mimetypes
 import re
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -547,6 +547,7 @@ class RunCoordinator:
         settings: Settings | None = None,
         mcp_catalog: MCPToolCatalog | None = None,
         plugin_catalog: PluginCatalog | None = None,
+        terminal_callback: Callable[[str, str, dict[str, Any]], Awaitable[None]] | None = None,
     ) -> None:
         self.store = store
         self.checkpointer = checkpointer
@@ -554,6 +555,7 @@ class RunCoordinator:
         self.settings = settings or get_settings()
         self.mcp_catalog = mcp_catalog or MCPToolCatalog(self.settings.data_dir, store=store)
         self.plugin_catalog = plugin_catalog or PluginCatalog(self.settings.data_dir)
+        self._terminal_callback = terminal_callback
         self._tasks: dict[str, asyncio.Task[Any]] = {}
         self._wakeups: dict[str, asyncio.Event] = {}
         self._live_subscribers: dict[str, set[asyncio.Queue[dict[str, Any]]]] = {}
@@ -3131,10 +3133,30 @@ class RunCoordinator:
         if not created:
             return
         wakeup.set()
+        if self._terminal_callback is not None and status in {
+            "completed",
+            "failed",
+            "canceled",
+            "cleanup_required",
+        }:
+            task = asyncio.create_task(
+                self._terminal_callback(run_id, status, payload),
+                name=f"central-diagnostics:{run_id}",
+            )
+            task.add_done_callback(self._terminal_callback_finished)
         if status in {"waiting_permission", "waiting_input"}:
             resume_payload = await self.store.latest_resolved_wait_cycle_payload(run_id)
             if resume_payload is not None:
                 await self.resume_run(run_id=run_id, decision=resume_payload)
+
+    @staticmethod
+    def _terminal_callback_finished(task: asyncio.Task[None]) -> None:
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            log.warning("central diagnostics upload failed: %s", type(exc).__name__)
 
     @staticmethod
     def _stored_event_envelope(event: dict[str, Any]) -> dict[str, Any]:
