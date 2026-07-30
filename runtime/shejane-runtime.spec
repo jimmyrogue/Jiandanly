@@ -108,7 +108,7 @@ if sys.platform == "darwin" and platform.machine().lower() in {"arm64", "aarch64
         raise SystemExit("Browser QA fixed Runtime Asset must be built before PyInstaller")
     datas.append((str(browser_qa_runtime_asset), "builtin-assets"))
     ocr_package = Path(
-        "plugins/ocr/dist/ocr-0.1.0-darwin-arm64.shejane-plugin"
+        "plugins/ocr/dist/ocr-0.1.1-darwin-arm64.shejane-plugin"
     )
     if not ocr_package.is_file():
         raise SystemExit("OCR fixed capability package must be built before PyInstaller")
@@ -133,7 +133,7 @@ elif sys.platform == "win32" and platform.machine().lower() in {"amd64", "x86_64
         raise SystemExit("Windows Browser QA fixed Runtime Asset must be built before PyInstaller")
     datas.append((str(browser_qa_runtime_asset), "builtin-assets"))
     ocr_package = Path(
-        "plugins/ocr/dist/ocr-0.1.0-windows-amd64.shejane-plugin"
+        "plugins/ocr/dist/ocr-0.1.1-windows-amd64.shejane-plugin"
     )
     if not ocr_package.is_file():
         raise SystemExit("Windows OCR fixed capability package must be built before PyInstaller")
