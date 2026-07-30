@@ -5,6 +5,7 @@ import {
   IconChevronRight,
   IconDots,
   IconExternalLink,
+  IconInfoCircle,
   IconKey,
   IconLoader2,
   IconPlus,
@@ -125,6 +126,7 @@ export function ModelServicesSettings({
   const [manualModels, setManualModels] = useState<Record<string, string>>({})
   const [modelCapabilities, setModelCapabilities] = useState<Record<string, ModelCapabilityName>>({})
   const [modelProtocols, setModelProtocols] = useState<Record<string, ModelProtocol>>({})
+  const [viewingService, setViewingService] = useState<ModelServiceConnection>()
   const [managingService, setManagingService] = useState<ModelServiceConnection>()
   const [modelSearch, setModelSearch] = useState('')
   const [selectedModels, setSelectedModels] = useState<Record<string, boolean>>({})
@@ -532,6 +534,10 @@ export function ModelServicesSettings({
     return capability === 'image_generation' || capability === 'image_editing'
   }) ?? false
   const modelPickerBusy = Boolean(managingService && busy === `verify:${managingService.id}`)
+  const viewingModels = viewingService?.models.filter((model) => (
+    model.verification === 'verified'
+    || (model.capabilities ?? []).some((item) => item.verification === 'verified')
+  )) ?? []
 
   return (
     <section id="settings-models" className="settings-section">
@@ -563,10 +569,6 @@ export function ModelServicesSettings({
           {services.map((service) => {
             const preset = presets.find((item) => item.id === service.preset_id)
             const refreshing = busy === `refresh:${service.id}`
-            const enabledModels = service.models.filter((model) => (
-              model.verification === 'verified'
-              || (model.capabilities ?? []).some((item) => item.verification === 'verified')
-            ))
             const regionLabel = service.region === 'intl'
               ? t('settings.modelServices.international')
               : service.region === 'cn'
@@ -583,10 +585,15 @@ export function ModelServicesSettings({
               <div className="settings-model-service" key={service.id}>
                 <div className="settings-model-service-main">
                   <strong>{service.name}</strong>
-                  <span>
-                    {enabledModels.map((model) => model.display_name).join('、')
-                      || t('settings.modelServices.noModels')}
-                  </span>
+                  <button
+                    type="button"
+                    className="settings-model-service-info"
+                    aria-label={t('settings.modelServices.viewModels', { name: service.name })}
+                    title={t('settings.modelServices.viewModels', { name: service.name })}
+                    onClick={() => setViewingService(service)}
+                  >
+                    <IconInfoCircle size={15} aria-hidden="true" />
+                  </button>
                 </div>
                 <span
                   className={`settings-model-service-state${service.credential_configured ? '' : ' missing'}${refreshing ? ' refreshing' : ''}`}
@@ -917,6 +924,38 @@ export function ModelServicesSettings({
                     : 'settings.modelServices.connect')}
               </Button>
             </form>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(viewingService)}
+        onOpenChange={(open) => {
+          if (!open) setViewingService(undefined)
+        }}
+      >
+        <DialogContent className="settings-model-list-dialog sm:max-w-[420px]">
+          {viewingService && (
+            <>
+              <DialogHeader>
+                <DialogTitle>{viewingService.name}</DialogTitle>
+                <DialogDescription>
+                  {t('settings.modelServices.modelCount', { count: viewingModels.length })}
+                </DialogDescription>
+              </DialogHeader>
+              <div className="settings-model-list" role="list">
+                {viewingModels.length === 0 ? (
+                  <div className="settings-model-list-empty">
+                    {t('settings.modelServices.noModels')}
+                  </div>
+                ) : viewingModels.map((model) => (
+                  <div className="settings-model-list-row" role="listitem" key={model.model_id}>
+                    <strong>{model.display_name}</strong>
+                    {model.model_id !== model.display_name && <small>{model.model_id}</small>}
+                  </div>
+                ))}
+              </div>
+            </>
           )}
         </DialogContent>
       </Dialog>

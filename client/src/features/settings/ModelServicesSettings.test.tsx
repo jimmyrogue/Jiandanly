@@ -189,7 +189,15 @@ describe('ModelServicesSettings', () => {
       connection_id: connection.id,
       success_sample_rate: 0,
     }, config)
-    expect(await screen.findByText('official-flash、official-pro')).toBeInTheDocument()
+    const modelInfo = await screen.findByRole('button', {
+      name: '查看 SheJane 官方服务（推荐） 的模型',
+    })
+    expect(screen.queryByText('official-flash')).not.toBeInTheDocument()
+    fireEvent.click(modelInfo)
+    expect(await screen.findByText('official-flash')).toBeInTheDocument()
+    expect(screen.getByText('official-pro')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     expect(screen.getByRole('switch', { name: '共享运行诊断' })).toBeChecked()
     expect(screen.queryByRole('heading', { name: '选择要使用的模型' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '选择模型' })).not.toBeInTheDocument()
@@ -220,6 +228,9 @@ describe('ModelServicesSettings', () => {
       </I18nProvider>,
     )
 
+    fireEvent.click(await screen.findByRole('button', {
+      name: '查看 SheJane 官方服务（推荐） 的模型',
+    }))
     expect(await screen.findByText('gpt-image-2')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '选择模型' })).not.toBeInTheDocument()
     expect(api.verifyModelServiceModel).not.toHaveBeenCalled()
@@ -582,7 +593,13 @@ describe('ModelServicesSettings', () => {
       </I18nProvider>,
     )
 
-    expect(await screen.findByText('DeepSeek V4 Flash、DeepSeek V4 Pro')).toBeInTheDocument()
+    const modelInfo = await screen.findByRole('button', { name: '查看 DeepSeek 的模型' })
+    expect(screen.queryByText('DeepSeek V4 Flash')).not.toBeInTheDocument()
+    fireEvent.click(modelInfo)
+    expect(await screen.findByText('DeepSeek V4 Flash')).toBeInTheDocument()
+    expect(screen.getByText('DeepSeek V4 Pro')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     expect(screen.getByText('中国站 · 可用')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '选择模型' })).toBeInTheDocument()
     const actions = container.querySelector('.settings-model-service-actions')
@@ -759,8 +776,11 @@ describe('ModelServicesSettings', () => {
       </I18nProvider>,
     )
 
+    fireEvent.click(await screen.findByRole('button', { name: '查看 兔子 的模型' }))
     expect(await screen.findByText('尚未启用模型')).toBeInTheDocument()
     expect(screen.queryByText('gpt-image-2')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     fireEvent.click(screen.getByRole('button', { name: '选择模型' }))
     fireEvent.click(screen.getByRole('checkbox', { name: '选择 gpt-image-2' }))
     fireEvent.click(screen.getByRole('combobox', { name: 'gpt-image-2 用途' }))
