@@ -1698,7 +1698,10 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: github.ref_type == 'tag'
+    if: >-
+      always() &&
+      github.ref_type == 'tag' &&
+      needs.build.result == 'success'
     needs: build
     runs-on: ubuntu-latest
     steps:
