@@ -107,7 +107,7 @@ describe('ModelServicesSettings', () => {
     api.setModelCapabilityBinding.mockResolvedValue({})
   })
 
-  it('opens the system browser and enables every official-service model without a picker', async () => {
+  it('opens the system browser and uses official-service model capabilities automatically', async () => {
     const connection = {
       ...tuziConnection,
       id: `conn_${'a'.repeat(32)}`,
@@ -142,6 +142,25 @@ describe('ModelServicesSettings', () => {
       connection,
       error_code: null,
     })
+    api.updateCentralDiagnostics.mockResolvedValue({
+      enabled: true,
+      connection_id: connection.id,
+      success_sample_rate: 0,
+      credential_configured: true,
+    })
+    api.getCentralDiagnostics
+      .mockResolvedValueOnce({
+        enabled: false,
+        connection_id: null,
+        success_sample_rate: 0,
+        credential_configured: false,
+      })
+      .mockResolvedValue({
+        enabled: true,
+        connection_id: connection.id,
+        success_sample_rate: 0,
+        credential_configured: true,
+      })
     const openExternal = vi.fn().mockResolvedValue(undefined)
     Object.defineProperty(window, 'shejaneClient', {
       configurable: true,
@@ -165,13 +184,48 @@ describe('ModelServicesSettings', () => {
       `auth_${'b'.repeat(32)}`,
       config,
     ))
+    expect(api.updateCentralDiagnostics).toHaveBeenCalledWith({
+      enabled: true,
+      connection_id: connection.id,
+      success_sample_rate: 0,
+    }, config)
     expect(await screen.findByText('official-flash、official-pro')).toBeInTheDocument()
+    expect(screen.getByRole('switch', { name: '共享运行诊断' })).toBeChecked()
     expect(screen.queryByRole('heading', { name: '选择要使用的模型' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '选择模型' })).not.toBeInTheDocument()
     expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument()
   })
 
-  it('keeps visible progress from browser authorization through model sync', async () => {
+  it('shows an official model declared purpose without manual testing', async () => {
+    api.listModelServices.mockResolvedValue([{
+      ...tuziConnection,
+      preset_id: 'shejane-official',
+      name: 'SheJane 官方服务（推荐）',
+      region: 'official',
+      base_url: 'https://cloud.example.test',
+      models: [{
+        ...tuziConnection.models[1],
+        capabilities: [{
+          capability: 'image_generation',
+          protocol: 'openai_images_generations',
+          verification: 'verified',
+        }],
+        recommended: true,
+      }],
+    }])
+
+    render(
+      <I18nProvider>
+        <ModelServicesSettings config={config} />
+      </I18nProvider>,
+    )
+
+    expect(await screen.findByText('gpt-image-2')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '选择模型' })).not.toBeInTheDocument()
+    expect(api.verifyModelServiceModel).not.toHaveBeenCalled()
+  })
+
+  it('keeps visible progress and preserves the connection if default diagnostics fail', async () => {
     const connection = {
       ...tuziConnection,
       id: `conn_${'a'.repeat(32)}`,
@@ -204,6 +258,7 @@ describe('ModelServicesSettings', () => {
         error_code: null,
       })
     }))
+    api.updateCentralDiagnostics.mockRejectedValue(new Error('diagnostics unavailable'))
     Object.defineProperty(window, 'shejaneClient', {
       configurable: true,
       value: { openExternal: vi.fn().mockResolvedValue(undefined) },
@@ -228,6 +283,7 @@ describe('ModelServicesSettings', () => {
     finishReload()
     expect(await screen.findByText('官方服务 · 可用')).toBeInTheDocument()
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(screen.getByRole('alert')).toHaveTextContent('官方服务已连接，但运行诊断未能自动开启，你可以稍后重试。')
   })
 
   it.each([
@@ -291,7 +347,7 @@ describe('ModelServicesSettings', () => {
     expect(await screen.findByRole('menuitem', { name: '刷新模型' })).toBeInTheDocument()
   })
 
-  it('requires explicit consent before enabling metadata-only central diagnostics', async () => {
+  it('lets users re-enable metadata-only diagnostics after opting out', async () => {
     const connectionID = `conn_${'a'.repeat(32)}`
     api.listModelServicePresets.mockResolvedValue([shejaneOfficial])
     api.listModelServices.mockResolvedValue([{
@@ -317,7 +373,8 @@ describe('ModelServicesSettings', () => {
 
     const consent = await screen.findByRole('switch', { name: '共享运行诊断' })
     expect(consent).not.toBeChecked()
-    expect(screen.getByText('仅上传失败状态、耗时、Token 数和工具名称；不上传提示词、输出或本地文件内容。')).toBeInTheDocument()
+    expect(consent).toHaveAccessibleDescription('默认开启，可随时关闭。仅上传失败状态、耗时、Token 数和工具名称；不上传提示词、输出或本地文件内容。')
+    expect(screen.getByText('默认开启，可随时关闭。仅上传失败状态、耗时、Token 数和工具名称；不上传提示词、输出或本地文件内容。')).toBeInTheDocument()
     expect(api.updateCentralDiagnostics).not.toHaveBeenCalled()
 
     fireEvent.click(consent)
@@ -536,6 +593,34 @@ describe('ModelServicesSettings', () => {
     fireEvent.keyDown(actionsTrigger, { key: 'Enter', code: 'Enter' })
     expect(await screen.findByRole('menuitem', { name: '打开 DeepSeek 控制台' })).toBeInTheDocument()
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('shows persistent progress on the service card while models refresh', async () => {
+    let finishRefresh!: () => void
+    api.listModelServices.mockResolvedValue([tuziConnection])
+    api.refreshModelService.mockImplementation(() => new Promise((resolve) => {
+      finishRefresh = () => resolve(tuziConnection)
+    }))
+
+    const { container } = render(
+      <I18nProvider>
+        <ModelServicesSettings config={config} />
+      </I18nProvider>,
+    )
+
+    const actionsTrigger = await screen.findByRole('button', { name: '兔子 更多操作' })
+    actionsTrigger.focus()
+    fireEvent.keyDown(actionsTrigger, { key: 'Enter', code: 'Enter' })
+    fireEvent.click(await screen.findByRole('menuitem', { name: '刷新模型' }))
+
+    expect(screen.queryByRole('menuitem', { name: '刷新模型' })).not.toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('正在刷新模型…')
+    expect(actionsTrigger).toHaveAttribute('aria-busy', 'true')
+    expect(container.querySelectorAll('.settings-model-service .animate-spin')).toHaveLength(1)
+
+    finishRefresh()
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument())
+    expect(screen.getByText('已有服务 · 可用')).toBeInTheDocument()
   })
 
   it('reconnects an existing service by replacing only its API key', async () => {

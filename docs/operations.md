@@ -67,6 +67,8 @@ Runtime 不在 Client 启动时访问外部服务。新增或更新官方连接�
 
 Client 的“生图”入口发送结构化的 `required_tools: ["image.generate"]`，不再向用户文本拼接隐藏提示词。Runtime 在 Run 接纳时冻结默认图片模型的连接版本、模型 ID、协议和绑定修订；Agent 通过 `image.generate` 或 `image.edit` 调用该模型，结果下载并校验后保存为 Runtime Artifact，对话只接收 Artifact 元数据并通过鉴权接口显示图片，不在事件或模型上下文中传递 Base64。`image.generate` 可把当前 Run 的一个 `/attachments/...` 图片作为参考图，经同一图片生成绑定调用 OpenAI-compatible `/images/edits`；`image.edit` 也接受当前 Run 附件或既有图片 Artifact。两者只解析 Runtime 已冻结的附件快照，不接受任意本地路径。模型服务或绑定在执行前发生变化时，旧 Run 会安全失效，不会静默切换到另一个模型。
 
+输入区的模型菜单同时显示当前对话模型和已验证的图片生成模型。切换图片模型会更新 Runtime 保存的 `image_generation` 默认绑定。SheJane 官方服务直接采用固定 Cloud origin 声明的模型用途；BYOK 和自定义服务的新增候选模型仍须先在“模型服务”中完成一次对应能力的真实接口验证。
+
 图片供应商非 2xx 响应会保留脱敏后的稳定错误类别和 `request_id`：401/402/403/429、400、5xx 与 NewAPI/Tuzi 的 `get_channel_failed` 不再统一显示为“未知失败”。排查 Tuzi 问题时，应把界面或诊断事件中的 `request_id`、发生时间、接口和脱敏请求体一起提交给供应商。
 
 任务使用明确的 `local:<连接编号>:<模型编号>`。Runtime 不自动选择模型，也不会在连接之间静默切换。API Key 失效时，可在原连接上更新，不需要删除连接。
@@ -78,6 +80,10 @@ SheJane 官方服务是可选的 `browser_authorization` preset；BYOK 和无 Cl
 callback、交换一次性 code，并把 inference token 写入操作系统凭据库。Client 只打开
 Runtime 返回的系统浏览器 URL 并轮询本地状态，不能提供 Cloud origin、redirect URI、
 client ID 或 PKCE 参数。
+
+新授权的官方服务会默认开启脱敏运行诊断，用户可在模型服务卡片中随时关闭。自动开启失败
+不影响模型连接；Client 会保留连接并提示用户稍后重试。诊断只上传失败状态、耗时、Token
+数和工具名称，不上传 prompt、输出或本地文件内容；BYOK 连接不会自动开启诊断。
 
 正式 Cloud origin 只有一个源码常量：
 `runtime/src/shejane_runtime/shejane_authorization.py` 中的

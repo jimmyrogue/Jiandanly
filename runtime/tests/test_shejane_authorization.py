@@ -167,23 +167,49 @@ def test_runtime_authorization_persists_only_the_official_connection(
         "delete_password",
         lambda _service, account: credential_vault.pop(account, None),
     )
+    catalog_requests = 0
 
     async def cloud(request: httpx.Request) -> httpx.Response:
+        nonlocal catalog_requests
         if request.url.path == "/api/shejane/token":
             return httpx.Response(
                 200,
                 json={"access_token": "inference-secret", "token_type": "Bearer"},
             )
         assert request.url.path == "/v1/models"
+        catalog_requests += 1
         assert list(credential_vault.values()) == ["inference-secret"]
         assert request.headers["authorization"] == "Bearer inference-secret"
+        image_models = (
+            [
+                {
+                    "id": "gpt-image-2",
+                    "capabilities": ["image_generation"],
+                    "recommended_for": ["image_generation"],
+                },
+                {
+                    "id": "gpt-image-2-vip",
+                    "capabilities": ["image_generation"],
+                    "recommended_for": ["image_generation"],
+                },
+            ]
+            if catalog_requests == 1
+            else [
+                {
+                    "id": "future-image-model",
+                    "capabilities": ["image_generation"],
+                    "recommended_for": ["image_generation"],
+                }
+            ]
+        )
         return httpx.Response(
             200,
             json={
                 "data": [
                     {"id": "official-flash", "name": "Official Flash"},
                     {"id": "official-pro", "name": "Official Pro"},
-                ]
+                    *image_models,
+                ],
             },
         )
 
@@ -276,10 +302,14 @@ def test_runtime_authorization_persists_only_the_official_connection(
         "official-flash",
         "official-pro",
     ]
-    assert [model["verification"] for model in payload["connection"]["models"]] == [
-        "verified",
-        "verified",
-    ]
+    assert {
+        model["model_id"]: model["verification"] for model in payload["connection"]["models"]
+    } == {
+        "official-flash": "verified",
+        "official-pro": "verified",
+        "gpt-image-2": "verified",
+        "gpt-image-2-vip": "verified",
+    }
     assert repeated.json() == payload
     assert services.json()["services"] == [payload["connection"]]
     assert list(credential_vault.values()) == ["inference-secret"]
@@ -287,6 +317,13 @@ def test_runtime_authorization_persists_only_the_official_connection(
     assert imported.status_code == 400
     assert restarted_services.json()["services"] == [payload["connection"]]
     assert restarted_refresh.status_code == 200
+    assert {
+        model["model_id"]: model["verification"] for model in restarted_refresh.json()["models"]
+    } == {
+        "official-flash": "verified",
+        "official-pro": "verified",
+        "future-image-model": "verified",
+    }
     assert "inference-secret" not in repr(payload)
     assert "inference-secret" not in settings.runtime_db_path.read_bytes().decode(errors="ignore")
     with sqlite3.connect(settings.runtime_db_path) as database:

@@ -62,6 +62,10 @@ def test_model_service_presets_prioritize_china_and_expose_editable_addresses() 
     for preset in presets[1:-1]:
         assert "adapter_id" not in preset
 
+    official_runtime_preset = model_service_preset("shejane-official")
+    assert official_runtime_preset is not None
+    assert official_runtime_preset["models"] == ()
+
 
 def test_native_overseas_adapters_have_explicit_default_protocols() -> None:
     assert default_model_protocol("openai_chat", "agent_chat") == "openai_chat_completions"
@@ -109,6 +113,66 @@ async def test_google_catalog_discovery_uses_native_models_endpoint(monkeypatch)
     assert models[0]["display_name"] == "Gemini Test"
     assert models[0]["max_input_tokens"] == 1_000_000
     assert models[0]["max_output_tokens"] == 65_536
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("preset_id", "trust_declarations"),
+    [("shejane-official", True), ("custom", False)],
+)
+async def test_model_catalog_purposes_are_trusted_only_for_official_service(
+    monkeypatch,
+    preset_id: str,
+    trust_declarations: bool,
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://cloud.example.test/v1/models"
+        assert request.headers["Authorization"] == "Bearer inference-token"
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "id": model_id,
+                        "capabilities": ["image_generation"],
+                        "recommended_for": ["image_generation"],
+                    }
+                    for model_id in ("gpt-image-2", "gpt-image-2-vip")
+                ]
+            },
+        )
+
+    class PatchedClient(httpx.AsyncClient):
+        def __init__(self, **kwargs) -> None:
+            super().__init__(transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(server_module.httpx, "AsyncClient", PatchedClient)
+    preset = model_service_preset(preset_id)
+    assert preset is not None
+    preset["models"] = ()
+
+    models, status = await server_module._refresh_model_service_models(
+        preset=preset,
+        base_url="https://cloud.example.test",
+        adapter_id="openai_chat",
+        api_key="inference-token",
+    )
+
+    assert status == "ready"
+    assert [model["model_id"] for model in models] == ["gpt-image-2", "gpt-image-2-vip"]
+    for model in models:
+        assert model["capabilities"] == (
+            [
+                {
+                    "capability": "image_generation",
+                    "protocol": "openai_images_generations",
+                    "verification": "verified",
+                }
+            ]
+            if trust_declarations
+            else []
+        )
+        assert model["recommended"] is trust_declarations
 
 
 @pytest.mark.asyncio
@@ -313,12 +377,25 @@ async def test_bundled_models_are_verified_individually(monkeypatch) -> None:
             },
             {"model_id": "model-b", "source": "bundled", "verification": "unverified"},
             {"model_id": "model-c", "source": "discovered", "verification": "unverified"},
+            {
+                "model_id": "image-model",
+                "source": "bundled",
+                "verification": "unverified",
+                "capabilities": [
+                    {
+                        "capability": "image_generation",
+                        "protocol": "openai_images_generations",
+                        "verification": "unverified",
+                    }
+                ],
+            },
         ],
     )
 
     assert attempted == ["model-a", "model-b"]
     assert [model["verification"] for model in models] == [
         "verified",
+        "unverified",
         "unverified",
         "unverified",
     ]
@@ -329,6 +406,7 @@ async def test_bundled_models_are_verified_individually(monkeypatch) -> None:
             "verification": "verified",
         }
     ]
+    assert models[3]["capabilities"][0]["capability"] == "image_generation"
 
 
 def test_catalog_refresh_preserves_manual_and_verified_models() -> None:

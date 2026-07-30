@@ -150,8 +150,9 @@ GET    /v1/models
    verifier 向固定 Cloud origin 交换 inference token。
 4. inference token 只写入操作系统凭据库。SQLite 和 Client 只得到普通
    `ModelServiceConnection` 与 `credential_configured`。
-5. Runtime 从同一固定 origin 拉取 `/v1/models`，对首个候选运行现有两轮 Agent 工具
-   回环验证；其余模型仍由用户按现有流程选择和验证。
+5. Runtime 从同一固定 origin 拉取 `/v1/models`，信任 Cloud 返回的 `capabilities` 和
+   `recommended_for`，自动按用途归类和推荐模型；这些声明只对固定官方 origin 生效，
+   BYOK 或自定义服务不能借此绕过现有验证。
 6. 拒绝、超时、state 不匹配、交换失败和响应丢失均为终态；不回退到 BYOK Key，也不
    接受浏览器返回的服务地址。
 

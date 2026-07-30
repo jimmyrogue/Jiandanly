@@ -34,6 +34,9 @@ export function ModeSelector({
   mode,
   models,
   onChange,
+  imageMode,
+  imageModels = [],
+  onImageModeChange,
   onConfigureModels,
   onRefreshCurrent,
   disabled = false,
@@ -41,6 +44,9 @@ export function ModeSelector({
   mode: ChatMode
   models: ModelOption[]
   onChange: (next: ChatMode) => void
+  imageMode?: ChatMode
+  imageModels?: ModelOption[]
+  onImageModeChange?: (next: ChatMode) => void
   onConfigureModels?: () => void
   onRefreshCurrent?: () => void
   disabled?: boolean
@@ -50,6 +56,7 @@ export function ModeSelector({
   const confirmedServiceChange = useRef(false)
   const selectedModel = models.find((model) => model.id === mode)
   const groupedModels = useMemo(() => groupModelsByVendor(models), [models])
+  const groupedImageModels = useMemo(() => groupModelsByVendor(imageModels), [imageModels])
   const recommendedGroups = groupedModels
     .filter((group) => group.models.some((model) => model.recommended))
     .map((group) => ({
@@ -100,20 +107,22 @@ export function ModeSelector({
     )
   }
 
-  const renderModel = (model: ModelOption) => {
-    const active = model.id === mode
+  const renderModel = (
+    model: ModelOption,
+    active: boolean,
+    select: (model: ModelOption) => void,
+    hint: string,
+  ) => {
     return (
       <DropdownMenuItem
         key={model.id}
         className={`composer-mode-item composer-mode-model-item${active ? ' is-active' : ''}`}
-        onSelect={() => selectModel(model)}
+        onSelect={() => select(model)}
       >
         <span className="composer-mode-item-text">
-          <span className="composer-mode-model-label-row">
-            <span className="composer-mode-item-label">{model.label}</span>
-          </span>
+          <span className="composer-mode-item-label">{model.label}</span>
           <span className="composer-mode-item-hint">
-            {model.imageInputs ? t('composer.mode.supportsImages') : t('composer.mode.textOnly')}
+            {hint}
           </span>
         </span>
         <span className="composer-mode-item-side">
@@ -127,8 +136,11 @@ export function ModeSelector({
     )
   }
 
-  const renderGroup = (group: (typeof groupedModels)[number]) => (
-    <div key={`${group.models[0]?.recommended ? 'recommended' : 'more'}:${group.vendor}`}>
+  const renderGroup = (
+    group: (typeof groupedModels)[number],
+    kind: 'chat' | 'image',
+  ) => (
+    <div key={`${kind}:${group.vendor}`}>
       <div className="composer-mode-group-heading">
         <span className="composer-mode-group-line" />
         <span className="composer-mode-group-label">
@@ -151,7 +163,14 @@ export function ModeSelector({
         </span>
         <span className="composer-mode-group-line" />
       </div>
-      {group.models.map(renderModel)}
+      {group.models.map((model) => renderModel(
+        model,
+        kind === 'chat' ? model.id === mode : model.id === imageMode,
+        kind === 'chat' ? selectModel : (item) => onImageModeChange?.(item.id),
+        kind === 'chat'
+          ? model.imageInputs ? t('composer.mode.supportsImages') : t('composer.mode.textOnly')
+          : t('composer.mode.imageGeneration'),
+      ))}
     </div>
   )
 
@@ -172,8 +191,16 @@ export function ModeSelector({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" alignOffset={4} sideOffset={8} className="composer-mode-menu">
         <div className="composer-mode-model-list">
-          {recommendedGroups.map(renderGroup)}
-          {moreGroups.map(renderGroup)}
+          <div className="composer-mode-section-label">{t('composer.mode.chatModels')}</div>
+          {recommendedGroups.map((group) => renderGroup(group, 'chat'))}
+          {moreGroups.map((group) => renderGroup(group, 'chat'))}
+          {groupedImageModels.length > 0 ? (
+            <>
+              <div className="composer-mode-separator" />
+              <div className="composer-mode-section-label">{t('composer.mode.imageModels')}</div>
+              {groupedImageModels.map((group) => renderGroup(group, 'image'))}
+            </>
+          ) : null}
         </div>
       </DropdownMenuContent>
     </DropdownMenu>

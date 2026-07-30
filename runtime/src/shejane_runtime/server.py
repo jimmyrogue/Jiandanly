@@ -507,6 +507,30 @@ async def _refresh_model_service_models(
                 {**known, "source": "bundled"},
                 adapter_id=adapter_id,
             )
+        if preset.get("id") == "shejane-official":
+            declared_capabilities = candidate.get("capabilities")
+            if isinstance(declared_capabilities, list):
+                profile["capabilities"] = normalized_model_capabilities(
+                    {
+                        "capabilities": [
+                            {
+                                "capability": capability,
+                                "protocol": default_model_protocol(adapter_id, capability),
+                                "verification": "verified",
+                            }
+                            for capability in declared_capabilities
+                            if isinstance(capability, str) and capability in MODEL_CAPABILITY_ORDER
+                        ]
+                    },
+                    adapter_id=adapter_id,
+                )
+            recommended_for = candidate.get("recommended_for")
+            if isinstance(recommended_for, list):
+                profile["recommended"] = any(
+                    isinstance(capability, str)
+                    and model_capability(profile, capability) is not None
+                    for capability in recommended_for
+                )
         models.append(profile)
         if len(models) >= 1000:
             break
@@ -993,6 +1017,9 @@ async def _verify_bundled_model_catalog(
                 model,
                 adapter_id=adapter_id,
             )
+            if model["capabilities"] and model_capability(model, "agent_chat") is None:
+                verified_models.append(model)
+                continue
             try:
                 await _verify_model_service_compatibility(
                     settings=settings,
@@ -2263,7 +2290,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(status_code=404, detail="model service not found")
             cached = _model_connection_models(current)
             models = (
-                _merge_refreshed_model_catalog(cached, models)
+                models
+                if catalog_status == "ready" and row["preset_id"] == "shejane-official"
+                else _merge_refreshed_model_catalog(cached, models)
                 if catalog_status == "ready"
                 else cached or models
             )

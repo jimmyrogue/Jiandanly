@@ -89,6 +89,7 @@ import {
   listLocalThreads,
   listLocalThreadChanges,
   listLocalRuntimeModels,
+  listModelCapabilityBindings,
   listModelServices,
   listLocalSchedules,
   listMcpServers,
@@ -102,6 +103,7 @@ import {
   resolveLocalPermissionCommand,
   reconcileLocalToolCommand,
   refreshModelService,
+  setModelCapabilityBinding,
   streamLocalRun,
   updateLocalSkill,
   updateLocalThread,
@@ -421,6 +423,8 @@ function useAppContentViewModel() {
   // Runtime model catalog feeding the composer picker.
   const [models, setModels] = useState<ModelOption[]>([])
   const modelsRef = useRef<ModelOption[]>([])
+  const [imageMode, setImageMode] = useState<ChatMode>()
+  const [imageModels, setImageModels] = useState<ModelOption[]>([])
   const [modelCatalogVersion, setModelCatalogVersion] = useState(0)
   const [runtime, setRuntime] = useState<RuntimeProbe | null>(null)
   const [runtimeConnection, setRuntimeConnection] = useState<RuntimeConnection | null>(null)
@@ -597,35 +601,101 @@ function useAppContentViewModel() {
     if (!runtimeConnection) {
       modelsRef.current = []
       setModels([])
+      setImageMode(undefined)
+      setImageModels([])
       return
     }
     let cancelled = false
-    void listLocalRuntimeModels(runtimeConnection).then((localCatalog) => {
+    void listLocalRuntimeModels(runtimeConnection).then(async (localCatalog) => {
+      if (cancelled) return
+      const catalog: ModelOption[] = localCatalog.flatMap((model) => {
+        const spec = parseRuntimeModelSpec(model.spec)
+        if (!model.available || !spec) return []
+        return [{
+          id: spec,
+          label: model.display_name,
+          imageInputs: Boolean(model.image_inputs),
+          description: t('settings.modelServices.localDescription'),
+          vendor: model.service_name,
+          vendor_info: t('settings.modelServices.localVendorInfo'),
+          recommended: model.recommended,
+        }]
+      })
+      const savedMode = readChatMode()
+      const defaultMode = chooseAvailableMode(catalog, savedMode)
+      modelsRef.current = catalog
+      setModels(catalog)
+      if (defaultMode && defaultMode !== savedMode) writeChatMode(defaultMode)
+      setMode((current) => chooseAvailableMode(catalog, current, defaultMode))
+
+      try {
+        const [capabilityBindings, modelServices] = await Promise.all([
+          listModelCapabilityBindings(runtimeConnection),
+          listModelServices(runtimeConnection),
+        ])
         if (cancelled) return
-        const catalog: ModelOption[] = localCatalog.flatMap((model) => {
+        const configuredConnections = new Set(
+          modelServices.filter((service) => service.credential_configured).map((service) => service.id),
+        )
+        const imageCatalog: ModelOption[] = localCatalog.flatMap((model) => {
           const spec = parseRuntimeModelSpec(model.spec)
-          if (!model.available || !spec) return []
+          const imageCapability = model.capabilities.find(
+            (capability) => capability.capability === 'image_generation'
+              && capability.verification === 'verified',
+          )
+          if (!spec || !imageCapability || !configuredConnections.has(model.connection_id)) return []
           return [{
             id: spec,
             label: model.display_name,
-            imageInputs: Boolean(model.image_inputs),
-            description: t('settings.modelServices.localDescription'),
+            imageInputs: false,
+            description: t('composer.mode.imageGeneration'),
             vendor: model.service_name,
             vendor_info: t('settings.modelServices.localVendorInfo'),
             recommended: model.recommended,
           }]
         })
-        const savedMode = readChatMode()
-        const defaultMode = chooseAvailableMode(catalog, savedMode)
-        modelsRef.current = catalog
-        setModels(catalog)
-        if (defaultMode && defaultMode !== savedMode) writeChatMode(defaultMode)
-        setMode((current) => chooseAvailableMode(catalog, current, defaultMode))
-      }).catch(() => setModels([]))
+        const imageBinding = capabilityBindings.find(
+          (binding) => binding.capability === 'image_generation' && binding.status === 'ready',
+        )
+        const boundImageMode = imageBinding
+          ? parseRuntimeModelSpec(imageBinding.model_spec)
+          : undefined
+        setImageModels(imageCatalog)
+        setImageMode(
+          boundImageMode && imageCatalog.some((model) => model.id === boundImageMode)
+            ? boundImageMode
+            : undefined,
+        )
+      } catch {
+        if (!cancelled) {
+          setImageModels([])
+          setImageMode(undefined)
+        }
+      }
+    }).catch(() => {
+      setModels([])
+      setImageModels([])
+      setImageMode(undefined)
+    })
     return () => {
       cancelled = true
     }
   }, [runtimeConnection, modelCatalogVersion, t])
+
+  async function changeImageMode(next: ChatMode): Promise<void> {
+    if (!runtimeConnection) return
+    setNotice('')
+    try {
+      const binding = await setModelCapabilityBinding(
+        'image_generation',
+        { model_spec: next },
+        runtimeConnection,
+      )
+      setImageMode(parseRuntimeModelSpec(binding.model_spec))
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error))
+    }
+  }
 
   // Runtime owns advanced defaults. Client only projects them into the form;
   // localStorage is intentionally not a competing source of truth.
@@ -2950,6 +3020,7 @@ function useAppContentViewModel() {
     beginSidebarResize,
     cancelActiveRun,
     changeAgentSettings,
+    changeImageMode,
     changeMode,
     collapseSidebar,
     conversations,
@@ -2976,6 +3047,8 @@ function useAppContentViewModel() {
     isDesktop,
     isResizingSidebar,
     isSending,
+    imageMode,
+    imageModels,
     keyboardHelpOpen,
     listInstalledSkillsForView,
     listMcpServersForView,
@@ -3330,6 +3403,7 @@ function AppChatWorkspace({ view }: { view: AppContentViewModel }) {
     artifactPreview,
     cancelActiveRun,
     changeMode,
+    changeImageMode,
     docPreviewRefreshKey,
     draft,
     dropAttachments,
@@ -3345,6 +3419,8 @@ function AppChatWorkspace({ view }: { view: AppContentViewModel }) {
     hasActiveRun,
     isDesktop,
     isSending,
+    imageMode,
+    imageModels,
     mode,
     modelRequiredOpen,
     models,
@@ -3589,6 +3665,9 @@ function AppChatWorkspace({ view }: { view: AppContentViewModel }) {
           mode={mode}
           models={models}
           onModeChange={changeMode}
+          imageMode={imageMode}
+          imageModels={imageModels}
+          onImageModeChange={(next) => void changeImageMode(next)}
           permissionMode={permissionMode}
           onPermissionModeChange={setPermissionMode}
           onModelRequired={() => setModelRequiredOpen(true)}

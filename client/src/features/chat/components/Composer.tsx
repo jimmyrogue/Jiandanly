@@ -44,6 +44,9 @@ export function Composer({
   mode,
   models = EMPTY_MODELS,
   onModeChange,
+  imageMode,
+  imageModels = EMPTY_MODELS,
+  onImageModeChange,
   permissionMode = 'auto',
   onPermissionModeChange,
   onModelRequired,
@@ -74,6 +77,9 @@ export function Composer({
   mode: ChatMode
   models?: ModelOption[]
   onModeChange: (mode: ChatMode) => void
+  imageMode?: ChatMode
+  imageModels?: ModelOption[]
+  onImageModeChange?: (mode: ChatMode) => void
   permissionMode?: PermissionMode
   onPermissionModeChange?: (mode: PermissionMode) => void
   onModelRequired?: () => void
@@ -238,6 +244,9 @@ export function Composer({
           mode={mode}
           models={models}
           onChange={onModeChange}
+          imageMode={imageMode}
+          imageModels={imageModels}
+          onImageModeChange={onImageModeChange}
           onConfigureModels={onConfigureModels}
           onRefreshCurrent={onRefreshCurrentModel}
           disabled={isSending || steeringMode}

@@ -57,11 +57,11 @@ Runtime 已拥有固定 origin、PKCE、动态 IPv4 loopback callback、一次�
 - 对每个预置 Provider 的中国区/国际区分别运行真实 `模型 → 工具调用 → 工具结果 → 最终回答`。
 - 结果绑定 connection、model、endpoint、adapter version 和关键请求模式，不把一个模型的结果复用给另一个模型。
 - 明确区分网络/鉴权、账户权限、参数不兼容、SSE 解析、工具调用缺失和第二轮模型失败。
-- 官方模型目录只决定 bundled/recommended；`verified` 只来自真实探测。
+- BYOK 预置目录只决定 bundled/recommended，`verified` 来自真实探测；固定 Cloud origin 返回的 SheJane 官方能力声明由 Runtime 直接信任。
 
 完成标准：新增或编辑模型后无需人工猜测“测试兼容性”为何失败；失败原因可操作，成功模型可直接进入 Agent Run。
 
-实现结果：预置模型不再凭静态目录标记 `verified`。连接或更新官方服务时，Runtime 会让每个 bundled model 使用正式 Agent 共用的 Provider 适配器，完整执行两轮流式 `模型 → shejane.ping 工具 → 工具结果 → 最终标记`；点号内部名称在工具定义、历史调用和工具结果上使用同一可逆别名。国内 OpenAI-compatible 服务、OpenAI Chat/Responses、Anthropic Messages 与 Google GenerateContent 共用该边界，Run 会冻结明确协议；reasoning/thinking/thought signature、call ID 和并行顺序保持不变。DeepSeek 等 thinking 模型不再被强制 `tool_choice` 误判，GLM 的 `tool_stream` 同时作用于探测和正式 Agent；Gemini 的协议级 finish reason 也会 fail closed。鉴权、权限、余额、限流、临时不可用和格式不兼容分别返回可操作错误。具体连接仍只有通过真实两轮探针后才标记 `verified`。
+实现结果：BYOK 预置模型不再凭静态目录标记 `verified`。连接或更新这些服务时，Runtime 会让每个 bundled model 使用正式 Agent 共用的 Provider 适配器，完整执行两轮流式 `模型 → shejane.ping 工具 → 工具结果 → 最终标记`；点号内部名称在工具定义、历史调用和工具结果上使用同一可逆别名。国内 OpenAI-compatible 服务、OpenAI Chat/Responses、Anthropic Messages 与 Google GenerateContent 共用该边界，Run 会冻结明确协议；reasoning/thinking/thought signature、call ID 和并行顺序保持不变。DeepSeek 等 thinking 模型不再被强制 `tool_choice` 误判，GLM 的 `tool_stream` 同时作用于探测和正式 Agent；Gemini 的协议级 finish reason 也会 fail closed。鉴权、权限、余额、限流、临时不可用和格式不兼容分别返回可操作错误。SheJane 官方服务只信任固定 Cloud origin 返回的结构化能力声明，仍由用户明确选择具体模型，不做静默切换。
 
 ### 2. Agent Eval 发布门禁（已完成）
 

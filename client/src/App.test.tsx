@@ -281,6 +281,95 @@ describe('desktop shell', () => {
     expect(screen.getByRole('button', { name: '选择模型' })).toHaveTextContent('Recommended Model')
   })
 
+  it('shows verified image models and creates the first Runtime binding explicitly', async () => {
+    Object.defineProperty(window, 'shejaneClient', {
+      configurable: true,
+      value: {
+        platform: 'darwin',
+        runtime: { baseURL: 'http://127.0.0.1:17371', session: 'client', ready: true },
+      },
+    })
+    const bindingBodies: Array<Record<string, unknown>> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/v1/models')) {
+        return new Response(JSON.stringify({
+          models: [{
+            spec: 'local:official:chat',
+            model_id: 'chat',
+            display_name: 'Chat Model',
+            connection_id: 'official',
+            service_name: 'SheJane 官方服务',
+            capabilities: [{
+              capability: 'agent_chat',
+              protocol: 'openai_chat_completions',
+              verification: 'verified',
+            }],
+            available: true,
+            tool_calling: true,
+            streaming: true,
+            image_inputs: false,
+            verification: 'verified',
+            recommended: true,
+          }, ...['gpt-image-2', 'gpt-image-2-vip'].map((modelID) => ({
+            spec: `local:official:${modelID}`,
+            model_id: modelID,
+            display_name: modelID,
+            connection_id: 'official',
+            service_name: 'SheJane 官方服务',
+            capabilities: [{
+              capability: 'image_generation',
+              protocol: 'openai_images_generations',
+              verification: 'verified',
+            }],
+            available: false,
+            tool_calling: false,
+            streaming: false,
+            image_inputs: false,
+            verification: 'verified',
+            recommended: modelID === 'gpt-image-2',
+          }))],
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith('/v1/model-services')) {
+        return new Response(JSON.stringify({ services: [{
+          id: 'official',
+          credential_configured: true,
+        }] }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith('/v1/model-capability-bindings') && (!init?.method || init.method === 'GET')) {
+        return new Response(JSON.stringify({ bindings: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (url.endsWith('/v1/model-capability-bindings/image_generation') && init?.method === 'PUT') {
+        bindingBodies.push(JSON.parse(String(init.body)))
+        return new Response(JSON.stringify({
+          capability: 'image_generation',
+          model_spec: 'local:official:gpt-image-2-vip',
+          status: 'ready',
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      throw new Error('Runtime offline')
+    }))
+
+    render(<App />)
+
+    const trigger = await screen.findByRole('button', { name: '选择模型' })
+    await waitFor(() => expect(trigger).toHaveTextContent('Chat Model'))
+    expect(trigger).not.toHaveTextContent('· 图')
+    trigger.focus()
+    fireEvent.keyDown(trigger, { key: 'Enter', code: 'Enter' })
+    fireEvent.click(await screen.findByText('gpt-image-2-vip'))
+
+    await waitFor(() => expect(bindingBodies).toEqual([
+      { model_spec: 'local:official:gpt-image-2-vip' },
+    ]))
+    expect(trigger).toHaveTextContent('Chat Model')
+    expect(trigger).not.toHaveTextContent('gpt-image-2-vip')
+  })
+
   it('asks before opening model settings when a message has no model', async () => {
     render(<App />)
 

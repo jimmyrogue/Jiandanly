@@ -217,10 +217,23 @@ export function ModelServicesSettings({
           throw new Error(t(key))
         }
         setBusy('authorize:syncing')
+        let diagnosticsError = false
+        try {
+          setDiagnostics(await updateCentralDiagnostics({
+            enabled: true,
+            connection_id: status.connection.id,
+            success_sample_rate: 0,
+          }, config))
+        } catch {
+          diagnosticsError = true
+        }
         await load()
         if (run !== authorizationRun.current) return
         setAdding(false)
         setSelected(undefined)
+        if (diagnosticsError) {
+          setError(t('settings.modelServices.authorization.diagnosticsFailed'))
+        }
         onChanged?.()
         return
       }
@@ -346,7 +359,7 @@ export function ModelServicesSettings({
 
   const refresh = async (service: ModelServiceConnection) => {
     if (!config) return
-    setBusy(service.id)
+    setBusy(`refresh:${service.id}`)
     setError('')
     try {
       const refreshed = await refreshModelService(service.id, config)
@@ -410,7 +423,7 @@ export function ModelServicesSettings({
     setError('')
     for (const model of models) {
       const key = `${managingService.id}:${model.model_id}`
-      const capability = modelCapabilities[key] ?? 'agent_chat'
+      const capability = modelCapabilities[key] ?? model.capabilities?.[0]?.capability ?? 'agent_chat'
       const selectedCapability = (model.capabilities ?? []).find(
         (item) => item.capability === capability,
       )
@@ -513,7 +526,9 @@ export function ModelServicesSettings({
   ).length ?? 0
   const selectedImageCapability = managingService?.models.some((model) => {
     if (!selectedModels[model.model_id]) return false
-    const capability = modelCapabilities[`${managingService.id}:${model.model_id}`] ?? 'agent_chat'
+    const capability = modelCapabilities[`${managingService.id}:${model.model_id}`]
+      ?? model.capabilities?.[0]?.capability
+      ?? 'agent_chat'
     return capability === 'image_generation' || capability === 'image_editing'
   }) ?? false
   const modelPickerBusy = Boolean(managingService && busy === `verify:${managingService.id}`)
@@ -547,6 +562,7 @@ export function ModelServicesSettings({
         <div className="settings-card settings-model-services">
           {services.map((service) => {
             const preset = presets.find((item) => item.id === service.preset_id)
+            const refreshing = busy === `refresh:${service.id}`
             const enabledModels = service.models.filter((model) => (
               model.verification === 'verified'
               || (model.capabilities ?? []).some((item) => item.verification === 'verified')
@@ -571,27 +587,18 @@ export function ModelServicesSettings({
                     {enabledModels.map((model) => model.display_name).join('、')
                       || t('settings.modelServices.noModels')}
                   </span>
-                  {service.preset_id === 'shejane-official' && (
-                    <div className="mt-2 flex flex-col gap-1">
-                      <div className="flex items-center gap-2 text-sm font-medium">
-                        <Switch
-                          aria-label={t('settings.modelServices.diagnostics.label')}
-                          checked={diagnostics?.enabled === true
-                            && diagnostics.credential_configured
-                            && diagnostics.connection_id === service.id}
-                          disabled={busy === `diagnostics:${service.id}`}
-                          onCheckedChange={(checked) => void toggleDiagnostics(service, checked)}
-                        />
-                        <span>{t('settings.modelServices.diagnostics.label')}</span>
-                      </div>
-                      <small className="text-muted-foreground">
-                        {t('settings.modelServices.diagnostics.hint')}
-                      </small>
-                    </div>
-                  )}
                 </div>
-                <span className={`settings-model-service-state${service.credential_configured ? '' : ' missing'}`}>
-                  {!service.credential_configured
+                <span
+                  className={`settings-model-service-state${service.credential_configured ? '' : ' missing'}${refreshing ? ' refreshing' : ''}`}
+                  role={refreshing ? 'status' : undefined}
+                  aria-busy={refreshing || undefined}
+                >
+                  {refreshing ? (
+                    <>
+                      <IconLoader2 className="animate-spin" size={14} aria-hidden="true" />
+                      {t('settings.modelServices.refreshing')}
+                    </>
+                  ) : !service.credential_configured
                     ? t('settings.modelServices.needsApiKey')
                     : `${regionLabel} · ${statusLabel}`}
                 </span>
@@ -600,7 +607,7 @@ export function ModelServicesSettings({
                     <button
                       type="button"
                       className="settings-model-service-models"
-                      disabled={busy === service.id}
+                      disabled={busy === service.id || refreshing}
                       onClick={() => openModelPicker(service)}
                     >
                       {t('settings.modelServices.manageModels')}
@@ -612,7 +619,8 @@ export function ModelServicesSettings({
                         type="button"
                         className="settings-model-service-action"
                         aria-label={t('settings.modelServices.serviceActions', { name: service.name })}
-                        disabled={busy === service.id}
+                        disabled={busy === service.id || refreshing}
+                        aria-busy={refreshing}
                       >
                         <IconDots size={16} aria-hidden="true" />
                       </button>
@@ -647,6 +655,25 @@ export function ModelServicesSettings({
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>
+                {service.preset_id === 'shejane-official' && (
+                  <div className="settings-model-service-diagnostics">
+                    <div className="settings-model-service-diagnostics-copy">
+                      <strong>{t('settings.modelServices.diagnostics.label')}</strong>
+                      <small id={`model-service-diagnostics-${service.id}`}>
+                        {t('settings.modelServices.diagnostics.hint')}
+                      </small>
+                    </div>
+                    <Switch
+                      aria-label={t('settings.modelServices.diagnostics.label')}
+                      aria-describedby={`model-service-diagnostics-${service.id}`}
+                      checked={diagnostics?.enabled === true
+                        && diagnostics.credential_configured
+                        && diagnostics.connection_id === service.id}
+                      disabled={busy === `diagnostics:${service.id}`}
+                      onCheckedChange={(checked) => void toggleDiagnostics(service, checked)}
+                    />
+                  </div>
+                )}
               </div>
             )
           })}
@@ -921,10 +948,10 @@ export function ModelServicesSettings({
                   variant="ghost"
                   size="icon-sm"
                   aria-label={t('settings.modelServices.refresh')}
-                  disabled={busy === managingService.id || modelPickerBusy}
+                  disabled={busy === `refresh:${managingService.id}` || modelPickerBusy}
                   onClick={() => void refresh(managingService)}
                 >
-                  <IconRefresh className={busy === managingService.id ? 'animate-spin' : undefined} />
+                  <IconRefresh className={busy === `refresh:${managingService.id}` ? 'animate-spin' : undefined} />
                 </Button>
               </DialogHeader>
 
@@ -953,7 +980,9 @@ export function ModelServicesSettings({
                 ) : filteredModels.map((model) => {
                   const key = `${managingService.id}:${model.model_id}`
                   const selectedForTest = Boolean(selectedModels[model.model_id])
-                  const capability = modelCapabilities[key] ?? 'agent_chat'
+                  const capability = modelCapabilities[key]
+                    ?? model.capabilities?.[0]?.capability
+                    ?? 'agent_chat'
                   const selectedCapability = (model.capabilities ?? []).find(
                     (item) => item.capability === capability,
                   )

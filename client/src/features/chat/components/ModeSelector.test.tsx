@@ -11,6 +11,11 @@ const MODELS: ModelOption[] = [
   { id: 'local:ollama:qwen3', label: 'Qwen 3', vendor: 'Ollama', imageInputs: false },
 ]
 
+const IMAGE_MODELS: ModelOption[] = [
+  { id: 'local:official:gpt-image-2', label: 'gpt-image-2', vendor: 'SheJane 官方服务', imageInputs: false },
+  { id: 'local:official:gpt-image-2-vip', label: 'gpt-image-2-vip', vendor: 'SheJane 官方服务', imageInputs: false },
+]
+
 function withProviders(children: ReactNode) {
   return <I18nProvider><TooltipProvider>{children}</TooltipProvider></I18nProvider>
 }
@@ -32,6 +37,28 @@ describe('ModeSelector (Runtime catalog)', () => {
   it('shows the selected Runtime model', () => {
     renderSelector('local:openai:gpt-4o')
     expect(screen.getByRole('button')).toHaveTextContent('GPT-4o')
+  })
+
+  it('shows and switches the Runtime-owned image model binding', async () => {
+    const onImageModeChange = vi.fn()
+    render(withProviders(
+      <ModeSelector
+        mode="local:openai:gpt-4o"
+        models={MODELS}
+        onChange={vi.fn()}
+        imageMode="local:official:gpt-image-2"
+        imageModels={IMAGE_MODELS}
+        onImageModeChange={onImageModeChange}
+      />,
+    ))
+
+    const trigger = screen.getByRole('button')
+    expect(trigger).toHaveTextContent('GPT-4o')
+    expect(trigger).not.toHaveTextContent('gpt-image-2')
+    openMenu()
+    expect(await screen.findByText('图片生成模型')).toBeInTheDocument()
+    fireEvent.click(screen.getByText('gpt-image-2-vip'))
+    expect(onImageModeChange).toHaveBeenCalledWith('local:official:gpt-image-2-vip')
   })
 
   it('shows a model-selection prompt for a stale selection', () => {
