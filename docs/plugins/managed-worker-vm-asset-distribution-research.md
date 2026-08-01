@@ -6,9 +6,9 @@
 >
 > 资料原则：只采用项目官方文档、官方仓库源码和官方发布源。
 >
-> 状态：Phase A 与 Phase B 的 arm64 冻结资产、生产 preflight、打包接线已完成；总 Gate 仍未开放。
+> 状态：历史研究，已被 2026-08-01 的包体决策取代。当前 Client 不再打包或注入 VM 资产，Managed Worker 受 packaged backend 与 release Gate 双重阻断；现状以 [`managed-worker-isolation.md`](managed-worker-isolation.md) 为准。
 
-## 决策摘要
+## 当时的决策摘要（已撤销）
 
 **v1 选择“构建时冻结、随对应架构的 macOS App 一起打包”，不选择首次运行下载。**
 
@@ -35,7 +35,7 @@ SheJane.app/Contents/Resources/sandbox/
 
 **不在 v1 再发明第二套 VM 资产 updater。** 如果未来量化数据证明安装包体积或内核修复频率不可接受，再把同一资产 manifest 扩展为签名的按需下载格式；这不是当前 Gate 的前置条件。
 
-## 1. 当前仓库事实
+## 1. 调研时仓库事实（已过期）
 
 ### 1.1 已经具备的能力
 

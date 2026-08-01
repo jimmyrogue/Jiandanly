@@ -3,6 +3,7 @@
 - 状态：In Progress（Phase 0-4 complete；Phase 5-7 参考实现与平台发布 Gate 继续推进）
 - 日期：2026-07-15
 - 对应 ADR：[ADR-0001：Runtime 原生插件平台](../adr/0001-runtime-plugin-platform.md)
+- 2026-08-01 更新：本计划中“macOS VM 随 Client 打包、Main 注入 manifest、release workflow 执行 VM Gate”的内容均为历史验收记录，不再描述当前发行路径。当前 Client 不含 VM 资产，Managed Worker 受 packaged backend 与 release Gate 双重阻断；现状以 [`managed-worker-isolation.md`](../plugins/managed-worker-isolation.md) 为准。
 - 调研依据：
   - [Agent 插件系统调研](../agent-plugin-systems-research.md)
   - [插件系统案例与方案调研](../plugin-system-landscape-research.md)
@@ -450,7 +451,7 @@ Adapter 专项：
 - 两个 Adapter 的结果都由同一 ToolExecutionMiddleware 收据恢复。
 - P10/P11/P12 的错误和终态无平行实现。
 
-### 9.7 Phase 3 当前验收结果
+### 9.7 Phase 3 历史验收记录
 
 - WASI Action 已从固定 descriptor 进入真实 Agent 图，经过现有 ToolReviewMiddleware、ToolExecutionMiddleware、`local_tool_receipts` 与 Runtime Artifact 存储。
 - P5 冻结附件 size/SHA-256/MIME；插件专属 tool version 包含精确插件、Action schema、输入、capabilities、limits 与 environment，P10 使用中间件已生成的同一 operation ID。
