@@ -10,6 +10,14 @@ artifactName: SheJane-${version}-${arch}.${ext}
 directories:
   output: release
 
+electronLanguages:
+  - en
+  - en-US
+  - zh-CN
+  - zh-TW
+  - zh_CN
+  - zh_TW
+
 # What goes inside the asar: built renderer + Electron main/preload + runtime
 # assets (main.cjs loads app-icon.png plus platform-specific tray icons).
 files:

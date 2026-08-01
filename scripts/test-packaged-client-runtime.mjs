@@ -3,6 +3,7 @@
 import { execFile } from 'node:child_process'
 import { constants } from 'node:fs'
 import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
@@ -21,6 +22,41 @@ if (!isMacOSApp && !isWindowsExecutable) {
 const wait = (milliseconds) => new Promise((done) => setTimeout(done, milliseconds))
 const PACKAGED_RUNTIME_START_TIMEOUT_MS = 180_000
 const PROCESS_EXIT_TIMEOUT_MS = 10_000
+const ALLOWED_ELECTRON_LOCALES = new Set([
+  'en',
+  'en-GB',
+  'en-US',
+  'zh-CN',
+  'zh-TW',
+  'zh_CN',
+  'zh_TW',
+])
+const FORBIDDEN_PACKAGED_MODULES = [
+  '@lexical/react',
+  '@shejane/runtime-sdk',
+  '@tabler/icons-react',
+  '@tailwindcss/vite',
+  '@vitejs/plugin-react',
+  'docx-preview',
+  'highlight.js',
+  'lexical',
+  'radix-ui',
+  'react',
+  'react-dom',
+  'react-markdown',
+  'shadcn',
+  'tailwindcss',
+]
+const FORBIDDEN_FROZEN_RUNTIME_PATHS = [
+  '_internal/_pytest',
+  '_internal/mypy',
+  '_internal/onnxruntime/quantization',
+  '_internal/onnxruntime/tools',
+  '_internal/onnxruntime/transformers',
+  '_internal/pytest',
+  '_internal/ruff',
+  '_internal/sympy',
+]
 
 async function waitUntil(check, { timeoutMs, failure }) {
   const deadline = Date.now() + timeoutMs
@@ -43,6 +79,66 @@ function processExists(pid) {
       return false
     }
     throw error
+  }
+}
+
+async function assertPathMissing(path, message) {
+  try {
+    await access(path)
+  } catch (error) {
+    if (error?.code === 'ENOENT') return
+    throw error
+  }
+  throw new Error(message)
+}
+
+async function verifyPackagedContents() {
+  const appAsar = join(resourcesPath, 'app.asar')
+  const require = createRequire(import.meta.url)
+  const electronBuilderPackage = require.resolve('electron-builder/package.json', {
+    paths: [resolve('client')],
+  })
+  const { listPackage } = createRequire(electronBuilderPackage)('@electron/asar')
+  const packagedFiles = listPackage(appAsar)
+  for (const moduleName of FORBIDDEN_PACKAGED_MODULES) {
+    const prefix = `/node_modules/${moduleName}/`
+    if (packagedFiles.some((path) => path.startsWith(prefix))) {
+      throw new Error(`packaged Client contains bundled Renderer dependency: ${moduleName}`)
+    }
+  }
+  for (const moduleName of ['@anthropic-ai/sandbox-runtime', 'electron-updater']) {
+    const prefix = `/node_modules/${moduleName}/`
+    if (!packagedFiles.some((path) => path.startsWith(prefix))) {
+      throw new Error(`packaged Client is missing required production dependency: ${moduleName}`)
+    }
+  }
+
+  const localeRoot = isMacOSApp
+    ? join(
+        packagedPath,
+        'Contents',
+        'Frameworks',
+        'Electron Framework.framework',
+        'Versions',
+        'A',
+        'Resources',
+      )
+    : join(dirname(resourcesPath), 'locales')
+  const localeSuffix = isMacOSApp ? '.lproj' : '.pak'
+  const locales = (await readdir(localeRoot))
+    .filter((name) => name.endsWith(localeSuffix))
+    .map((name) => name.slice(0, -localeSuffix.length))
+  const unexpectedLocales = locales.filter((name) => !ALLOWED_ELECTRON_LOCALES.has(name))
+  if (locales.length === 0 || unexpectedLocales.length > 0) {
+    throw new Error(`packaged Client contains unexpected Electron locales: ${unexpectedLocales}`)
+  }
+
+  const runtimeRoot = join(resourcesPath, 'runtime')
+  for (const relative of FORBIDDEN_FROZEN_RUNTIME_PATHS) {
+    await assertPathMissing(
+      join(runtimeRoot, ...relative.split('/')),
+      `packaged Runtime contains excluded build-only path: ${relative}`,
+    )
   }
 }
 
@@ -71,6 +167,7 @@ let primaryError = null
 try {
   await access(resourcesPath, constants.R_OK)
   await access(runtimeExecutable, constants.X_OK)
+  await verifyPackagedContents()
   let hasVMManifest = true
   try {
     await access(manifest, constants.R_OK)

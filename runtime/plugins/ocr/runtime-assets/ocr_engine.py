@@ -25,7 +25,7 @@ from rapidocr import (
 ENGINE = {
     "name": "RapidOCR",
     "version": "3.9.1",
-    "model": "PP-OCRv6-medium",
+    "model": "PP-OCRv6-small",
     "provider": "CPUExecutionProvider",
 }
 MAX_INPUTS = 16
@@ -77,8 +77,8 @@ def asset_payload() -> Path:
 def model_paths() -> dict[str, Path]:
     root = asset_payload() / "models"
     result = {
-        "det": root / "PP-OCRv6_det_medium.onnx",
-        "rec": root / "PP-OCRv6_rec_medium.onnx",
+        "det": root / "PP-OCRv6_det_small.onnx",
+        "rec": root / "PP-OCRv6_rec_small.onnx",
         "cls": root / "ch_ppocr_mobile_v2.0_cls_mobile.onnx",
     }
     for path in result.values():
@@ -105,12 +105,12 @@ def build_engine() -> RapidOCR:
         "Det.engine_type": EngineType.ONNXRUNTIME,
         "Det.ocr_version": OCRVersion.PPOCRV6,
         "Det.lang_type": LangDet.CH,
-        "Det.model_type": ModelType.MEDIUM,
+        "Det.model_type": ModelType.SMALL,
         "Det.model_path": str(models["det"]),
         "Rec.engine_type": EngineType.ONNXRUNTIME,
         "Rec.ocr_version": OCRVersion.PPOCRV6,
         "Rec.lang_type": LangRec.CH,
-        "Rec.model_type": ModelType.MEDIUM,
+        "Rec.model_type": ModelType.SMALL,
         "Rec.model_path": str(models["rec"]),
         "Cls.engine_type": EngineType.ONNXRUNTIME,
         "Cls.ocr_version": OCRVersion.PPOCRV4,

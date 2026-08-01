@@ -15,7 +15,7 @@
       "runtime_assets": [
         {
           "id": "org.shejane.browser-qa.runtime",
-          "version": "1.61.1+chromium1228.1",
+          "version": "1.61.1+chromium1228.2",
           "digest": "__RUNTIME_ASSET_DIGEST__"
         }
       ]

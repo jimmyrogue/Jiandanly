@@ -3,7 +3,7 @@
 #
 # Produces a self-contained ONEDIR bundle (dist/shejane-runtime/) that runs WITHOUT a
 # system Python — it's what the Electron desktop app spawns. Build it with
-# `make package-runtime` (= `uv run pyinstaller shejane-runtime.spec`).
+# `make package-runtime` (= isolated `uv run --group package ... PyInstaller`).
 #
 # onedir (not onefile) on purpose: onefile re-extracts to a temp dir on every
 # launch (slow + AV re-scan) and breaks uvicorn's signal handling; onedir starts
@@ -16,7 +16,12 @@ from importlib.util import find_spec
 from pathlib import Path
 from shutil import copy2
 
-from PyInstaller.utils.hooks import collect_all, collect_submodules
+from PyInstaller.utils.hooks import (
+    collect_all,
+    collect_data_files,
+    collect_dynamic_libs,
+    collect_submodules,
+)
 
 datas = []
 binaries = []
@@ -41,11 +46,16 @@ if sys.platform.startswith("linux"):
 
 # Packages PyInstaller's static analysis under-collects because they rely on
 # dynamic imports, entry-point discovery, or ship data files / native libs.
-# onnxruntime + magika are the critical ones: markitdown builds a module-level
-# MarkItDown() (office tools) which loads magika's ONNX model via onnxruntime AT
-# IMPORT TIME — miss their data/binaries and the frozen runtime crashes on launch.
-for pkg in (
+# markitdown builds a module-level MarkItDown() which loads magika's ONNX model
+# via onnxruntime at import time. Keep the inference runtime, but not ONNX's
+# quantization/conversion toolchain.
+datas += collect_data_files(
     "onnxruntime",
+    includes=["LICENSE", "ThirdPartyNotices.txt"],
+)
+binaries += collect_dynamic_libs("onnxruntime")
+hiddenimports += collect_submodules("onnxruntime.capi")
+for pkg in (
     "magika",
     "langgraph",
     "langchain",
@@ -96,7 +106,7 @@ if sys.platform == "darwin" and platform.machine().lower() in {"arm64", "aarch64
         raise SystemExit("Computer Use fixed capability package must be built before PyInstaller")
     datas.append((str(computer_use_package), "builtin-plugins"))
     browser_qa_package = Path(
-        "plugins/browser-qa/dist/browser-qa-0.1.1-darwin-arm64.shejane-plugin"
+        "plugins/browser-qa/dist/browser-qa-0.1.2-darwin-arm64.shejane-plugin"
     )
     if not browser_qa_package.is_file():
         raise SystemExit("Browser QA fixed capability package must be built before PyInstaller")
@@ -108,7 +118,7 @@ if sys.platform == "darwin" and platform.machine().lower() in {"arm64", "aarch64
         raise SystemExit("Browser QA fixed Runtime Asset must be built before PyInstaller")
     datas.append((str(browser_qa_runtime_asset), "builtin-assets"))
     ocr_package = Path(
-        "plugins/ocr/dist/ocr-0.1.1-darwin-arm64.shejane-plugin"
+        "plugins/ocr/dist/ocr-0.1.2-darwin-arm64.shejane-plugin"
     )
     if not ocr_package.is_file():
         raise SystemExit("OCR fixed capability package must be built before PyInstaller")
@@ -121,7 +131,7 @@ if sys.platform == "darwin" and platform.machine().lower() in {"arm64", "aarch64
     datas.append((str(ocr_runtime_asset), "builtin-assets"))
 elif sys.platform == "win32" and platform.machine().lower() in {"amd64", "x86_64"}:
     browser_qa_package = Path(
-        "plugins/browser-qa/dist/browser-qa-0.1.1-windows-amd64.shejane-plugin"
+        "plugins/browser-qa/dist/browser-qa-0.1.2-windows-amd64.shejane-plugin"
     )
     if not browser_qa_package.is_file():
         raise SystemExit("Windows Browser QA fixed capability package must be built before PyInstaller")
@@ -133,7 +143,7 @@ elif sys.platform == "win32" and platform.machine().lower() in {"amd64", "x86_64
         raise SystemExit("Windows Browser QA fixed Runtime Asset must be built before PyInstaller")
     datas.append((str(browser_qa_runtime_asset), "builtin-assets"))
     ocr_package = Path(
-        "plugins/ocr/dist/ocr-0.1.1-windows-amd64.shejane-plugin"
+        "plugins/ocr/dist/ocr-0.1.2-windows-amd64.shejane-plugin"
     )
     if not ocr_package.is_file():
         raise SystemExit("Windows OCR fixed capability package must be built before PyInstaller")
@@ -157,7 +167,20 @@ a = Analysis(
     runtime_hooks=[],
     # Browser QA carries pinned Playwright code and Chromium in its fixed package
     # and Runtime Asset. Never absorb a developer's ambient copy into Runtime.
-    excludes=["browser_use", "playwright"],
+    excludes=[
+        "_pytest",
+        "browser_use",
+        "coverage",
+        "mypy",
+        "onnxruntime.backend",
+        "onnxruntime.quantization",
+        "onnxruntime.tools",
+        "onnxruntime.transformers",
+        "playwright",
+        "pytest",
+        "ruff",
+        "sympy",
+    ],
     noarchive=False,
 )
 

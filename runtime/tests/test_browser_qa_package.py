@@ -120,13 +120,11 @@ def test_browser_qa_runtime_asset_is_deterministic_and_content_addressed(
     tmp_path: Path, target_platform: str, executable_name: str
 ) -> None:
     browser = tmp_path / "chromium-1228"
-    headless_shell = tmp_path / "chromium_headless_shell-1228"
-    for root in (browser, headless_shell):
-        root.mkdir()
-        executable = root / executable_name
-        executable.write_bytes(b"browser")
-        if target_platform == "darwin/arm64":
-            executable.chmod(0o500)
+    browser.mkdir()
+    executable = browser / executable_name
+    executable.write_bytes(b"browser")
+    if target_platform == "darwin/arm64":
+        executable.chmod(0o500)
     outputs = [
         tmp_path / "first.shejane-runtime-asset",
         tmp_path / "second.shejane-runtime-asset",
@@ -140,8 +138,6 @@ def test_browser_qa_runtime_asset_is_deterministic_and_content_addressed(
                 target_platform,
                 "--browser",
                 str(browser),
-                "--headless-shell",
-                str(headless_shell),
                 "--output",
                 str(output),
             ],
@@ -153,5 +149,6 @@ def test_browser_qa_runtime_asset_is_deterministic_and_content_addressed(
         outputs[0], target_platform=target_platform
     )
     assert installed.asset_id == "org.shejane.browser-qa.runtime"
-    assert installed.version == "1.61.1+chromium1228.1"
+    assert installed.version == "1.61.1+chromium1228.2"
     assert (installed.payload / "browsers" / "chromium-1228" / executable_name).is_file()
+    assert not (installed.payload / "browsers" / "chromium_headless_shell-1228").exists()

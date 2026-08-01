@@ -54,7 +54,6 @@ def playwright_browsers_root() -> Path:
 
 BROWSERS_ROOT = playwright_browsers_root()
 BROWSER = BROWSERS_ROOT / "chromium-1228"
-HEADLESS_SHELL = BROWSERS_ROOT / "chromium_headless_shell-1228"
 PLUGIN_ROOT = REPO_ROOT / "runtime" / "plugins" / "browser-qa"
 
 
@@ -83,7 +82,6 @@ def build_test_package(root: Path) -> None:
     (modules / "playwright").symlink_to(PLAYWRIGHT, target_is_directory=True)
     (modules / "playwright-core").symlink_to(PLAYWRIGHT_CORE, target_is_directory=True)
     (browsers / "chromium-1228").symlink_to(BROWSER, target_is_directory=True)
-    (browsers / "chromium_headless_shell-1228").symlink_to(HEADLESS_SHELL, target_is_directory=True)
     subprocess.run(
         [
             "pnpm",
@@ -156,16 +154,14 @@ def action_descriptor(package: Path, action_id: str) -> PluginActionDescriptor:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("headless", [True, False], ids=("headless", "headed"))
 async def test_browser_qa_real_chromium_open_act_observe_and_screenshot(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, headless: bool
 ) -> None:
     node = shutil.which("node")
     artifacts_configured = bool(os.environ.get("SHEJANE_TEST_BROWSER_QA_PACKAGE"))
     source_runtime_missing = (
-        not PLAYWRIGHT.is_dir()
-        or not PLAYWRIGHT_CORE.is_dir()
-        or not BROWSER.is_dir()
-        or not HEADLESS_SHELL.is_dir()
+        not PLAYWRIGHT.is_dir() or not PLAYWRIGHT_CORE.is_dir() or not BROWSER.is_dir()
     )
     if node is None or (not artifacts_configured and source_runtime_missing):
         if os.environ.get("SHEJANE_REQUIRE_FIXED_PLUGIN_E2E") == "1":
@@ -179,7 +175,7 @@ async def test_browser_qa_real_chromium_open_act_observe_and_screenshot(
         build_test_package(package)
         runtime_asset = RuntimeAssetHandle(
             asset_id="org.shejane.browser-qa.runtime",
-            version="1.61.1+chromium1228.1",
+            version="1.61.1+chromium1228.2",
             platform=host_platform,
             digest="sha256:" + "a" * 64,
             root=package,
@@ -212,7 +208,7 @@ async def test_browser_qa_real_chromium_open_act_observe_and_screenshot(
         profile_root=tmp_path / "profile",
         browser_runtime_root=tmp_path / "browser-runtime",
         runtime_asset=runtime_asset,
-        headless=True,
+        headless=headless,
     )
     adapter = PluginToolAdapter(
         executor_factory=lambda action: BrowserQAActionExecutor(service, action.action_id)

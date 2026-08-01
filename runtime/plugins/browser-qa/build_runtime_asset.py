@@ -10,7 +10,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-ASSET_VERSION = "1.61.1+chromium1228.1"
+ASSET_VERSION = "1.61.1+chromium1228.2"
 
 
 def main() -> None:
@@ -21,7 +21,6 @@ def main() -> None:
         required=True,
     )
     parser.add_argument("--browser", type=Path, required=True)
-    parser.add_argument("--headless-shell", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.output.suffix != ".shejane-runtime-asset":
@@ -29,21 +28,10 @@ def main() -> None:
     browser = args.browser.resolve(strict=True)
     if not browser.is_dir() or browser.name != "chromium-1228":
         parser.error("--browser must be the Playwright 1.61.1 chromium-1228 directory")
-    headless_shell = args.headless_shell.resolve(strict=True)
-    if not headless_shell.is_dir() or headless_shell.name != "chromium_headless_shell-1228":
-        parser.error(
-            "--headless-shell must be the Playwright 1.61.1 chromium_headless_shell-1228 directory"
-        )
-
     with tempfile.TemporaryDirectory(prefix="browser-qa-runtime-asset-") as temporary:
         stage = Path(temporary)
         payload = stage / "payload"
         shutil.copytree(browser, payload / "browsers" / browser.name, symlinks=True)
-        shutil.copytree(
-            headless_shell,
-            payload / "browsers" / headless_shell.name,
-            symlinks=True,
-        )
         metadata = stage / ".shejane-runtime-asset"
         metadata.mkdir()
         executables = sorted(

@@ -199,6 +199,8 @@ Computer Use、Browser QA 和 OCR 是 Runtime 随应用提供的固定能力，�
 
 打包版 Client 冷启动时，托管 Runtime 会校验并安装 Browser QA 与 OCR 的大型固定 Runtime Asset；P1 就绪握手为这条路径保留最多 120 秒。外部本机 Runtime 不执行这项安装，连接检查仍为 30 秒。打包 smoke 必须等待真实 `/v1/runtime` 会话和正常退出，不得用强制清理成功掩盖启动超时或残留进程。
 
+Browser QA 只打包 Playwright 1.61.1 的完整 Chromium for Testing；headed 和 new-headless 都固定使用 `channel: chromium`，构建命令使用 `playwright install --no-shell chromium`，不得再把独立 `chromium_headless_shell` 放进 Runtime Asset。真实发布门禁必须分别运行 headed 与 headless E2E。
+
 macOS 首版固定 `injaneity/pi-computer-use` 提交 `9f59ed0eeac09b115897732c46b794ee8ca4e5b0`（0.5.0/MIT），只向模型暴露八个 state-scoped 桌面 Action。启用时由“插件”页依次完成 Helper、屏幕录制、辅助功能三步；每次用户操作最多触发一个系统授权，返回 SheJane 后自动复检。安装器把 Helper 固定在 `~/Applications/pi-computer-use.app`，并保留稳定的 macOS 代码签名身份；这里不能用“内置包免验签”替代 Helper 签名，否则系统可能把升级后的 Helper 视为新应用并重复要求 TCC 授权。每个 Run 只保持一个服务，P11 关闭；所有桌面 Action 继续经过参数校验、审批和持久回执。当前只完成 macOS arm64，其他平台不属于已发布能力。
 
 `@anthropic-ai/sandbox-runtime@0.0.65` 现在承担主 Agent `execute` 的宿主访问隔离：默认禁止网络，只允许读取已授权工作区和运行工具所需的系统/PATH 路径，只允许写入每次命令的私有临时目录；启动器缺失或策略创建失败时命令 fail closed，不回退到宿主 shell。开发入口 `scripts/dev.sh` 使用 pnpm 安装的 SRT CLI，打包入口由 Electron 注入包内 launcher。代码改写继续使用 Runtime 的 `write_file` / `edit_file` 等受工作区约束且有回执的结构化工具。
@@ -225,7 +227,7 @@ Media Foundation 现在有真实 `linux/arm64` 执行候选：`org.ffmpeg.runtim
 
 PDF 插件现在有 `linux/arm64` 真实执行候选：独立 `org.mupdf.runtime` 从固定 SHA-256 的官方 HTTPS MuPDF 1.27.2 源码构建（上游未提供与 FFmpeg 相同的 PGP 验证流程），冻结 Debian OCI/toolchain/package closure，离线双构建，并携带完整对应源码、许可、SBOM 与 build provenance。Asset 归档逐字节一致；冻结 onedir Worker 已在 macOS arm64 的生产 VM 中通过 inspect、Unicode 页窗文本、无文本层 OCR 标记、精确选页 PNG golden、hostile/truncated corpus、中途取消无部分输出和取消后重放。最终签名/公证 `.app` 的动态 VM Gate 已保留给 self-hosted Mac；真实 release runner、Linux amd64、Windows 尚未完成，所以仍不是已发布产品能力。详见 `docs/plugins/phase6-pdf-research.md`。
 
-OCR 的固定 macOS arm64 与 Windows AMD64 路径使用各平台原生、内容锁定的 `org.rapidocr.runtime`：RapidOCR 3.9.1、ONNX Runtime 1.27.0、PP-OCRv6 medium、CPU provider 和三个精确模型，离线安装锁定依赖、双构建并拒绝 Tesseract/Leptonica。Windows 必须在原生 runner 冻结 PyInstaller Worker/引擎，随后运行真实识别、确定性和 hostile-input Gate；macOS 不做伪交叉编译。受信任的固定 OCR Worker 由 `ocr` host adapter 启动，输入仍由 Runtime 物化，输出仍经严格 schema 和 Artifact 提升；它不会绕过或打开第三方 Managed Worker 的 VM release gate。Linux/arm64 VM 候选及其多语言、布局、方向、hostile-input 与取消 Gate 继续保留作独立平台验证。详见 `docs/plugins/phase6-ocr-research.md`。
+OCR 的固定 macOS arm64 与 Windows AMD64 路径使用各平台原生、内容锁定的 `org.rapidocr.runtime`：RapidOCR 3.9.1、ONNX Runtime 1.27.0、PP-OCRv6 small、CPU provider 和三个精确模型，离线安装锁定依赖、双构建并拒绝 Tesseract/Leptonica。质量门禁覆盖简体中文、繁体中文、日文、英文、低对比、分栏、手写体、180° 旋转、确定性与 hostile input。Windows 必须在原生 runner 冻结 PyInstaller Worker/引擎并重跑同一门禁；macOS 不做伪交叉编译。受信任的固定 OCR Worker 由 `ocr` host adapter 启动，输入仍由 Runtime 物化，输出仍经严格 schema 和 Artifact 提升；它不会绕过或打开第三方 Managed Worker 的 VM release gate。Linux/arm64 VM 候选及其取消 Gate 继续保留作独立平台验证。详见 `docs/plugins/phase6-ocr-research.md`。
 
 Speech 现在有真实 `linux/arm64` 候选：`speech.transcribe` 固定 `whisper.cpp 1.8.6`、`large-v3-turbo Q5_0`、CPU 单线程 greedy，并复用精确 FFmpeg 资产做 16 kHz 单声道 PCM 归一化。官方 checkpoint 转换/量化模型 SHA-256 固定为 `39422170...a7e2`；两份 525 MiB Asset 完全一致（archive `883900b6...5cdd`，canonical asset `sha256:dc6ec9da...4f11`）。生产 VM 已通过重复转写/Artifact hash、显式中英文、带背景噪声/双音干扰和四秒停顿的日文 `auto`、66.7 秒且 45% 音量的印度英语技术长文、hostile 音频、取消清理、300 秒双运行预算，以及真实 Media→Speech 文件 Artifact 组合；引擎报告 7,200,001ms 会在 Artifact 创建前拒绝。专名仍可能误识别，`initial_prompt` 不提供词典保证；真实音乐、混合语种/拉丁文字、真实编码两小时边界及过量输出仍待补。最终 `.app` 动态 Gate 已保留给 self-hosted Mac，但真实签名/公证 runner 尚未运行，因此不得宣称为已发布能力。详见 `docs/plugins/phase6-speech-research.md`。
 
@@ -254,6 +256,7 @@ make package-runtime
 ```
 
 构建结果位于 `runtime/dist/shejane-runtime/`。其中包含平台相关的原生依赖，不能用于其他操作系统或 CPU 架构。
+主 Runtime 的 PyInstaller 冻结使用隔离的 `package` 依赖组；测试、lint、类型检查依赖不能进入分析环境。ONNX Runtime 只收集 Magika 启动所需的推理 C API、原生库和许可证，不收集 backend、quantization、tools、transformers 或 SymPy。
 
 ## 集中诊断
 
@@ -301,6 +304,8 @@ macOS 正式分发必须配置以下全部 GitHub Actions secrets：
 全部凭据存在时，发布 job 会验证 `.app` 与 DMG 的 staple ticket、Gatekeeper、Hardened Runtime、secure timestamp、Developer ID、VM launcher entitlement 和包内 manifest 身份。全部凭据缺失时仍会生成 ad-hoc 签名、未公证的预览 DMG/ZIP，并验证包内 Runtime、VM 资产静态完整性、launcher 自检和 Runtime 生命周期 smoke；这种产物会触发 Gatekeeper 警告，且不构成 `release_ci_gate` 的发布证据。macOS 原地自动更新同样要求 Developer ID 签名；预览包只能在设置页检查失败后转到 GitHub Releases 手动安装。必须启动 VM 的功能 Gate 需要另在支持虚拟化的 physical/self-hosted Mac 上运行，凭据只配置一部分会 fail closed。配置依据见 [electron-builder macOS signing](https://www.electron.build/mac/)、[electron-builder auto update](https://www.electron.build/docs/features/auto-update/)、[electron-builder notarization](https://www.electron.build/docs/notarization/) 与 [Apple notarization requirements](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)。
 
 手动运行 Client 发布工作流只生成 GitHub Actions 产物。推送 `client-vX.Y.Z` 标签才会创建 GitHub Release。
+
+Client 构建只把 Electron Main 运行时依赖放进 `app.asar`，Renderer/Vite 依赖属于开发依赖；Electron locale 只保留英文、简体中文和繁体中文。DMG、ZIP 和 Windows EXE 必须各自带同名 `.blockmap`，发布工作流缺少任一 sidecar 都会失败，并把 blockmap 与 `latest*.yml` 一起上传。客户端在可用时执行差分更新，旧包或 sidecar 不可用时由 `electron-updater` 回退到完整下载。
 
 Client 发布会把锁定的 macOS/Windows 固定能力、RapidOCR Runtime Asset、Managed Worker guest rootfs 和 VM 上游输入按平台与源码摘要缓存在 GitHub Actions。相关构建文件合入 `main` 时会预热这些缓存；tag 发布只读取 `main` 的精确缓存，命中后仍检查插件、Runtime Asset 和 rootfs 的锁定身份，未命中则执行原来的可复现构建。缓存不会包含最终 DMG/EXE、签名证书或 keychain，也不会替代安装包 smoke 和签名验证。
 

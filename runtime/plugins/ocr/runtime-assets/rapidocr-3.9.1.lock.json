@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "asset_id": "org.rapidocr.runtime",
-  "asset_version": "3.9.1+ppocrv6-medium.1",
+  "asset_version": "3.9.1+ppocrv6-small.1",
   "python_version": "3.12",
   "platform": "darwin/arm64",
   "created_at": "2026-07-16T00:00:00Z",
@@ -44,8 +44,8 @@
     {"filename":"urllib3-2.7.0-py3-none-any.whl","size_bytes":131087,"sha256":"9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897"}
   ],
   "models": [
-    {"filename":"PP-OCRv6_det_medium.onnx","size_bytes":62119454,"sha256":"92078b7355007ccfffcd4c8cd441a3afd4538904d06881b29a155e1e679907c2","source_url":"https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.1/onnx/PP-OCRv6/det/PP-OCRv6_det_medium.onnx"},
-    {"filename":"PP-OCRv6_rec_medium.onnx","size_bytes":76629984,"sha256":"eef444829dbbe18d7fea59a3f6eb75647518d2b3a9568d27c92e42940204894b","source_url":"https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.1/onnx/PP-OCRv6/rec/PP-OCRv6_rec_medium.onnx"},
+    {"filename":"PP-OCRv6_det_small.onnx","size_bytes":9929594,"sha256":"090f04abcd9d9a7498bc4ebf677e4cb9bdce1fe4197ddb7e529f1ef44e1ff94f","source_url":"https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.1/onnx/PP-OCRv6/det/PP-OCRv6_det_small.onnx"},
+    {"filename":"PP-OCRv6_rec_small.onnx","size_bytes":21234383,"sha256":"6f327246b50388f3c176ae304bd95767ea6dc0c9ae92153ef8cbe210b3c14884","source_url":"https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.1/onnx/PP-OCRv6/rec/PP-OCRv6_rec_small.onnx"},
     {"filename":"ch_ppocr_mobile_v2.0_cls_mobile.onnx","size_bytes":585532,"sha256":"e47acedf663230f8863ff1ab0e64dd2d82b838fceb5957146dab185a89d6215c","source_url":"https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.1/onnx/PP-OCRv4/cls/ch_ppocr_mobile_v2.0_cls_mobile.onnx"}
   ]
 }

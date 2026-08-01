@@ -37,7 +37,7 @@ def test_windows_amd64_lock_freezes_native_rapidocr_dependencies() -> None:
     lock = json.loads(LOCK_PATH.read_text(encoding="utf-8"))
 
     assert lock["asset_id"] == "org.rapidocr.runtime"
-    assert lock["asset_version"] == "3.9.1+ppocrv6-medium.1"
+    assert lock["asset_version"] == "3.9.1+ppocrv6-small.1"
     assert lock["platform"] == "windows/amd64"
     assert lock["build_tools"] == {
         "python": "3.12.10",
@@ -88,7 +88,7 @@ def test_windows_locked_package_names_resolve_to_canonical_pypi_projects() -> No
 def test_frozen_windows_runtime_discovers_fixed_ocr_artifacts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    plugin = tmp_path / "builtin-plugins" / "ocr-0.1.1-windows-amd64.shejane-plugin"
+    plugin = tmp_path / "builtin-plugins" / "ocr-0.1.2-windows-amd64.shejane-plugin"
     asset = (
         tmp_path / "builtin-assets" / "rapidocr-runtime-3.9.1-windows-amd64.shejane-runtime-asset"
     )

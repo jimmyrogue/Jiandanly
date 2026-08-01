@@ -18,7 +18,7 @@
       "properties": {
         "name": {"const": "RapidOCR"},
         "version": {"const": "3.9.1"},
-        "model": {"const": "PP-OCRv6-medium"},
+        "model": {"const": "PP-OCRv6-small"},
         "provider": {"const": "CPUExecutionProvider"}
       }
     },

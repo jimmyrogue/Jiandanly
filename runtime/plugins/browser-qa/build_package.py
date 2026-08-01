@@ -39,7 +39,7 @@ def main() -> None:
     parser.add_argument("--runtime-asset-digest", required=True)
     parser.add_argument("--playwright", type=Path, required=True)
     parser.add_argument("--playwright-core", type=Path, required=True)
-    parser.add_argument("--version", default="0.1.1")
+    parser.add_argument("--version", default="0.1.2")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", args.version):

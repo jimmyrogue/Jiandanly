@@ -18,20 +18,16 @@ New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $browsersRoot = Join-Path $workRoot "ms-playwright"
 $firstAsset = Join-Path $workRoot "browser-qa-runtime-windows-amd64-a.shejane-runtime-asset"
 $secondAsset = Join-Path $workRoot "browser-qa-runtime-windows-amd64-b.shejane-runtime-asset"
-$plugin = Join-Path $workRoot "browser-qa-0.1.1-windows-amd64.shejane-plugin"
+$plugin = Join-Path $workRoot "browser-qa-0.1.2-windows-amd64.shejane-plugin"
 
 Push-Location $repoRoot
 try {
     $env:PLAYWRIGHT_BROWSERS_PATH = $browsersRoot
-    pnpm --filter @shejane/client exec playwright install chromium
+    pnpm --filter @shejane/client exec playwright install --no-shell chromium
 
     $browser = Join-Path $browsersRoot "chromium-1228"
-    $headlessShell = Join-Path $browsersRoot "chromium_headless_shell-1228"
     if (-not (Test-Path $browser -PathType Container)) {
         throw "Playwright 1.61.1 Chromium 1228 was not installed"
-    }
-    if (-not (Test-Path $headlessShell -PathType Container)) {
-        throw "Playwright 1.61.1 Chromium headless shell 1228 was not installed"
     }
 
     Push-Location (Join-Path $repoRoot "client")
@@ -60,7 +56,6 @@ try {
         python runtime/plugins/browser-qa/build_runtime_asset.py `
             --platform windows/amd64 `
             --browser $browser `
-            --headless-shell $headlessShell `
             --output $asset
     }
     $firstHash = (Get-FileHash -Algorithm SHA256 $firstAsset).Hash
@@ -103,7 +98,7 @@ try {
             "browser-qa-runtime-1.61.1-windows-amd64.shejane-runtime-asset"
     )
     Copy-Item $plugin (
-        Join-Path $OutputDirectory "browser-qa-0.1.1-windows-amd64.shejane-plugin"
+        Join-Path $OutputDirectory "browser-qa-0.1.2-windows-amd64.shejane-plugin"
     )
 }
 finally {

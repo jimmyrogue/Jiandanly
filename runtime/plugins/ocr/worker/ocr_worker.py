@@ -19,7 +19,7 @@ ASSET_ID = "org.rapidocr.runtime"
 ENGINE_IDENTITY = {
     "name": "RapidOCR",
     "version": "3.9.1",
-    "model": "PP-OCRv6-medium",
+    "model": "PP-OCRv6-small",
     "provider": "CPUExecutionProvider",
 }
 SUPPORTED_MEDIA_TYPES = {

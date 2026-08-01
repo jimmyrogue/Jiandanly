@@ -57,14 +57,6 @@ def font(size: int, *candidates: str) -> ImageFont.FreeTypeFont:
     raise AssertionError(f"required test font is unavailable: {candidates}")
 
 
-def optional_font(size: int, *candidates: str) -> ImageFont.FreeTypeFont | None:
-    for candidate in candidates:
-        path = Path(candidate)
-        if path.is_file():
-            return ImageFont.truetype(str(path), size)
-    return None
-
-
 def install_asset(data_dir: Path, archive: Path) -> RuntimeAssetHandle:
     return RuntimeAssetStore(data_dir).install(
         archive,
@@ -98,7 +90,7 @@ def invocation(source: Path) -> dict[str, object]:
         "operation_id": "run_01:ocr.recognize_images:real-asset",
         "action": {
             "plugin_id": "org.shejane.ocr",
-            "plugin_version": "0.1.1",
+            "plugin_version": "0.1.2",
             "plugin_digest": "sha256:" + "b" * 64,
             "action_id": "ocr.recognize_images",
         },
@@ -158,13 +150,25 @@ def multi_invocation(sources: list[Path]) -> dict[str, object]:
 
 
 def write_quality_images(base: Path, rotated: Path) -> tuple[str, ...]:
-    cjk_font = optional_font(
-        64,
+    simplified_font = font(
+        52,
         "/System/Library/Fonts/Hiragino Sans GB.ttc",
         "C:/Windows/Fonts/msyh.ttc",
         "C:/Windows/Fonts/msyhbd.ttc",
         "C:/Windows/Fonts/simhei.ttf",
         "C:/Windows/Fonts/simsun.ttc",
+    )
+    traditional_font = font(
+        52,
+        "/System/Library/Fonts/Hiragino Sans GB.ttc",
+        "C:/Windows/Fonts/msjh.ttc",
+        "C:/Windows/Fonts/mingliu.ttc",
+    )
+    japanese_font = font(
+        52,
+        "/System/Library/Fonts/Hiragino Sans GB.ttc",
+        "C:/Windows/Fonts/YuGothM.ttc",
+        "C:/Windows/Fonts/msgothic.ttc",
     )
     latin_font = font(
         56,
@@ -179,33 +183,32 @@ def write_quality_images(base: Path, rotated: Path) -> tuple[str, ...]:
         "/System/Library/Fonts/Supplemental/Arial.ttf",
         "C:/Windows/Fonts/arial.ttf",
     )
-    image = Image.new("RGB", (1400, 800), "white")
+    image = Image.new("RGB", (1400, 1080), "white")
     drawing = ImageDraw.Draw(image)
-    if cjk_font is None:
-        heading = "SHEJANE OCR TEST 2026"
-        heading_font = latin_font
-        heading_marker = "shejaneocrtest2026"
-    else:
-        heading = "石间 OCR 测试 2026"
-        heading_font = cjk_font
-        heading_marker = "石间ocr测试2026"
-    drawing.text((40, 40), heading, font=heading_font, fill="black")
-    drawing.text((40, 170), "LOW CONTRAST TEXT", font=latin_font, fill=(145, 145, 145))
-    drawing.text((40, 320), "LEFT COLUMN", font=latin_font, fill="black")
-    drawing.text((760, 320), "RIGHT COLUMN", font=latin_font, fill="black")
-    drawing.text((40, 500), "Handwriting Sample", font=handwriting_font, fill="black")
+    drawing.text((40, 30), "简体中文测试", font=simplified_font, fill="black")
+    drawing.text((40, 130), "繁體中文測試", font=traditional_font, fill="black")
+    drawing.text((40, 230), "日本語テスト", font=japanese_font, fill="black")
+    drawing.text((40, 350), "SHEJANE OCR TEST 2026", font=latin_font, fill="black")
+    drawing.text((40, 480), "LOW CONTRAST TEXT", font=latin_font, fill=(145, 145, 145))
+    drawing.text((40, 630), "LEFT COLUMN", font=latin_font, fill="black")
+    drawing.text((760, 630), "RIGHT COLUMN", font=latin_font, fill="black")
+    drawing.text((40, 810), "Handwriting Sample", font=handwriting_font, fill="black")
     image.save(base, format="PNG", optimize=False)
 
     rotated_image = Image.new("RGB", (1000, 220), "white")
     ImageDraw.Draw(rotated_image).text((40, 65), "ROTATED 180", font=latin_font, fill="black")
     rotated_image.rotate(180).save(rotated, format="PNG", optimize=False)
     return (
-        heading_marker,
+        "简体中文测试",
+        "繁體中文測試",
+        "日本語テスト",
+        "shejaneocrtest2026",
         "lowcontrasttext",
         "leftcolumn",
         "rightcolumn",
         "handwritingsample",
-        "rotated180",
+        "rotated",
+        "180",
     )
 
 
@@ -229,7 +232,8 @@ async def test_real_rapidocr_asset_recognizes_text_deterministically(tmp_path: P
             invocation(source), input_root=input_root, output_root=output_root
         )
         assert result["status"] == "succeeded", result.get("error", result)
-        assert "SheJane OCR 2026" in result["output"]["images"][0]["full_text"]
+        recognized = "".join(result["output"]["images"][0]["full_text"].split()).casefold()
+        assert "shejaneocr2026" in recognized
         results.append(result["output"])
         artifact_digests.append(
             (

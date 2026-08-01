@@ -27,6 +27,7 @@ async function ensurePage() {
   if (page && !page.isClosed()) return page;
   const proxy = process.env.SHEJANE_BROWSER_QA_PROXY;
   context = await chromium.launchPersistentContext(profile!, {
+    channel: "chromium",
     headless: process.env.SHEJANE_BROWSER_QA_HEADLESS !== "0",
     proxy: proxy ? { server: proxy, bypass: "<-loopback>" } : undefined,
     viewport: { width: 1280, height: 900 },

@@ -75,7 +75,7 @@ for index, item in enumerate(request["inputs"], start=1):
     })
 engine_name = "Unexpected" if request["inputs"][0]["id"] == "bad-engine" else "RapidOCR"
 response = {
-    "engine": {"name": engine_name, "version": "3.9.1", "model": "PP-OCRv6-medium", "provider": "CPUExecutionProvider"},
+    "engine": {"name": engine_name, "version": "3.9.1", "model": "PP-OCRv6-small", "provider": "CPUExecutionProvider"},
     "images": images,
 }
 pathlib.Path(sys.argv[2]).write_text(json.dumps(response), encoding="utf-8")
@@ -85,7 +85,7 @@ pathlib.Path(sys.argv[2]).write_text(json.dumps(response), encoding="utf-8")
     sbom.write_text("{}", encoding="utf-8")
     return RuntimeAssetHandle(
         asset_id="org.rapidocr.runtime",
-        version="3.9.1+ppocrv6-medium.1",
+        version="3.9.1+ppocrv6-small.1",
         platform="darwin/arm64",
         digest="sha256:" + "a" * 64,
         root=root,
@@ -108,7 +108,7 @@ def test_windows_ocr_executor_selects_native_worker_entrypoint(tmp_path: Path) -
     sbom.write_text("{}", encoding="utf-8")
     asset = RuntimeAssetHandle(
         asset_id="org.rapidocr.runtime",
-        version="3.9.1+ppocrv6-medium.1",
+        version="3.9.1+ppocrv6-small.1",
         platform="windows/amd64",
         digest="sha256:" + "a" * 64,
         root=asset_root,
@@ -145,7 +145,7 @@ def invocation(
         "operation_id": "run_01:ocr.recognize_images:001",
         "action": {
             "plugin_id": "org.shejane.ocr",
-            "plugin_version": "0.1.1",
+            "plugin_version": "0.1.2",
             "plugin_digest": "sha256:" + "b" * 64,
             "action_id": "ocr.recognize_images",
         },
@@ -200,7 +200,7 @@ def action_descriptor(tmp_path: Path, asset: RuntimeAssetHandle) -> PluginAction
     worker.chmod(0o600)
     return PluginActionDescriptor(
         plugin_id="org.shejane.ocr",
-        plugin_version="0.1.1",
+        plugin_version="0.1.2",
         plugin_digest="sha256:" + "b" * 64,
         action_id=action["id"],
         tool_name="plugin.org.shejane.ocr.ocr.recognize_images",
@@ -290,7 +290,7 @@ async def test_ocr_runtime_tool_e2e_persists_text_and_json_artifacts(tmp_path: P
     assert result["provenance"]["runtime_assets"] == [
         {
             "id": "org.rapidocr.runtime",
-            "version": "3.9.1+ppocrv6-medium.1",
+            "version": "3.9.1+ppocrv6-small.1",
             "digest": "sha256:" + "a" * 64,
             "platform": "darwin/arm64",
         }
@@ -316,7 +316,7 @@ async def test_ocr_worker_preserves_batch_order_filters_and_writes_artifacts(
     assert result["output"]["engine"] == {
         "name": "RapidOCR",
         "version": "3.9.1",
-        "model": "PP-OCRv6-medium",
+        "model": "PP-OCRv6-small",
         "provider": "CPUExecutionProvider",
     }
     assert [image["input_id"] for image in result["output"]["images"]] == [

@@ -15,7 +15,7 @@
       "runtime_assets": [
         {
           "id": "org.rapidocr.runtime",
-          "version": "3.9.1+ppocrv6-medium.1",
+          "version": "3.9.1+ppocrv6-small.1",
           "digest": "__RUNTIME_ASSET_DIGEST__"
         }
       ]

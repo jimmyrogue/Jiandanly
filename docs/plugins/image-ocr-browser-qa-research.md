@@ -9,7 +9,7 @@
 | 插件 | 用户价值 | 推荐实现 | 当前基础 | 判断 |
 |---|---|---|---|---|
 | 图片理解 | 理解照片、截图、图表和界面并回答问题 | 产品化现有 `vision.analyze_images` Cloud Worker，绑定一个明确支持图片输入的模型 | Cloud 候选已通过 fake-provider VM bridge；本地小模型质量不合格 | **保留 Cloud，拒绝当前 Local** |
-| OCR | 准确提取文字、置信度和文字位置 | 产品化现有 RapidOCR 3.9.1 + PP-OCRv6 medium + ONNX Runtime Worker | Linux/arm64 候选已通过多语言、布局、旋转、取消和确定性 Gate | **最接近发布** |
+| OCR | 准确提取文字、置信度和文字位置 | 产品化现有 RapidOCR 3.9.1 + PP-OCRv6 small + ONNX Runtime Worker | macOS arm64 已通过多语言、布局、旋转和确定性 Gate | **最接近发布** |
 | Browser QA | 打开网页、交互、检查控制台/网络并验证结果 | 新建受限的一方 Browser Adapter，底层使用固定版本 Playwright + Chromium | 旧 `browser.task` 从未接入模型，且架构不适合继续使用 | **需要重新实现** |
 
 它们与 Computer Use 的边界也很清楚：Browser QA 优先操作有 DOM 和可访问性树的网页；Computer Use 只处理桌面应用、系统界面和网页能力覆盖不到的兜底场景。
@@ -61,11 +61,11 @@ OpenAI 与 Anthropic 当前官方接口都支持多图片理解，但也会按�
 
 - RapidOCR `3.9.1`
 - ONNX Runtime `1.27.0`
-- PP-OCRv6 medium 检测与识别
+- PP-OCRv6 small 检测与识别
 - PP-OCRv4 mobile 方向分类
 - CPU 单线程、无网络、无首次下载、无平台 OCR 或视觉模型回退
 
-PP-OCRv6 medium/small 官方支持简体中文、繁体中文、英语、日语和 46 种拉丁文字语言。SheJane 已把引擎、模型和执行参数冻结成 Runtime Asset，因此相同输入能得到可复现输出；这比 macOS 用 Apple Vision、Windows/Linux 再换另一套引擎更符合产品的一致性要求。
+PP-OCRv6 small 官方支持简体中文、繁体中文、英语、日语和 46 种拉丁文字语言。SheJane 已把引擎、模型和执行参数冻结成 Runtime Asset，因此相同输入能得到可复现输出；这比 macOS 用 Apple Vision、Windows/Linux 再换另一套引擎更符合产品的一致性要求。
 
 `ocr.recognize_images` 继续接受最多 16 张显式选择的图片，返回：
 
@@ -78,7 +78,7 @@ PDF 不在 OCR 中再实现一遍：先由 PDF 插件渲染选中页面为同一
 
 ### 仍需关闭的发布门槛
 
-现有 Linux/arm64 候选已经通过中文/英文、低对比度、多栏、手写风格、180° 旋转、敌意图片、取消、无部分产物和确定性回放。正式发布前补齐：
+macOS arm64 固定资产已经通过简体中文、繁体中文、日文、英文、低对比度、多栏、手写风格、180° 旋转、敌意图片、无部分产物和确定性回放。正式发布前补齐：
 
 - 真实签名/公证后的应用内安装证据
 - macOS arm64 与 Windows/Linux amd64 的固定资产 Gate

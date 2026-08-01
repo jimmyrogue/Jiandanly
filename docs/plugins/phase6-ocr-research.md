@@ -9,7 +9,7 @@ OCR is a deterministic Managed Worker plugin backed by a platform-specific, cont
 ```text
 RapidOCR   3.9.1
 ONNX Runtime 1.27.0
-model      PP-OCRv6 medium detection + recognition
+model      PP-OCRv6 small detection + recognition
 orientation PP-OCRv4 mobile classifier, enabled with exact frozen model
 provider   CPUExecutionProvider only
 threads    intra-op 1, inter-op 1
@@ -33,16 +33,16 @@ SheJane therefore treats OCR as an explicit versioned Action rather than assumin
 
 ### Selected: PP-OCRv6 via RapidOCR and ONNX Runtime
 
-PaddleOCR 3.7 introduced PP-OCRv6 in June 2026. Its medium tier reports higher detection and recognition accuracy than PP-OCRv5, one unified model for Chinese, English, Japanese and 46 Latin-script languages, and materially faster CPU inference: <https://github.com/PaddlePaddle/PaddleOCR>. RapidOCR 3.9.1 provides an Apache-2.0 ONNX Runtime implementation and model resolver for PP-OCRv6: <https://rapidai.github.io/RapidOCRDocs/latest/model_list/>. ONNX Runtime's CPU package supports Arm CPUs and macOS as well as the other desktop targets: <https://onnxruntime.ai/docs/get-started/with-python.html>.
+PaddleOCR 3.7 introduced PP-OCRv6 in June 2026. Its unified recognition model covers Chinese, English, Japanese and 46 Latin-script languages: <https://github.com/PaddlePaddle/PaddleOCR>. RapidOCR 3.9.1 provides an Apache-2.0 ONNX Runtime implementation and model resolver for PP-OCRv6: <https://rapidai.github.io/RapidOCRDocs/latest/model_list/>. ONNX Runtime's CPU package supports Arm CPUs and macOS as well as the other desktop targets: <https://onnxruntime.ai/docs/get-started/with-python.html>.
 
-The current Apple Silicon capability spike used the exact versions above and recognized `SheJane OCR 2026` with confidence `0.99998`. The actual RapidOCR 3.9.1 resolver rejected the documented `multi + medium` detection combination, while `ch + medium` succeeded; the production configuration therefore freezes `ch` and never exposes arbitrary engine/model switches.
+The production Apple Silicon gate recognizes simplified Chinese, traditional Chinese, Japanese, English, low-contrast, multi-column, handwriting-style and rotated samples. The production configuration freezes `ch + small` and never exposes arbitrary engine/model switches.
 
 The three current model-byte locks are:
 
 | File | Bytes | SHA-256 |
 | --- | ---: | --- |
-| `PP-OCRv6_det_medium.onnx` | 62,119,454 | `92078b7355007ccfffcd4c8cd441a3afd4538904d06881b29a155e1e679907c2` |
-| `PP-OCRv6_rec_medium.onnx` | 76,629,984 | `eef444829dbbe18d7fea59a3f6eb75647518d2b3a9568d27c92e42940204894b` |
+| `PP-OCRv6_det_small.onnx` | 9,929,594 | `090f04abcd9d9a7498bc4ebf677e4cb9bdce1fe4197ddb7e529f1ef44e1ff94f` |
+| `PP-OCRv6_rec_small.onnx` | 21,234,383 | `6f327246b50388f3c176ae304bd95767ea6dc0c9ae92153ef8cbe210b3c14884` |
 | `ch_ppocr_mobile_v2.0_cls_mobile.onnx` | 585,532 | `e47acedf663230f8863ff1ab0e64dd2d82b838fceb5957146dab185a89d6215c` |
 
 These bytes came from RapidOCR's versioned ModelScope `v3.9.1` paths. The release builder must download them ahead of time, verify size and SHA-256, bundle them locally, and pass exact `model_path` values. Runtime execution may not call ModelScope, Hugging Face, Paddle model servers, or any package index.
@@ -88,9 +88,9 @@ The OCR Action, strict input/output schemas, Managed Worker, command contributio
 The `darwin/arm64` Runtime Asset reference builder verifies every package archive and model by filename, size and SHA-256, installs wheels with locked uv in offline mode, freezes a PyInstaller onedir engine, removes only non-runtime wheel `RECORD` entries that contain random build paths, rejects Tesseract/Leptonica, signs and checks every Mach-O closure member, and emits licenses, SBOM and build provenance. Two clean builds were byte-for-byte identical:
 
 ```text
-archive SHA-256   c78e40c8a35ae4fa1a66ce7848acc970eccc42d1cb06ebd6ad3f3ca7130e4ffa
-canonical digest  sha256:4402f2874a8d97be9fcc776804dff7791e19760e5c62b190b2fddb3f53a6e6da
-archive size      202 MiB
+archive SHA-256   9fc292f7b06b3dbc6b5748d999426030b4508deed257bc588e687744b9cefbba
+canonical digest  sha256:253253d7a05718c8ff6889ea93bd2d00ef74588358f8e1690605169389501f6e
+archive size      103,914,391 bytes
 ```
 
 Runtime installed that final Darwin archive and the real Managed Worker recognized

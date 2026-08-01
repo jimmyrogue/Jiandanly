@@ -25,7 +25,7 @@ def test_rapidocr_asset_lock_freezes_complete_engine_and_models() -> None:
     lock = json.loads(LOCK_PATH.read_text(encoding="utf-8"))
 
     assert lock["asset_id"] == "org.rapidocr.runtime"
-    assert lock["asset_version"] == "3.9.1+ppocrv6-medium.1"
+    assert lock["asset_version"] == "3.9.1+ppocrv6-small.1"
     assert lock["python_version"] == "3.12"
     assert lock["platform"] == "darwin/arm64"
     assert lock["build_tools"] == {
@@ -45,8 +45,8 @@ def test_rapidocr_asset_lock_freezes_complete_engine_and_models() -> None:
         "libleptonica",
     ]
     assert {item["filename"] for item in lock["models"]} == {
-        "PP-OCRv6_det_medium.onnx",
-        "PP-OCRv6_rec_medium.onnx",
+        "PP-OCRv6_det_small.onnx",
+        "PP-OCRv6_rec_small.onnx",
         "ch_ppocr_mobile_v2.0_cls_mobile.onnx",
     }
     for item in [*lock["packages"], *lock["models"]]:

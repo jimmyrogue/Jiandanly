@@ -19,7 +19,7 @@ from shejane_runtime.plugins.runtime_assets import RuntimeAssetHandle
 def runtime_asset(payload: Path) -> RuntimeAssetHandle:
     return RuntimeAssetHandle(
         asset_id="org.shejane.browser-qa.runtime",
-        version="1.61.1+chromium1228.1",
+        version="1.61.1+chromium1228.2",
         platform="darwin/arm64",
         digest="sha256:" + "a" * 64,
         root=payload.parent,

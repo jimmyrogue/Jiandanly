@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "asset_id": "org.rapidocr.runtime",
-  "asset_version": "3.9.1+ppocrv6-medium.1",
+  "asset_version": "3.9.1+ppocrv6-small.1",
   "platform": "windows/amd64",
   "python_version": "3.12",
   "build_tools": {
