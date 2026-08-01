@@ -478,6 +478,11 @@ def _executor_for_action(
             "executor_unavailable",
             "Managed Worker release gate is closed: " + ", ".join(gate.blockers),
         )
+    if platform and platform.startswith("darwin/") and vm_resources is None:
+        raise PluginActionError(
+            "executor_unavailable",
+            "macOS Managed Worker execution requires packaged VM resources",
+        )
     if vm_resources is not None:
         return ManagedWorkerActionExecutor(
             (str(action.entrypoint),),

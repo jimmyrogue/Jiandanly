@@ -301,20 +301,20 @@ macOS 正式分发必须配置以下全部 GitHub Actions secrets：
 - `APPLE_API_KEY`：App Store Connect API `.p8` 的 base64；
 - `APPLE_API_KEY_ID`、`APPLE_API_ISSUER`、`APPLE_TEAM_ID`。
 
-全部凭据存在时，发布 job 会验证 `.app` 与 DMG 的 staple ticket、Gatekeeper、Hardened Runtime、secure timestamp、Developer ID、VM launcher entitlement 和包内 manifest 身份。全部凭据缺失时仍会生成 ad-hoc 签名、未公证的预览 DMG/ZIP，并验证包内 Runtime、VM 资产静态完整性、launcher 自检和 Runtime 生命周期 smoke；这种产物会触发 Gatekeeper 警告，且不构成 `release_ci_gate` 的发布证据。macOS 原地自动更新同样要求 Developer ID 签名；预览包只能在设置页检查失败后转到 GitHub Releases 手动安装。必须启动 VM 的功能 Gate 需要另在支持虚拟化的 physical/self-hosted Mac 上运行，凭据只配置一部分会 fail closed。配置依据见 [electron-builder macOS signing](https://www.electron.build/mac/)、[electron-builder auto update](https://www.electron.build/docs/features/auto-update/)、[electron-builder notarization](https://www.electron.build/docs/notarization/) 与 [Apple notarization requirements](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)。
+全部凭据存在时，发布 job 会验证 `.app` 与 DMG 的 staple ticket、Gatekeeper、Hardened Runtime、secure timestamp 和 Developer ID。全部凭据缺失时仍会生成 ad-hoc 签名、未公证的预览 DMG/ZIP，并验证包内 Runtime 生命周期；两条路径都必须确认 `.app` 不含 `sandbox/vm-assets`。预览产物会触发 Gatekeeper 警告，且不构成 `release_ci_gate` 的发布证据。macOS 原地自动更新同样要求 Developer ID 签名；预览包只能在设置页检查失败后转到 GitHub Releases 手动安装。凭据只配置一部分会 fail closed。配置依据见 [electron-builder macOS signing](https://www.electron.build/mac/)、[electron-builder auto update](https://www.electron.build/docs/features/auto-update/)、[electron-builder notarization](https://www.electron.build/docs/notarization/) 与 [Apple notarization requirements](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)。
 
 手动运行 Client 发布工作流只生成 GitHub Actions 产物。推送 `client-vX.Y.Z` 标签才会创建 GitHub Release。
 
 Client 构建只把 Electron Main 运行时依赖放进 `app.asar`，Renderer/Vite 依赖属于开发依赖；Electron locale 只保留英文、简体中文和繁体中文。DMG、ZIP 和 Windows EXE 必须各自带同名 `.blockmap`，发布工作流缺少任一 sidecar 都会失败，并把 blockmap 与 `latest*.yml` 一起上传。客户端在可用时执行差分更新，旧包或 sidecar 不可用时由 `electron-updater` 回退到完整下载。
 
-Client 发布会把锁定的 macOS/Windows 固定能力、RapidOCR Runtime Asset、Managed Worker guest rootfs 和 VM 上游输入按平台与源码摘要缓存在 GitHub Actions。相关构建文件合入 `main` 时会预热这些缓存；tag 发布只读取 `main` 的精确缓存，命中后仍检查插件、Runtime Asset 和 rootfs 的锁定身份，未命中则执行原来的可复现构建。缓存不会包含最终 DMG/EXE、签名证书或 keychain，也不会替代安装包 smoke 和签名验证。
+Client 发布会把锁定的 macOS/Windows 固定能力和 RapidOCR Runtime Asset 按平台与源码摘要缓存在 GitHub Actions。相关构建文件合入 `main` 时会预热这些缓存；tag 发布只读取 `main` 的精确缓存，命中后仍检查插件和 Runtime Asset 身份，未命中则执行原来的可复现构建。缓存不会包含最终 DMG/EXE、签名证书或 keychain，也不会替代安装包 smoke 和签名验证。
 
-普通 tag 发布不会构建只供未来物理 Mac 动态 VM Gate 使用的 Linux arm64 Worker/Runtime Asset。需要复核这些候选资产时，手动运行 `Release Client` 并开启 `extended_asset_verification`；这项开关只恢复资产构建和包检查，不把 GitHub 托管 Mac 误当作支持嵌套虚拟化的发布 Gate。
+普通 tag 发布不会构建可选的 Linux arm64 Worker/Runtime Asset。需要复核这些候选资产时，手动运行 `Release Client` 并开启 `extended_asset_verification`；这项开关只构建并检查资产，不会构建 VM、执行 Managed Worker，或改变 Registry Gate。
 
 正式 Client 安装包必须：
 
 - 从同一次提交构建并内置对应平台和架构的 Runtime；
-- 固定并内置 Managed Worker sandbox launcher，且在该原生安装包上通过 descendant conformance；
+- 固定并内置主 Agent `execute` 使用的 SRT launcher；Managed Worker packaged backend 缺失时保持关闭；
 - 只停止 Electron Main 自己启动的 Runtime，不停止外部 Runtime。
 
 ## 验证

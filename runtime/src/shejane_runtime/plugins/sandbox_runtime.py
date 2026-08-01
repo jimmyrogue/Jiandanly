@@ -56,10 +56,6 @@ def managed_worker_release_gate(target_platform: str) -> ManagedWorkerReleaseGat
                 "invocation_private_noexec_tmp_mount",
                 "launcher_crash_cleanup",
                 "nonprivileged_guest_worker_action_protocol",
-                "packaged_desktop_runtime_entry",
-                "packaged_launcher_entitlement",
-                "packaged_launcher_vm_transport",
-                "packaged_vm_asset_set",
                 "production_asset_manifest_preflight",
                 "read_only_input_mount",
                 "read_only_package_mount",
@@ -70,7 +66,7 @@ def managed_worker_release_gate(target_platform: str) -> ManagedWorkerReleaseGat
                 "vsock_artifact_extraction",
                 "worker_crash_vm_cleanup",
             ),
-            blockers=("release_ci_gate",),
+            blockers=("packaged_backend_absent", "release_ci_gate"),
         )
     if target_platform == "darwin/amd64":
         return ManagedWorkerReleaseGate(

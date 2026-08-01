@@ -198,5 +198,3 @@ def test_release_does_not_package_builtin_ocr_as_a_linux_worker() -> None:
 
     assert "ocr-0.1.0-" not in workflow
     assert "ocr-0.1.2-linux-arm64.shejane-plugin" not in workflow
-    assert "Build locked macOS Managed Worker VM assets" not in workflow
-    assert "Run Linux arm64 OCR production gate in packaged macOS VM" not in workflow

@@ -435,10 +435,6 @@ def test_managed_worker_release_gate_is_explicit_and_fail_closed() -> None:
         "invocation_private_noexec_tmp_mount",
         "launcher_crash_cleanup",
         "nonprivileged_guest_worker_action_protocol",
-        "packaged_desktop_runtime_entry",
-        "packaged_launcher_entitlement",
-        "packaged_launcher_vm_transport",
-        "packaged_vm_asset_set",
         "production_asset_manifest_preflight",
         "read_only_input_mount",
         "read_only_package_mount",
@@ -449,7 +445,7 @@ def test_managed_worker_release_gate_is_explicit_and_fail_closed() -> None:
         "vsock_artifact_extraction",
         "worker_crash_vm_cleanup",
     )
-    assert darwin.blockers == ("release_ci_gate",)
+    assert darwin.blockers == ("packaged_backend_absent", "release_ci_gate")
     assert darwin.enabled is False
 
     assert darwin_intel.adapter_id == "darwin_vf_linux_vm_v1"
@@ -510,6 +506,29 @@ def test_managed_worker_release_gate_rejects_unknown_platform() -> None:
 def test_default_managed_worker_executor_cannot_bypass_release_gate() -> None:
     with pytest.raises(PluginActionError, match="release gate is closed"):
         _executor_for_action(SimpleNamespace(execution_kind="managed_worker"))  # type: ignore[arg-type]
+
+
+def test_darwin_managed_worker_cannot_fall_back_to_srt_without_vm_resources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import shejane_runtime.plugins.tools as tools_module
+
+    action = SimpleNamespace(
+        execution_kind="managed_worker",
+        entrypoint=tmp_path / "package" / "worker",
+        package_root=tmp_path / "package",
+        runtime_assets=(),
+    )
+    monkeypatch.setattr(tools_module, "current_managed_worker_platform", lambda: "darwin/arm64")
+    monkeypatch.setattr(
+        tools_module,
+        "managed_worker_release_gate",
+        lambda _platform: SimpleNamespace(enabled=True, blockers=()),
+    )
+
+    with pytest.raises(PluginActionError, match="requires packaged VM resources"):
+        _executor_for_action(action)  # type: ignore[arg-type]
 
 
 def test_linux_managed_worker_uses_the_native_executor_after_its_gate(
