@@ -6,7 +6,6 @@ on:
     branches: [main]
     paths:
       - .github/workflows/release-client.yml
-      - client/vm-assets/**
       - pnpm-lock.yaml
       - runtime/plugins/browser-qa/**
       - runtime/plugins/computer-use/**
@@ -22,7 +21,7 @@ on:
   workflow_dispatch:
     inputs:
       extended_asset_verification:
-        description: Build the Linux arm64 assets used only by the deferred macOS VM gates
+        description: Build and inspect optional Linux arm64 Runtime Assets and Workers
         type: boolean
         default: false
 
@@ -999,93 +998,9 @@ jobs:
           path: ${{ runner.temp }}/vision-worker-linux-arm64.tar.gz
           if-no-files-found: error
 
-  guest-rootfs:
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@v4
-      - name: Restore Managed Worker guest rootfs
-        id: guest-rootfs-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: ${{ runner.temp }}/shejane-managed-worker-vm-inputs
-          key: release-asset-v2-darwin-arm64-vm-inputs-${{ hashFiles('client/vm-assets/darwin-arm64.lock.json', 'client/vm-assets/build_guest_rootfs.py') }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Fetch locked guest rootfs build inputs
-        if: steps.guest-rootfs-cache.outputs.cache-hit != 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          lock="client/vm-assets/darwin-arm64.lock.json"
-          inputs="${RUNNER_TEMP}/shejane-managed-worker-vm-inputs"
-          mkdir -p "${inputs}"
-          fetch() {
-            local query="$1"
-            local output="$2"
-            curl --fail --location --retry 5 --proto '=https' --proto-redir '=https' --tlsv1.2 \
-              "$(jq -r "${query}" "${lock}")" --output "${inputs}/${output}"
-          }
-          fetch '.e2fsprogs.source.url' e2fsprogs.tar.xz
-          fetch '.e2fsprogs.signature.url' e2fsprogs.tar.sign
-          fetch '.e2fsprogs.signing_key.url' e2fsprogs-signing-key.asc
-          fetch '.fedora.kernel_core.url' kernel-core.rpm
-          fetch '.fedora.kernel_modules_core.url' kernel-modules-core.rpm
-          fetch '.fedora.kernel_srpm.url' kernel.src.rpm
-          fetch '.fedora.keyring.url' fedora.gpg
-          mkdir "${inputs}/runtime-packages"
-          while IFS=$'\t' read -r url filename; do
-            curl --fail --location --retry 5 --proto '=https' --proto-redir '=https' --tlsv1.2 \
-              "${url}" --output "${inputs}/runtime-packages/${filename}"
-          done < <(jq -r '.rootfs.runtime_packages[] | [.url, .filename] | @tsv' "${lock}")
-      - name: Build reproducible Linux arm64 guest rootfs
-        if: steps.guest-rootfs-cache.outputs.cache-hit != 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          inputs="${RUNNER_TEMP}/shejane-managed-worker-vm-inputs"
-          python client/vm-assets/build_guest_rootfs.py \
-            --e2fs-source "${inputs}/e2fsprogs.tar.xz" \
-            --e2fs-signature "${inputs}/e2fsprogs.tar.sign" \
-            --e2fs-signing-key "${inputs}/e2fsprogs-signing-key.asc" \
-            --runtime-packages "${inputs}/runtime-packages" \
-            --output "${inputs}/guest-rootfs.ext4"
-          rm -rf "${inputs}/runtime-packages"
-      - name: Verify Managed Worker guest rootfs
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - "${RUNNER_TEMP}/shejane-managed-worker-vm-inputs/guest-rootfs.ext4" client/vm-assets/darwin-arm64.lock.json <<'PY'
-          import hashlib
-          import json
-          import sys
-          from pathlib import Path
-
-          image = Path(sys.argv[1])
-          expected = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))["rootfs"]["image"]
-          with image.open("rb") as source:
-              digest = hashlib.file_digest(source, "sha256").hexdigest()
-          if image.stat().st_size != expected["size"] or digest != expected["sha256"]:
-              raise SystemExit("cached guest rootfs does not match its locked identity")
-          PY
-      - name: Save Managed Worker guest rootfs
-        if: github.ref == 'refs/heads/main' && steps.guest-rootfs-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ runner.temp }}/shejane-managed-worker-vm-inputs
-          key: ${{ steps.guest-rootfs-cache.outputs.cache-primary-key }}
-      - uses: actions/upload-artifact@v4
-        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
-        with:
-          name: managed-worker-vm-inputs-arm64
-          path: ${{ runner.temp }}/shejane-managed-worker-vm-inputs
-          if-no-files-found: error
-          retention-days: 1
-
   build:
     needs:
       - agent-eval-gate
-      - guest-rootfs
       - linux-arm64-documents-worker
       - linux-arm64-ffmpeg-runtime
       - linux-arm64-media-worker
@@ -1115,12 +1030,10 @@ jobs:
             platform: macos
             arch: arm64
             target: mac
-            macos_vm_gates: false
           - runner: windows-latest
             platform: windows
             arch: x64
             target: win
-            macos_vm_gates: false
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -1218,14 +1131,6 @@ jobs:
           rm -f "${certificate}"
           echo "SHEJANE_CODESIGN_IDENTITY=${identity}" >> "${GITHUB_ENV}"
           echo "APPLE_TEAM_ID=${APPLE_TEAM_ID}" >> "${GITHUB_ENV}"
-      - name: Prepare unsupported macOS VM asset directory
-        if: matrix.platform == 'macos' && matrix.arch != 'arm64'
-        run: mkdir -p client/build/vm-assets-${{ matrix.arch }}
-      - uses: actions/download-artifact@v4
-        if: matrix.platform == 'macos' && matrix.arch == 'arm64'
-        with:
-          name: managed-worker-vm-inputs-arm64
-          path: ${{ runner.temp }}/shejane-managed-worker-vm-inputs
       - uses: actions/download-artifact@v4
         if: matrix.platform == 'macos' && matrix.arch == 'arm64' && inputs.extended_asset_verification == true
         with:
@@ -1459,25 +1364,6 @@ jobs:
           for package in "${packages}"/*.shejane-plugin; do
             uv run shejane-plugin inspect "${package}"
           done
-      - name: Build locked macOS Managed Worker VM assets
-        if: matrix.platform == 'macos' && matrix.arch == 'arm64'
-        working-directory: runtime
-        shell: bash
-        run: |
-          set -euo pipefail
-          brew install gnupg rpm zstd
-          inputs="${RUNNER_TEMP}/shejane-managed-worker-vm-inputs"
-          uv run python ../client/vm-assets/build_darwin.py \
-            --kernel-core "${inputs}/kernel-core.rpm" \
-            --kernel-modules-core "${inputs}/kernel-modules-core.rpm" \
-            --kernel-srpm "${inputs}/kernel.src.rpm" \
-            --fedora-keyring "${inputs}/fedora.gpg" \
-            --e2fs-source "${inputs}/e2fsprogs.tar.xz" \
-            --e2fs-signature "${inputs}/e2fsprogs.tar.sign" \
-            --e2fs-signing-key "${inputs}/e2fsprogs-signing-key.asc" \
-            --guest-rootfs "${inputs}/guest-rootfs.ext4" \
-            --codesign-identity "${SHEJANE_CODESIGN_IDENTITY}" \
-            --output ../client/build/vm-assets-arm64
       - name: Build Runtime with fixed capability packages
         shell: bash
         run: |
@@ -1559,28 +1445,7 @@ jobs:
           else
             codesign -d --verbose=4 "${app}" 2>&1 | grep -Fq 'Signature=adhoc'
           fi
-          if [[ "${{ matrix.arch }}" != "arm64" ]]; then
-            test ! -e "${app}/Contents/Resources/sandbox/vm-assets/manifest.json"
-            exit 0
-          fi
-          assets="${app}/Contents/Resources/sandbox/vm-assets"
-          helper="${assets}/shejane-managed-worker-vm"
-          diff -rq build/vm-assets-arm64 "${assets}"
-          for executable in "${helper}" "${assets}/mke2fs"; do
-            codesign --verify --strict --verbose=2 "${executable}"
-            if [[ "${SHEJANE_MACOS_SIGNING_ENABLED}" == "true" ]]; then
-              codesign -d --verbose=4 "${executable}" 2>&1 | grep -Eq 'flags=.*runtime'
-              codesign -d --verbose=4 "${executable}" 2>&1 \
-                | grep -Fq 'Authority=Developer ID Application:'
-              codesign -d --verbose=4 "${executable}" 2>&1 | grep -Fq 'Timestamp='
-            else
-              codesign -d --verbose=4 "${executable}" 2>&1 | grep -Fq 'Signature=adhoc'
-            fi
-          done
-          codesign -d --entitlements - "${helper}" 2>&1 \
-            | grep -Fq 'com.apple.security.virtualization'
-          "${helper}" --self-test
-          "${assets}/mke2fs" -V 2>&1 | grep -Fq 'mke2fs 1.47.2'
+          test ! -e "${app}/Contents/Resources/sandbox/vm-assets"
       - name: Run packaged Client Runtime smoke
         if: matrix.platform == 'macos' || matrix.platform == 'windows'
         shell: bash
@@ -1593,101 +1458,6 @@ jobs:
           fi
           test -n "${packaged}"
           node scripts/test-packaged-client-runtime.mjs "${packaged}"
-      - name: Run packaged macOS Managed Worker VM gate
-        if: matrix.macos_vm_gates == true
-        working-directory: runtime
-        shell: bash
-        run: |
-          set -euo pipefail
-          app="$(find ../client/release -type d -name '*.app' -print -quit)"
-          assets="$(cd "${app}/Contents/Resources/sandbox/vm-assets" && pwd)"
-          manifest="${assets}/manifest.json"
-          SHEJANE_TEST_MACOS_VM_ASSETS="${manifest}" \
-          SHEJANE_TEST_LINUX_DOCUMENTS_WORKER="${RUNNER_TEMP}/shejane-documents-worker/documents-worker" \
-          SHEJANE_TEST_NODE_RUNTIME_ASSET="${RUNNER_TEMP}/shejane-node-runtime/org.nodejs.runtime-linux-arm64-a.shejane-runtime-asset" \
-            uv run pytest tests/test_macos_managed_worker_vm_gate.py -q
-      - name: Run Linux arm64 Office Worker golden gate in packaged macOS VM
-        if: matrix.macos_vm_gates == true
-        working-directory: runtime
-        shell: bash
-        run: |
-          set -euo pipefail
-          app="$(find ../client/release -type d -name '*.app' -print -quit)"
-          manifest="$(cd "${app}/Contents/Resources/sandbox/vm-assets" && pwd)/manifest.json"
-          SHEJANE_TEST_MACOS_VM_ASSETS="${manifest}" \
-          SHEJANE_TEST_DOCUMENTS_WORKER="${RUNNER_TEMP}/shejane-documents-worker/documents-worker/documents-worker" \
-          SHEJANE_TEST_SPREADSHEETS_WORKER="${RUNNER_TEMP}/shejane-spreadsheets-worker/spreadsheets-worker/spreadsheets-worker" \
-          SHEJANE_TEST_PRESENTATIONS_WORKER="${RUNNER_TEMP}/shejane-presentations-worker/presentations-worker/presentations-worker" \
-          SHEJANE_TEST_OFFICE_RUNTIME="$(cat "${RUNNER_TEMP}/shejane-office-runtime-path")" \
-            uv run pytest \
-              tests/test_documents_worker.py::test_documents_worker_real_runtime_asset_render \
-              tests/test_spreadsheets_worker.py::test_spreadsheets_worker_real_runtime_recalculation_and_golden \
-              tests/test_presentations_worker.py::test_presentations_worker_real_runtime_render_golden \
-              -q
-      - name: Run Linux arm64 PDF production gate in packaged macOS VM
-        if: matrix.macos_vm_gates == true
-        working-directory: runtime
-        shell: bash
-        run: |
-          set -euo pipefail
-          app="$(find ../client/release -type d -name '*.app' -print -quit)"
-          manifest="$(cd "${app}/Contents/Resources/sandbox/vm-assets" && pwd)/manifest.json"
-          SHEJANE_TEST_MACOS_VM_ASSETS="${manifest}" \
-          SHEJANE_TEST_PDF_WORKER="${RUNNER_TEMP}/shejane-pdf-worker/pdf-worker/pdf-worker" \
-          SHEJANE_MUPDF_RUNTIME_ASSET="${RUNNER_TEMP}/shejane-mupdf-runtime/mupdf-runtime-linux-arm64-a.shejane-runtime-asset" \
-            uv run pytest tests/test_pdf_runtime_asset.py -q
-      - name: Run Linux arm64 Media Foundation production gate in packaged macOS VM
-        if: matrix.macos_vm_gates == true
-        working-directory: runtime
-        shell: bash
-        run: |
-          set -euo pipefail
-          app="$(find ../client/release -type d -name '*.app' -print -quit)"
-          manifest="$(cd "${app}/Contents/Resources/sandbox/vm-assets" && pwd)/manifest.json"
-          SHEJANE_TEST_MACOS_VM_ASSETS="${manifest}" \
-          SHEJANE_TEST_MEDIA_WORKER="${RUNNER_TEMP}/shejane-media-worker/media-foundation-worker/media-foundation-worker" \
-          SHEJANE_FFMPEG_RUNTIME_ASSET="${RUNNER_TEMP}/shejane-ffmpeg-runtime/ffmpeg-runtime-linux-arm64-a.shejane-runtime-asset" \
-            uv run pytest tests/test_media_foundation_runtime_asset.py -q
-      - name: Run Linux arm64 OCR production gate in packaged macOS VM
-        if: matrix.macos_vm_gates == true
-        working-directory: runtime
-        shell: bash
-        run: |
-          set -euo pipefail
-          app="$(find ../client/release -type d -name '*.app' -print -quit)"
-          manifest="$(cd "${app}/Contents/Resources/sandbox/vm-assets" && pwd)/manifest.json"
-          SHEJANE_TEST_MACOS_VM_ASSETS="${manifest}" \
-          SHEJANE_TEST_OCR_WORKER="${RUNNER_TEMP}/shejane-ocr-worker/ocr-worker/ocr-worker" \
-          SHEJANE_RAPIDOCR_RUNTIME_ASSET="${RUNNER_TEMP}/shejane-rapidocr-runtime/rapidocr-runtime-linux-arm64-a.shejane-runtime-asset" \
-            uv run pytest tests/test_ocr_runtime_asset.py -q
-      - name: Run Linux arm64 Speech production gate in packaged macOS VM
-        if: matrix.macos_vm_gates == true
-        working-directory: runtime
-        shell: bash
-        run: |
-          set -euo pipefail
-          app="$(find ../client/release -type d -name '*.app' -print -quit)"
-          manifest="$(cd "${app}/Contents/Resources/sandbox/vm-assets" && pwd)/manifest.json"
-          SHEJANE_TEST_MACOS_VM_ASSETS="${manifest}" \
-          SHEJANE_TEST_SPEECH_WORKER="${RUNNER_TEMP}/shejane-speech-worker/speech-worker/speech-worker" \
-          SHEJANE_TEST_MEDIA_WORKER="${RUNNER_TEMP}/shejane-media-worker/media-foundation-worker/media-foundation-worker" \
-          SHEJANE_FFMPEG_RUNTIME_ASSET="${RUNNER_TEMP}/shejane-ffmpeg-runtime/ffmpeg-runtime-linux-arm64-a.shejane-runtime-asset" \
-          SHEJANE_WHISPER_RUNTIME_ASSET="${RUNNER_TEMP}/shejane-whisper-runtime/whisper-runtime-linux-arm64-a.shejane-runtime-asset" \
-            uv run pytest tests/test_speech_runtime_asset.py -q
-      - name: Run Linux arm64 Cloud Vision broker gate in packaged macOS VM
-        if: matrix.macos_vm_gates == true
-        working-directory: runtime
-        shell: bash
-        run: |
-          set -euo pipefail
-          app="$(find ../client/release -type d -name '*.app' -print -quit)"
-          manifest="$(cd "${app}/Contents/Resources/sandbox/vm-assets" && pwd)/manifest.json"
-          SHEJANE_TEST_MACOS_VM_ASSETS="${manifest}" \
-          SHEJANE_TEST_VISION_WORKER="${RUNNER_TEMP}/shejane-vision-worker/vision-worker/vision-worker" \
-            uv run pytest \
-              tests/test_vision_worker.py::test_cloud_vision_worker_uses_frozen_host_binding_without_asset \
-              tests/test_plugin_tool_execution.py::test_vision_provider_call_uses_authorized_image_and_redacts_credentials \
-              -q
       - name: Verify differential-update metadata
         shell: bash
         run: |

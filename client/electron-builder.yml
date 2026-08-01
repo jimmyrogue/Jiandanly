@@ -46,20 +46,10 @@ mac:
       to: runtime
     - from: electron/srt-launcher.mjs
       to: sandbox/srt-launcher.mjs
-    # electron-builder expands ${arch} for each native package. arm64 receives
-    # the complete, manifest-bound VM asset set; unsupported architectures
-    # intentionally have no asset directory and remain fail-closed in Runtime.
-    - from: build/vm-assets-${arch}
-      to: sandbox/vm-assets
   hardenedRuntime: true
   notarize: true
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.inherit.plist
-  # The builder signs every path under Contents by default. VM assets are
-  # already signed where executable and then bound byte-for-byte by manifest;
-  # skip the whole frozen set here so signing the outer app cannot mutate it.
-  signIgnore:
-    - /Contents/Resources/sandbox/vm-assets/
   # entitlements: build/entitlements.mac.plist
   # entitlementsInherit: build/entitlements.mac.inherit.plist
 

@@ -152,7 +152,7 @@ const resourcesPath = isMacOSApp
   ? join(packagedPath, 'Contents', 'Resources')
   : join(dirname(packagedPath), 'resources')
 const macOSDirectory = isMacOSApp ? join(packagedPath, 'Contents', 'MacOS') : null
-const manifest = join(resourcesPath, 'sandbox', 'vm-assets', 'manifest.json')
+const vmAssets = join(resourcesPath, 'sandbox', 'vm-assets')
 const runtimeExecutable = join(
   resourcesPath,
   'runtime',
@@ -168,25 +168,7 @@ try {
   await access(resourcesPath, constants.R_OK)
   await access(runtimeExecutable, constants.X_OK)
   await verifyPackagedContents()
-  let hasVMManifest = true
-  try {
-    await access(manifest, constants.R_OK)
-  } catch (error) {
-    if (error?.code !== 'ENOENT') throw error
-    hasVMManifest = false
-  }
-  if (hasVMManifest) {
-    if (process.platform !== 'darwin' || process.arch !== 'arm64') {
-      throw new Error('unsupported package unexpectedly contains Managed Worker VM assets')
-    }
-    await execFileAsync(runtimeExecutable, [
-      '--managed-worker-vm-assets',
-      manifest,
-      '--validate-managed-worker-vm-assets',
-    ], { timeout: 60_000 })
-  } else if (process.platform === 'darwin' && process.arch === 'arm64') {
-    throw new Error('macOS arm64 package is missing Managed Worker VM assets')
-  }
+  await assertPathMissing(vmAssets, 'packaged Client unexpectedly contains Managed Worker VM assets')
   await mkdir(home, { recursive: true })
   await mkdir(userData, { recursive: true })
   let executable = packagedPath
@@ -303,12 +285,8 @@ try {
       '-o',
       'command=',
     ])
-    if (hasVMManifest) {
-      if (!command.includes('--managed-worker-vm-assets') || !command.includes(manifest)) {
-        throw new Error('normal Client startup did not inject the packaged VM asset manifest')
-      }
-    } else if (command.includes('--managed-worker-vm-assets')) {
-      throw new Error('unsupported package injected unexpected Managed Worker VM assets')
+    if (command.includes('--managed-worker-vm-assets')) {
+      throw new Error('normal Client startup injected unexpected Managed Worker VM assets')
     }
   }
 

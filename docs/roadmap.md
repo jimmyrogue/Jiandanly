@@ -48,6 +48,9 @@ Runtime 已拥有固定 origin、PKCE、动态 IPv4 loopback callback、一次�
 通过。该证据不包含 Developer ID、公证或 Windows；公开 Cloud 核心流程的后续验收不能
 替代这些平台发布证据，因此发布状态保持不变。
 
+当前 Client 发行路径已主动移除 macOS VM 资产与 manifest 注入；上述 0.1.19 结果只作为
+历史隔离证据。新的打包门禁要求 `.app` 不含 VM 资产，Managed Worker 继续 fail closed。
+
 ### 1. 真实 BYOK 模型工具回环（已完成）
 
 目标：解决“设置显示可用，但真实 Agent 不能完成流式工具调用”的问题。

@@ -89,8 +89,8 @@ curl -fsS \
 
 | 平台/产物 | 强制证据 | 当前边界 |
 |---|---|---|
-| macOS arm64 Client | 当前源码冻结 Runtime；最终 `.app` 内 Runtime 独立 preflight VM manifest/schema/架构/asset-set ID/全部文件摘要与权限；正常 Main 启动交付随机 token、health/plugin catalog、VM 参数注入、正常退出和 Runtime 回收；包内 VM 14 模式覆盖成功、协议失败、取消、资源上限、宿主逃逸、worker/Runtime/launcher crash | 本轮已在原生 arm64 对当前 unsigned `--dir` 包执行；Developer ID、公证、staple 仍由 release runner 证明 |
-| macOS x64 Client | 同一 packaged Runtime lifecycle；明确断言不注入 arm64 VM manifest | Managed Worker 保持 fail-closed |
+| macOS arm64 Client | 当前源码冻结 Runtime；正常 Main 启动交付随机 token、health/plugin catalog、正常退出和 Runtime 回收；明确断言最终 `.app` 不含 VM 资产且 Runtime 启动命令不注入 VM manifest | Managed Worker 缺少 packaged backend，保持 fail closed；Developer ID、公证、staple 仍由 release runner 证明 |
+| macOS x64 Client | 同一 packaged Runtime lifecycle；明确断言不含或注入 VM 资产 | Managed Worker 保持 fail closed |
 | Windows x64 Client | `win-unpacked` 真实 executable → bundled Runtime → token/health/plugin catalog → quit → Runtime 回收；CI 另跑 LPAC/Job Object launcher self-test | QEMU guest/Managed Worker Registry 尚未开放 |
 | Linux arm64 Runtime | 冻结 Runtime、packaged bubblewrap/launcher、特权 cgroup v2 hostile gate 及真实 systemd delegation gate | 当前没有 Linux Client 安装包，不把 Runtime gate 写成 Client smoke |
 | 其他 target | 明确无匹配资产/Registry blocker | 不用 skip 或其它架构结果冒充支持 |
@@ -133,7 +133,7 @@ Tool case 在测试输出中按 `filesystem`、`runtime-context`、`network`、`
 
 端到端测试验证模块之间的真实契约。Runtime 内部的异常分支、数据库迁移等继续由 `runtime/tests` 的集成测试覆盖。两层都由 `make test` 与 `make test-e2e` 执行，不能用端到端测试替代内部集成测试。
 
-当前仍未完成的黑盒层包括：尚未开放平台的 Managed Worker guest/Registry，以及真实 Developer ID/公证 release runner 的最终结果。macOS arm64 的当前源码 `--dir` 包已真实完成 Runtime preflight、packaged lifecycle 和 14-mode VM gate，macOS x64/Windows lifecycle 与 Linux arm64 Runtime confinement 也已进入各自原生 release job；但没有对应 runner 的一次实际成功记录时，不能把 workflow wiring 冒充已经发布。Runtime Skill 已覆盖等待、恢复、fresh Run 与 checkpoint fork 的配置漂移，但这里采用的是“接纳内容指纹 + 恢复前失败关闭”，不是把 Skill 文件复制到每个 Run 的私有归档；因此旧 Run 保留安全性，但修改后需要创建新 Run，不能继续执行旧版本。当前 HTTP session 测试覆盖 404 失效，不冒充 auth、elicitation 或全部 transport 错误已支持。官方 conformance 当前只声明并验证 Runtime 实际使用的 client 场景 `initialize`、`tools_call` 与 `sse-retry`。当前 17 条 Electron critical flows 已完成。执行顺序与验收表见研究文档。
+当前仍未完成的黑盒层包括：尚未开放平台的 Managed Worker guest/Registry，以及真实 Developer ID/公证 release runner 的最终结果。macOS arm64 历史 `--dir` 包曾完成 Runtime preflight、packaged lifecycle 和 14-mode VM gate，但当前 Client 包已主动移除 VM 后端，发布 smoke 改为验证资产和启动参数均不存在；历史结果不能冒充当前发布能力。macOS/Windows Client lifecycle 与 Linux arm64 Runtime confinement 继续按各自原生 job 验证。Runtime Skill 已覆盖等待、恢复、fresh Run 与 checkpoint fork 的配置漂移，但这里采用的是“接纳内容指纹 + 恢复前失败关闭”，不是把 Skill 文件复制到每个 Run 的私有归档；因此旧 Run 保留安全性，但修改后需要创建新 Run，不能继续执行旧版本。当前 HTTP session 测试覆盖 404 失效，不冒充 auth、elicitation 或全部 transport 错误已支持。官方 conformance 当前只声明并验证 Runtime 实际使用的 client 场景 `initialize`、`tools_call` 与 `sse-retry`。当前 17 条 Electron critical flows 已完成。执行顺序与验收表见研究文档。
 
 真实模型服务、第三方 MCP 和操作系统凭据库具有网络、账户或平台依赖，不进入每次提交都运行的确定性套件。发布前应运行一次 `make test-e2e-real MODEL=...` 完整正常路径矩阵；外部服务网络或账户故障应与代码回归分开诊断，不能把未执行的真实门禁写成已通过。
 

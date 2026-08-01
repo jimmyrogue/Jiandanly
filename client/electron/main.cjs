@@ -401,12 +401,6 @@ async function spawnBundledRuntime() {
     '--port', String(port),
     '--token', runtimeToken,
     '--data-dir', path.join(app.getPath('userData'), 'runtime'),
-    ...(process.platform === 'darwin' && process.arch === 'arm64'
-      ? [
-          '--managed-worker-vm-assets',
-          path.join(process.resourcesPath, 'sandbox', 'vm-assets', 'manifest.json'),
-        ]
-      : []),
   ], {
     env: runtimeEnv({
       PYTHONUNBUFFERED: '1',
