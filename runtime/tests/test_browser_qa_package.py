@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from jsonschema import Draft202012Validator
 
+from shejane_runtime.plugins.browser_qa import BROWSER_QA_PLUGIN_VERSION
 from shejane_runtime.plugins.manifest import PluginManifest
 from shejane_runtime.plugins.package import extract_plugin_archive
 from shejane_runtime.plugins.runtime_assets import RuntimeAssetStore
@@ -44,7 +45,7 @@ def test_windows_browser_qa_gate_uses_short_pytest_workspace() -> None:
 def test_browser_qa_manifest_exposes_only_bounded_actions() -> None:
     template = (ROOT / ".shejane-plugin" / "plugin.template.json").read_text(encoding="utf-8")
     manifest = PluginManifest.model_validate_json(
-        template.replace("__PLUGIN_VERSION__", "0.1.0")
+        template.replace("__PLUGIN_VERSION__", BROWSER_QA_PLUGIN_VERSION)
         .replace("__PLATFORM__", "darwin/arm64")
         .replace("__RUNTIME_ASSET_DIGEST__", "sha256:" + "a" * 64)
     )

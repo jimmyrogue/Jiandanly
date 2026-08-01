@@ -10,7 +10,11 @@ import pytest
 from shejane_runtime.agent.context_builder import RuntimeContext
 from shejane_runtime.auth import LOCAL_OWNER_PRINCIPAL_ID
 from shejane_runtime.plugins.catalog import PluginActionDescriptor
-from shejane_runtime.plugins.computer_use import ComputerUseActionExecutor, ComputerUseService
+from shejane_runtime.plugins.computer_use import (
+    COMPUTER_USE_PLUGIN_VERSION,
+    ComputerUseActionExecutor,
+    ComputerUseService,
+)
 from shejane_runtime.plugins.tools import PluginToolAdapter
 from shejane_runtime.store.sqlite import LocalStore
 from shejane_runtime.tools.runtime import RuntimeToolExecution
@@ -29,7 +33,7 @@ def action_descriptor(package: Path, action_id: str) -> PluginActionDescriptor:
     action = next(item for item in template["contributions"]["actions"] if item["id"] == action_id)
     return PluginActionDescriptor(
         plugin_id="org.shejane.computer-use",
-        plugin_version="0.2.0",
+        plugin_version=COMPUTER_USE_PLUGIN_VERSION,
         plugin_digest="sha256:" + "b" * 64,
         action_id=action_id,
         tool_name=f"plugin.org.shejane.computer-use.{action_id}",

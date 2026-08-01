@@ -18,7 +18,7 @@ New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $browsersRoot = Join-Path $workRoot "ms-playwright"
 $firstAsset = Join-Path $workRoot "browser-qa-runtime-windows-amd64-a.shejane-runtime-asset"
 $secondAsset = Join-Path $workRoot "browser-qa-runtime-windows-amd64-b.shejane-runtime-asset"
-$plugin = Join-Path $workRoot "browser-qa-0.1.0-windows-amd64.shejane-plugin"
+$plugin = Join-Path $workRoot "browser-qa-0.1.1-windows-amd64.shejane-plugin"
 
 Push-Location $repoRoot
 try {
@@ -103,7 +103,7 @@ try {
             "browser-qa-runtime-1.61.1-windows-amd64.shejane-runtime-asset"
     )
     Copy-Item $plugin (
-        Join-Path $OutputDirectory "browser-qa-0.1.0-windows-amd64.shejane-plugin"
+        Join-Path $OutputDirectory "browser-qa-0.1.1-windows-amd64.shejane-plugin"
     )
 }
 finally {

@@ -13,9 +13,12 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 
+import shejane_runtime.plugins.computer_use as computer_use_module
 import shejane_runtime.runs as runs_module
 from shejane_runtime.config import reset_settings_for_tests
+from shejane_runtime.plugins.browser_qa import BROWSER_QA_PLUGIN_VERSION
 from shejane_runtime.plugins.catalog import PluginCatalog
+from shejane_runtime.plugins.computer_use import COMPUTER_USE_PLUGIN_VERSION
 from shejane_runtime.plugins.identity import plugin_action_catalog_hash
 from shejane_runtime.plugins.manifest import load_plugin_manifest
 from shejane_runtime.plugins.package import canonical_package_digest, extract_plugin_archive
@@ -161,9 +164,11 @@ def _pack_worker_with_runtime_asset(destination: Path, digest: str) -> None:
                 archive.write(path, relative)
 
 
-def _pack_computer_use_builtin(destination: Path) -> None:
+def _pack_computer_use_builtin(
+    destination: Path, *, version: str = COMPUTER_USE_PLUGIN_VERSION
+) -> None:
     manifest = (COMPUTER_USE / ".shejane-plugin" / "plugin.template.json").read_text()
-    manifest = manifest.replace("__PLUGIN_VERSION__", "0.2.0").replace(
+    manifest = manifest.replace("__PLUGIN_VERSION__", version).replace(
         "__PLATFORM__", "darwin/arm64"
     )
     with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as archive:
@@ -184,7 +189,7 @@ def _pack_browser_qa_builtin(
     manifest = {
         "schema_version": 1,
         "id": "org.shejane.browser-qa",
-        "version": "0.1.0",
+        "version": BROWSER_QA_PLUGIN_VERSION,
         "name": "Browser QA",
         "description": "Open, operate, and inspect web pages in an isolated SheJane browser.",
         "license": "Apache-2.0",
@@ -384,6 +389,50 @@ def test_browser_qa_is_runtime_managed_and_cannot_be_removed(
         )
         assert remove.status_code == 409
         assert remove.json()["detail"]["code"] == "builtin_capability_managed"
+
+
+def test_rebuilt_fixed_package_upgrades_existing_runtime_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    old_computer_use = tmp_path / "computer-use-0.2.0.shejane-plugin"
+    new_computer_use = tmp_path / f"computer-use-{COMPUTER_USE_PLUGIN_VERSION}.shejane-plugin"
+    _pack_computer_use_builtin(old_computer_use, version="0.2.0")
+    _pack_computer_use_builtin(new_computer_use)
+
+    monkeypatch.setattr(
+        "shejane_runtime.plugins.registry.current_managed_worker_platform",
+        lambda: "darwin/arm64",
+    )
+    monkeypatch.setattr(computer_use_module, "COMPUTER_USE_PLUGIN_VERSION", "0.2.0")
+    data_dir = tmp_path / "runtime"
+    old_settings = reset_settings_for_tests(
+        SHEJANE_RUNTIME_TOKEN="tok",
+        data_dir=data_dir,
+        computer_use_package=old_computer_use,
+    )
+    with TestClient(create_app(old_settings)):
+        pass
+
+    monkeypatch.setattr(
+        computer_use_module, "COMPUTER_USE_PLUGIN_VERSION", COMPUTER_USE_PLUGIN_VERSION
+    )
+    new_settings = reset_settings_for_tests(
+        SHEJANE_RUNTIME_TOKEN="tok",
+        data_dir=data_dir,
+        computer_use_package=new_computer_use,
+    )
+    with TestClient(create_app(new_settings)) as upgraded_client:
+        assert upgraded_client.get("/v1/health", headers=AUTH).status_code == 200
+
+    with sqlite3.connect(data_dir / "runtime.db") as conn:
+        versions = conn.execute(
+            "SELECT plugin_id, version FROM plugin_versions WHERE plugin_id = ? ORDER BY version",
+            ("org.shejane.computer-use",),
+        ).fetchall()
+    assert versions == [
+        ("org.shejane.computer-use", "0.2.0"),
+        ("org.shejane.computer-use", COMPUTER_USE_PLUGIN_VERSION),
+    ]
 
 
 def test_plugin_list_reads_registry_without_activating_fixed_package(

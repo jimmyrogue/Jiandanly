@@ -13,7 +13,11 @@ import pytest
 
 from shejane_runtime.agent.context_builder import RuntimeContext
 from shejane_runtime.auth import LOCAL_OWNER_PRINCIPAL_ID
-from shejane_runtime.plugins.browser_qa import BrowserQAActionExecutor, BrowserQAService
+from shejane_runtime.plugins.browser_qa import (
+    BROWSER_QA_PLUGIN_VERSION,
+    BrowserQAActionExecutor,
+    BrowserQAService,
+)
 from shejane_runtime.plugins.catalog import PluginActionDescriptor
 from shejane_runtime.plugins.package import extract_plugin_archive
 from shejane_runtime.plugins.platforms import current_managed_worker_platform
@@ -124,7 +128,7 @@ def action_descriptor(package: Path, action_id: str) -> PluginActionDescriptor:
     action = next(item for item in template["contributions"]["actions"] if item["id"] == action_id)
     return PluginActionDescriptor(
         plugin_id="org.shejane.browser-qa",
-        plugin_version="0.1.0",
+        plugin_version=BROWSER_QA_PLUGIN_VERSION,
         plugin_digest="sha256:" + "b" * 64,
         action_id=action_id,
         tool_name=f"plugin.org.shejane.browser-qa.{action_id}",

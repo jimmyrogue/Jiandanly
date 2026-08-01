@@ -14,7 +14,7 @@ from .executor import ActionExecutor
 
 MAX_FRAME_BYTES = 24 * 1024 * 1024
 COMPUTER_USE_PLUGIN_ID = "org.shejane.computer-use"
-COMPUTER_USE_PLUGIN_VERSION = "0.2.0"
+COMPUTER_USE_PLUGIN_VERSION = "0.2.1"
 _CHILD_ENVIRONMENT_KEYS = (
     "HOME",
     "PATH",

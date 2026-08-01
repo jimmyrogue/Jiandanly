@@ -17,7 +17,7 @@ from .executor import ActionExecutor
 from .runtime_assets import RuntimeAssetHandle
 
 BROWSER_QA_PLUGIN_ID = "org.shejane.browser-qa"
-BROWSER_QA_PLUGIN_VERSION = "0.1.0"
+BROWSER_QA_PLUGIN_VERSION = "0.1.1"
 MAX_PROXY_HEADER_BYTES = 64 * 1024
 RUNTIME_ALIAS_DIGEST_CHARS = 32
 

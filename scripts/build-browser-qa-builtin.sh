@@ -20,7 +20,7 @@ PLAYWRIGHT_CORE_PACKAGE="$(node -e \
   "${PLAYWRIGHT_PACKAGE}")"
 PLAYWRIGHT_CORE_ROOT="$(dirname "${PLAYWRIGHT_CORE_PACKAGE}")"
 BROWSERS_ROOT="${PLAYWRIGHT_BROWSERS_PATH:-${HOME}/Library/Caches/ms-playwright}"
-OUTPUT="${ROOT_DIR}/runtime/plugins/browser-qa/dist/browser-qa-0.1.0-darwin-arm64.shejane-plugin"
+OUTPUT="${ROOT_DIR}/runtime/plugins/browser-qa/dist/browser-qa-0.1.1-darwin-arm64.shejane-plugin"
 RUNTIME_ASSET="${ROOT_DIR}/runtime/plugins/browser-qa/dist/browser-qa-runtime-1.61.1-darwin-arm64.shejane-runtime-asset"
 
 mkdir -p "$(dirname "${OUTPUT}")"

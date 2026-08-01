@@ -62,6 +62,13 @@ make test-contract
 - Do not add automatic model selection or silent model-service fallback in Client or Runtime.
 - Runtime model-service connections live in SQLite; API keys live in the operating-system credential store.
 
+## Fixed Capability Release Discipline
+
+- A fixed plugin's `(plugin_id, version)` identifies immutable package bytes. Any byte change—including native binaries rebuilt by another Xcode, compiler, OS image, or CI runner—requires a plugin version bump.
+- Keep that version aligned everywhere it is named: the plugin allowlist constant, package builder, development launcher, frozen Runtime config, PyInstaller spec, platform build scripts, release workflow, and distribution tests.
+- Never fix a same-version digest conflict by weakening digest validation or deleting user data. Preserve the old `plugin_versions` row and install the rebuilt package under its new version.
+- Before a Client release, start the frozen Runtime against a copy of a previous release's Runtime data. It must retain the old fixed-plugin versions, activate the new digests, and reach `/v1/health` within the Client startup deadline.
+
 ## Frontend Rules
 
 Client UI expectations:
