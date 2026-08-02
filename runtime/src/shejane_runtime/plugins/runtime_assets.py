@@ -120,6 +120,28 @@ class RuntimeAssetStore:
     def contains(self, digest: str) -> bool:
         return (self._root / "packages" / digest.removeprefix("sha256:")).is_dir()
 
+    def quarantine(self, digest: str) -> None:
+        key = digest.removeprefix("sha256:")
+        if len(key) != 64 or any(char not in "0123456789abcdef" for char in key):
+            raise InvalidPluginPackage("runtime asset digest is invalid")
+        source = self._root / "packages" / key
+        if not source.is_dir():
+            return
+        quarantine_root = self._root / "quarantine"
+        quarantine_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        destination = quarantine_root / key
+        shutil.rmtree(destination, ignore_errors=True)
+        try:
+            os.replace(source, destination)
+        except OSError as exc:
+            raise InvalidPluginPackage("invalid runtime asset could not be quarantined") from exc
+
+    def clear_quarantine(self, digest: str) -> None:
+        shutil.rmtree(
+            self._root / "quarantine" / digest.removeprefix("sha256:"),
+            ignore_errors=True,
+        )
+
     def install(
         self,
         source: Path,
@@ -255,8 +277,7 @@ class RuntimeAssetResolver:
                 digest=digest,
             )
         except InvalidPluginPackage:
-            if self._store.contains(digest):
-                raise
+            pass
 
         source = self._sources.get(asset_id)
         if source is None:
@@ -272,7 +293,7 @@ class RuntimeAssetResolver:
                 )
             except InvalidPluginPackage:
                 if self._store.contains(digest):
-                    raise
+                    await asyncio.to_thread(self._store.quarantine, digest)
 
             archive = await self._materialize(source)
             try:
@@ -293,6 +314,7 @@ class RuntimeAssetResolver:
                 or handle.digest != digest
             ):
                 raise InvalidPluginPackage("runtime asset identity does not match its reference")
+            await asyncio.to_thread(self._store.clear_quarantine, digest)
             return handle
 
     async def _materialize(self, source: Path | str) -> Path:

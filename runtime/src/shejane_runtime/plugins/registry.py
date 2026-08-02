@@ -151,9 +151,24 @@ class PluginRegistry:
             plugin_id=plugin_id,
         )
         reference = record["manifest"]["runtime"]["execution"]["runtime_assets"][0]
+        platform = current_managed_worker_platform()
+        downloaded = False
+        if platform is not None:
+            try:
+                await asyncio.to_thread(
+                    self._runtime_assets.resolve,
+                    asset_id=str(reference["id"]),
+                    version=str(reference["version"]),
+                    platform=platform,
+                    digest=str(reference["digest"]),
+                )
+            except InvalidPluginPackage:
+                pass
+            else:
+                downloaded = True
         return {
             "plugin_id": plugin_id,
-            "downloaded": self._runtime_assets.contains(str(reference["digest"])),
+            "downloaded": downloaded,
         }
 
     async def prepare_fixed_runtime_asset(

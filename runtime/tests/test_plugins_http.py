@@ -449,13 +449,27 @@ def test_browser_qa_is_runtime_managed_and_cannot_be_removed(
         )
         assert replay.json() == prepare.json()
 
-        shutil.rmtree(
+        package_root = (
             settings.data_dir
             / "plugins"
             / "runtime-assets"
             / "packages"
             / digest.removeprefix("sha256:")
         )
+        (package_root / "payload" / "libreoffice" / "program.bin").write_text("tampered")
+        corrupt_status = builtin_client.get(
+            f"/v1/plugins/{plugin['id']}/runtime-asset",
+            headers=AUTH,
+        )
+        assert corrupt_status.json() == {"plugin_id": plugin["id"], "downloaded": False}
+        repaired = builtin_client.put(
+            f"/v1/plugins/{plugin['id']}/runtime-asset",
+            headers=AUTH,
+        )
+        assert repaired.status_code == 200, repaired.text
+        assert repaired.json() == {"plugin_id": plugin["id"], "downloaded": True}
+
+        shutil.rmtree(package_root)
         asset.unlink()
         unavailable = builtin_client.put(
             f"/v1/plugins/{plugin['id']}/runtime-asset",
