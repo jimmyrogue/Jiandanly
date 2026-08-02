@@ -77,6 +77,17 @@
 
 相对最初基线，frozen Runtime 累计减少 **106,796 KiB（45.6%）**，压缩代理累计减少 **46,692,465 bytes（42.6%）**。PDF 附件文本测试在主动屏蔽 pypdfium2 后仍通过；冻结分析中该导入被标记为 delayed/conditional，成品不再包含 `pypdfium2*`。完整 Office Worker 迁移只有在产品接受首次下载，并先统一四个平台的工具语义、历史任务回放和离线错误协议后才值得实施。
 
+## 实施进度：精简 Uvicorn 服务端可选依赖
+
+2026-08-02 已把 Runtime 依赖从 `uvicorn[standard]` 收窄为普通 `uvicorn`，并显式固定 `loop="asyncio"`、`http="h11"`、`ws="none"`。锁文件只移除了服务端不使用的 uvloop、httptools 和 watchfiles；websockets 仍被 Google GenAI、LangGraph SDK 和 LangSmith 使用，python-dotenv 仍被 pydantic-settings 使用，均保留。
+
+| 指标 | 修改前 | 修改后 | 变化 |
+|---|---:|---:|---:|
+| frozen Runtime 磁盘分配 | 127,312 KiB | 124,372 KiB | **-2,940 KiB，-2.3%** |
+| `tar.gz` 压缩代理 | 62,985,107 bytes | 61,937,660 bytes | **-1,047,447 bytes，-1.7%** |
+
+相对最初基线，frozen Runtime 累计减少 **109,736 KiB（46.9%）**，压缩代理累计减少 **47,739,912 bytes（43.5%）**。47 项 CLI、HTTP、SSE、长输出、取消和 smoke 测试通过；真实冻结进程以新配置启动并通过 `/v1/health`，成品不再包含 uvloop、httptools 或 watchfiles。
+
 ## 当前基线与测量方法
 
 ### 原始结果
@@ -324,7 +335,7 @@ Microsoft MarkItDown 官方 README 明确把 PDF、DOCX、XLSX 等格式能力�
 
 **验证：** 定向包/资产/HTTP/分发测试、旧版本升级测试、Browser headed/headless、原生 OCR 质量/hostile input、冻结构建、干净数据目录启动和缺资产状态均已通过；Windows 原生最终构建与签名仍由 release matrix 门禁执行。
 
-### 5. 精简 Uvicorn standard extras
+### 5. 精简 Uvicorn standard extras（已完成）
 
 Uvicorn 官方 [Installation](https://www.uvicorn.org/installation/)说明 `[standard]` 会安装 uvloop、httptools、websockets、watchfiles、python-dotenv、PyYAML 等可选依赖；[Settings](https://www.uvicorn.org/settings/)说明 watchfiles 用于 reload，WebSocket 可设为 `none`，HTTP 可用纯 Python `h11`，event loop 可用标准 `asyncio`。
 
@@ -336,7 +347,7 @@ SheJane frozen Runtime 是 loopback HTTP/SSE 服务，不启用 reload，也未�
 
 当前可见 native 目录中 uvloop、watchfiles、httptools、websockets 合计约 3.3 MB；纯 Python和 metadata 还能再少一点。
 
-**预计效果：** 3 到 5 MB 安装后、1 到 2 MB 安装包。
+**实测效果：** 2,940 KiB 安装后、1,047,447 bytes 压缩代理。
 
 **风险：** 本机高并发/SSE 性能下降，平台行为差异，Uvicorn `auto` 默认变化。
 

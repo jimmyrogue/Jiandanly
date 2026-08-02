@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import shejane_runtime.__main__ as cli_module
 from shejane_runtime.__main__ import _parse_args, main
 
 
@@ -75,3 +76,33 @@ def test_runtime_cli_preflights_vm_assets_without_starting_server(
         == 0
     )
     assert calls == [manifest]
+
+
+def test_runtime_cli_pins_the_lightweight_loopback_http_stack(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    app = object()
+    calls: list[tuple[object, dict[str, object]]] = []
+    monkeypatch.setattr(cli_module, "create_app", lambda _settings: app)
+    monkeypatch.setattr(
+        cli_module.uvicorn,
+        "run",
+        lambda candidate, **kwargs: calls.append((candidate, kwargs)),
+    )
+
+    assert main(["--token", "tok", "--data-dir", str(tmp_path)]) == 0
+    assert calls == [
+        (
+            app,
+            {
+                "host": "127.0.0.1",
+                "port": 17371,
+                "log_level": "info",
+                "access_log": False,
+                "loop": "asyncio",
+                "http": "h11",
+                "ws": "none",
+            },
+        )
+    ]

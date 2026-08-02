@@ -109,6 +109,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         port=settings.port,
         log_level="info",
         access_log=False,
+        loop="asyncio",
+        http="h11",
+        ws="none",
     )
     return 0
 

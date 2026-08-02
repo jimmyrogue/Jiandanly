@@ -20,7 +20,7 @@ dependencies = [
     "deepagents==0.6.12",
     # HTTP layer
     "fastapi>=0.115.0",
-    "uvicorn[standard]>=0.32.0",
+    "uvicorn>=0.32.0",
     "sse-starlette>=2.1.0",
     "httpx>=0.28.0",
     # Misc utilities
