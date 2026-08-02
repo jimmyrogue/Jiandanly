@@ -113,6 +113,28 @@ async function verifyPackagedContents() {
       throw new Error(`packaged Client is missing required production dependency: ${moduleName}`)
     }
   }
+  const sourceMap = packagedFiles.find((path) => path.endsWith('.map'))
+  if (sourceMap) {
+    throw new Error(`packaged Client contains a production source map: ${sourceMap}`)
+  }
+  const zodSource = packagedFiles.find((path) => path.startsWith('/node_modules/zod/src/'))
+  if (zodSource) {
+    throw new Error(`packaged Client contains Zod source or test files: ${zodSource}`)
+  }
+  const sandboxType = packagedFiles.find(
+    (path) => path.startsWith('/node_modules/@anthropic-ai/sandbox-runtime/') && path.endsWith('.d.ts'),
+  )
+  if (sandboxType) {
+    throw new Error(`packaged Client contains Sandbox Runtime type declarations: ${sandboxType}`)
+  }
+  if (isMacOSApp) {
+    const seccomp = packagedFiles.find((path) =>
+      path.startsWith('/node_modules/@anthropic-ai/sandbox-runtime/vendor/seccomp/'),
+    )
+    if (seccomp) {
+      throw new Error(`macOS Client contains Linux-only seccomp files: ${seccomp}`)
+    }
+  }
 
   const localeRoot = isMacOSApp
     ? join(

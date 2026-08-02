@@ -26,6 +26,9 @@ files:
   - electron/assets/**/*
   - shared/**/*
   - package.json
+  - '!**/*.map'
+  - '!node_modules/zod/src/**/*'
+  - '!node_modules/@anthropic-ai/sandbox-runtime/**/*.d.ts'
 
 asar: true
 asarUnpack:
@@ -36,6 +39,8 @@ asarUnpack:
 # Client CI does the same on a native runner for each target OS and architecture.
 #
 mac:
+  files:
+    - '!node_modules/@anthropic-ai/sandbox-runtime/vendor/seccomp/**/*'
   category: public.app-category.productivity
   icon: electron/assets/app-icon.icns
   target:

@@ -88,6 +88,18 @@
 
 相对最初基线，frozen Runtime 累计减少 **109,736 KiB（46.9%）**，压缩代理累计减少 **47,739,912 bytes（43.5%）**。47 项 CLI、HTTP、SSE、长输出、取消和 smoke 测试通过；真实冻结进程以新配置启动并通过 `/v1/health`，成品不再包含 uvloop、httptools 或 watchfiles。
 
+## 实施进度：清理 Client 非运行文件
+
+2026-08-02 已从所有平台的生产包中排除 source map、`zod/src` 和 Sandbox Runtime 类型声明，并只在 macOS 排除 Linux-only seccomp 目录。SRT 的 JavaScript、许可证及 Windows/Linux 平台文件仍按原规则保留；Windows/Linux 不应用 macOS 的 seccomp 排除。
+
+| 指标 | 修改前 | 修改后 | 变化 |
+|---|---:|---:|---:|
+| `app.asar` 逻辑字节 | 9,486,320 bytes | 9,163,055 bytes | **-323,265 bytes** |
+| `app.asar.unpacked` 逻辑字节 | 2,079,748 bytes | 611 bytes | **-2,079,137 bytes** |
+| 两者磁盘分配 | 11,540 KiB | 8,956 KiB | **-2,584 KiB，-22.4%** |
+
+本轮 Client 内容合计减少 **2,402,402 bytes（20.8%）**。成品清单门禁会拒绝上述非运行文件；真实打包应用通过 Electron → Runtime 启动、健康检查、正常退出、签名验证，并使用成品 Electron 与 `srt-launcher.mjs` 通过 macOS Seatbelt 文件、网络、Unix socket 和进程访问隔离测试。
+
 ## 当前基线与测量方法
 
 ### 原始结果
@@ -239,7 +251,7 @@ electron-builder 的 [`compression`](https://www.electron.build/docs/configurati
 
 ## 可执行优化建议
 
-### 1. 清理 Client 生产依赖中的非运行文件
+### 1. 清理 Client 生产依赖中的非运行文件（已完成）
 
 本次解开 `app.asar` 后，本地实测：
 
