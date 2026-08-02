@@ -48,6 +48,7 @@ const FORBIDDEN_PACKAGED_MODULES = [
   'tailwindcss',
 ]
 const FORBIDDEN_FROZEN_RUNTIME_PATHS = [
+  '_internal/builtin-assets',
   '_internal/_pytest',
   '_internal/mypy',
   '_internal/onnxruntime/quantization',

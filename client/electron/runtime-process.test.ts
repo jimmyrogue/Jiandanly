@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 const require = createRequire(import.meta.url)
 const {
   BUNDLED_RUNTIME_START_TIMEOUT_MS,
+  fixedRuntimeAssetBaseURL,
   installUpdateAfterRuntimeStop,
   isPortConflictError,
   startRuntimeWithPortRetry,
@@ -13,6 +14,7 @@ const {
   waitForRuntimeProcessClose,
 } = require('./runtime-process.cjs') as {
   BUNDLED_RUNTIME_START_TIMEOUT_MS: number
+  fixedRuntimeAssetBaseURL: (version: string) => string
   installUpdateAfterRuntimeStop: (options: {
     stopRuntime: () => Promise<void>
     quitAndInstall: (isSilent: boolean, isForceRunAfter: boolean) => void
@@ -56,7 +58,7 @@ function runtimeProcess(kill: (signal: string) => boolean) {
 }
 
 describe('Electron local Runtime process lifecycle', () => {
-  it('allows a cold bundled Runtime to install fixed assets before readiness', async () => {
+  it('keeps a bounded cold bundled Runtime readiness deadline', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(0)
     const child = { exitCode: null }
@@ -71,6 +73,12 @@ describe('Electron local Runtime process lifecycle', () => {
     expect(BUNDLED_RUNTIME_START_TIMEOUT_MS).toBe(120_000)
     expect(ready).toHaveBeenCalledWith(child, BUNDLED_RUNTIME_START_TIMEOUT_MS)
     vi.useRealTimers()
+  })
+
+  it('binds on-demand Runtime Assets to the current Client release', () => {
+    expect(fixedRuntimeAssetBaseURL('0.1.27')).toBe(
+      'https://github.com/jimmyrogue/SheJane/releases/download/client-v0.1.27',
+    )
   })
 
   it('stops the bundled Runtime before handing quit control to the updater', async () => {

@@ -24,7 +24,7 @@ from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 import yaml
@@ -169,6 +169,9 @@ from .model_services import (
     openai_compatible_endpoint,
 )
 from .permission_policy import PermissionScopeNotAllowedError
+from .plugins.browser_qa import BROWSER_QA_PLUGIN_ID
+from .plugins.catalog import PluginCatalog
+from .plugins.platforms import current_managed_worker_platform
 from .plugins.registry import PluginRegistry, PluginRegistryError
 from .progress_ledger import (
     latest_feature_ledger as _latest_feature_ledger,
@@ -222,6 +225,35 @@ _RUNTIME_SETTINGS_TO_FIELDS = {
     "repair_workflow_max": "repair_workflow_max",
     "pii_redact": "pii_redact_types",
 }
+
+
+def _fixed_runtime_asset_sources(settings: Settings) -> dict[str, Path | str]:
+    sources: dict[str, Path | str] = {}
+    if settings.browser_qa_runtime_asset is not None:
+        sources[BROWSER_QA_PLUGIN_ID + ".runtime"] = settings.browser_qa_runtime_asset
+    if settings.ocr_runtime_asset is not None:
+        sources["org.rapidocr.runtime"] = settings.ocr_runtime_asset
+    if settings.fixed_runtime_asset_base_url is None:
+        return sources
+    platform = current_managed_worker_platform()
+    target = {
+        "darwin/arm64": "darwin-arm64",
+        "windows/amd64": "windows-amd64",
+    }.get(platform)
+    if target is None:
+        return sources
+    filenames = {
+        BROWSER_QA_PLUGIN_ID + ".runtime": (
+            f"browser-qa-runtime-1.61.1-{target}.shejane-runtime-asset"
+        ),
+        "org.rapidocr.runtime": f"rapidocr-runtime-3.9.1-{target}.shejane-runtime-asset",
+    }
+    for asset_id, filename in filenames.items():
+        sources.setdefault(
+            asset_id,
+            urljoin(settings.fixed_runtime_asset_base_url + "/", filename),
+        )
+    return sources
 
 
 def _runtime_settings_payload(settings: Settings, *, version: int) -> dict[str, Any]:
@@ -1536,11 +1568,16 @@ async def lifespan(app: FastAPI):
         cloud_origin=OFFICIAL_CLOUD_ORIGIN,
         app_version=__version__,
     )
+    plugin_catalog = PluginCatalog(
+        settings.data_dir,
+        runtime_asset_sources=_fixed_runtime_asset_sources(settings),
+    )
     coordinator = RunCoordinator(
         store=store,
         checkpointer=checkpointer,
         agent_store=agent_store,
         settings=settings,
+        plugin_catalog=plugin_catalog,
         terminal_callback=lambda run_id, status, payload: central_diagnostics.submit_terminal(
             run_id=run_id,
             status=status,
@@ -1556,9 +1593,7 @@ async def lifespan(app: FastAPI):
         runtime_version=__version__,
         computer_use_package=settings.computer_use_package,
         browser_qa_package=settings.browser_qa_package,
-        browser_qa_runtime_asset=settings.browser_qa_runtime_asset,
         ocr_package=settings.ocr_package,
-        ocr_runtime_asset=settings.ocr_runtime_asset,
     )
     await plugin_registry.initialize_fixed_capabilities(LOCAL_OWNER_PRINCIPAL_ID)
     app.state.store = store

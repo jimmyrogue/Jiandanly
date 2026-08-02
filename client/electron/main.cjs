@@ -21,6 +21,7 @@ const { installLocalRuntimeAuthorization } = require('./runtime-auth.cjs')
 const { materializeFileCopy } = require('./file-open.cjs')
 const { recordLocalCrash, recordRuntimeFailure } = require('./local-crash-reporting.cjs')
 const {
+  fixedRuntimeAssetBaseURL,
   installUpdateAfterRuntimeStop,
   isPortConflictError,
   startRuntimeWithPortRetry,
@@ -401,6 +402,7 @@ async function spawnBundledRuntime() {
     '--port', String(port),
     '--token', runtimeToken,
     '--data-dir', path.join(app.getPath('userData'), 'runtime'),
+    '--fixed-runtime-asset-base-url', fixedRuntimeAssetBaseURL(app.getVersion()),
   ], {
     env: runtimeEnv({
       PYTHONUNBUFFERED: '1',

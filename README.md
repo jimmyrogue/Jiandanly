@@ -50,13 +50,13 @@ Runtime is independently runnable and testable. The SDK and plugins live below i
 |---|---|
 | Runtime | LangGraph and Deep Agents loop, streaming events, checkpoints, recovery, planning, verification, memory, and human approval |
 | Local tools | Workspace files, read-only-workspace/no-network sandboxed shell execution, Office operations, web fetch, clipboard approval, and scheduled runs |
-| Extensions | Skills, MCP servers, deterministic WASI/Managed Worker plugins, fixed macOS Computer Use, macOS/Windows Browser QA and OCR capabilities, subagents, and configurable middleware |
+| Extensions | Skills, MCP servers, deterministic WASI/Managed Worker plugins, fixed macOS Computer Use, on-demand macOS/Windows Browser QA and OCR capabilities, subagents, and configurable middleware |
 | Client | Electron and React UI, local Runtime conversation projection, previews, model-service settings, and workspace controls |
 | Runtime SDK | Public TypeScript client for commands, SSE, snapshots, errors, and generated protocol types |
 
 Business-platform connectors are not built into the Runtime. Future integrations should use standard tools or MCP.
 
-The plugin platform is a preview. WASI packages can install and execute through the Runtime-owned Action protocol. Managed Worker packages stay fail-closed until the current platform's production isolation and release Gate passes. SheJane's fixed [Computer Use](./runtime/plugins/computer-use), [Browser QA](./runtime/plugins/browser-qa), and [OCR](./runtime/plugins/ocr) packages use reserved Runtime-owned adapters and still pass through Action approval, receipts, strict schemas, and content-addressed package/asset storage. Browser QA and OCR ship native macOS arm64 and Windows AMD64 artifacts; Computer Use remains macOS arm64 only. See the [plugin developer guide](./docs/plugins/developer-guide.md) for the public package contract and local tooling.
+The plugin platform is a preview. WASI packages can install and execute through the Runtime-owned Action protocol. Managed Worker packages stay fail-closed until the current platform's production isolation and release Gate passes. SheJane's fixed [Computer Use](./runtime/plugins/computer-use), [Browser QA](./runtime/plugins/browser-qa), and [OCR](./runtime/plugins/ocr) packages use reserved Runtime-owned adapters and still pass through Action approval, receipts, strict schemas, and content-addressed package/asset storage. Browser QA and OCR publish native macOS arm64 and Windows AMD64 Runtime Assets beside each Client release and download the exact asset when the enabled capability is first bound; Computer Use remains macOS arm64 only. See the [plugin developer guide](./docs/plugins/developer-guide.md) for the public package contract and local tooling.
 
 ### Agent collaboration today
 

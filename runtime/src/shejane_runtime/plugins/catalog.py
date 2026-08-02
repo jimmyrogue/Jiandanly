@@ -19,13 +19,31 @@ from .manifest import load_plugin_manifest
 from .ocr import is_allowed_ocr_package
 from .package import InvalidPluginPackage, canonical_package_digest
 from .platforms import current_managed_worker_execution_platform, current_managed_worker_platform
-from .runtime_assets import RuntimeAssetHandle, RuntimeAssetStore
+from .runtime_assets import RuntimeAssetDownloader, RuntimeAssetHandle, RuntimeAssetResolver
 
 
 class PluginCatalogError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+class _RuntimeAssetRequired(RuntimeError):
+    def __init__(
+        self,
+        *,
+        plugin_id: str,
+        asset_id: str,
+        version: str,
+        platform: str,
+        digest: str,
+    ) -> None:
+        super().__init__(f"plugin {plugin_id} runtime asset is unavailable")
+        self.plugin_id = plugin_id
+        self.asset_id = asset_id
+        self.version = version
+        self.platform = platform
+        self.digest = digest
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,9 +129,19 @@ class PluginExecutionLease:
 
 
 class PluginCatalog:
-    def __init__(self, data_dir: Path) -> None:
+    def __init__(
+        self,
+        data_dir: Path,
+        *,
+        runtime_asset_sources: Mapping[str, Path | str] | None = None,
+        runtime_asset_downloader: RuntimeAssetDownloader | None = None,
+    ) -> None:
         self._packages_root = data_dir / "plugins" / "packages"
-        self._runtime_assets = RuntimeAssetStore(data_dir)
+        self._runtime_assets = RuntimeAssetResolver(
+            data_dir,
+            sources=runtime_asset_sources,
+            downloader=runtime_asset_downloader,
+        )
 
     @asynccontextmanager
     async def acquire_snapshot(
@@ -121,11 +149,35 @@ class PluginCatalog:
         frozen_bindings: list[dict[str, Any]],
         execution_context: object,
     ) -> AsyncIterator[PluginExecutionLease]:
-        lease = await asyncio.to_thread(
-            self._load_snapshot,
-            tuple(dict(binding) for binding in frozen_bindings),
-            execution_context,
-        )
+        bindings = tuple(dict(binding) for binding in frozen_bindings)
+        attempted: set[str] = set()
+        while True:
+            try:
+                lease = await asyncio.to_thread(
+                    self._load_snapshot,
+                    bindings,
+                    execution_context,
+                )
+                break
+            except _RuntimeAssetRequired as missing:
+                if missing.digest in attempted:
+                    raise PluginCatalogError(
+                        "plugin_runtime_asset_unavailable",
+                        str(missing),
+                    ) from missing
+                attempted.add(missing.digest)
+                try:
+                    await self._runtime_assets.ensure(
+                        asset_id=missing.asset_id,
+                        version=missing.version,
+                        platform=missing.platform,
+                        digest=missing.digest,
+                    )
+                except InvalidPluginPackage as exc:
+                    raise PluginCatalogError(
+                        "plugin_runtime_asset_unavailable",
+                        str(missing),
+                    ) from exc
         try:
             yield lease
         finally:
@@ -226,9 +278,12 @@ class PluginCatalog:
                             digest=str(reference["digest"]),
                         )
                     except InvalidPluginPackage as exc:
-                        raise PluginCatalogError(
-                            "plugin_runtime_asset_unavailable",
-                            f"plugin {binding['plugin_id']} runtime asset is unavailable",
+                        raise _RuntimeAssetRequired(
+                            plugin_id=str(binding["plugin_id"]),
+                            asset_id=str(reference["id"]),
+                            version=str(reference["version"]),
+                            platform=execution_platform,
+                            digest=str(reference["digest"]),
                         ) from exc
                     runtime_assets_by_digest.setdefault(asset.digest, asset)
                     resolved_assets.append(asset)

@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import os
 import shutil
 import stat
 import tempfile
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urljoin, urlsplit
 
+import httpx
 from pydantic import AnyUrl, BaseModel, ConfigDict, Field, ValidationError
 
+from ..tools.web import _pinned_transport
 from .manifest import ManagedWorkerPlatform, PackagePath, PluginId, Semver
 from .package import (
     InvalidPluginPackage,
@@ -28,6 +34,8 @@ _ASSET_DIGEST_DOMAIN = b"shejane-runtime-asset-v1\0"
 _MAX_ASSET_ARCHIVE_BYTES = 768 * 1024 * 1024
 _MAX_ASSET_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 _MAX_ASSET_FILES = 50_000
+_MAX_ASSET_REDIRECTS = 5
+RuntimeAssetDownloader = Callable[[str, Path], Awaitable[None]]
 
 
 class RuntimeAssetManifest(BaseModel):
@@ -108,6 +116,9 @@ class RuntimeAssetStore:
 
     def __init__(self, data_dir: Path) -> None:
         self._root = data_dir / "plugins" / "runtime-assets"
+
+    def contains(self, digest: str) -> bool:
+        return (self._root / "packages" / digest.removeprefix("sha256:")).is_dir()
 
     def install(
         self,
@@ -195,6 +206,181 @@ class RuntimeAssetStore:
             source_url=str(manifest.source_url),
             sbom=root / manifest.sbom,
         )
+
+
+class RuntimeAssetResolver:
+    """Resolve an exact asset, fetching only from Runtime-approved sources when absent."""
+
+    def __init__(
+        self,
+        data_dir: Path,
+        *,
+        sources: Mapping[str, Path | str] | None = None,
+        downloader: RuntimeAssetDownloader | None = None,
+    ) -> None:
+        self._store = RuntimeAssetStore(data_dir)
+        self._sources = dict(sources or {})
+        self._downloader = downloader or _download_runtime_asset
+        self._download_root = data_dir / "plugins" / "runtime-assets" / "downloads"
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    def resolve(
+        self,
+        *,
+        asset_id: str,
+        version: str,
+        platform: str,
+        digest: str,
+    ) -> RuntimeAssetHandle:
+        return self._store.resolve(
+            asset_id=asset_id,
+            version=version,
+            platform=platform,
+            digest=digest,
+        )
+
+    async def ensure(
+        self,
+        *,
+        asset_id: str,
+        version: str,
+        platform: str,
+        digest: str,
+    ) -> RuntimeAssetHandle:
+        try:
+            return self.resolve(
+                asset_id=asset_id,
+                version=version,
+                platform=platform,
+                digest=digest,
+            )
+        except InvalidPluginPackage:
+            if self._store.contains(digest):
+                raise
+
+        source = self._sources.get(asset_id)
+        if source is None:
+            raise InvalidPluginPackage("required runtime asset has no approved source")
+        lock = self._locks.setdefault(digest, asyncio.Lock())
+        async with lock:
+            try:
+                return self.resolve(
+                    asset_id=asset_id,
+                    version=version,
+                    platform=platform,
+                    digest=digest,
+                )
+            except InvalidPluginPackage:
+                if self._store.contains(digest):
+                    raise
+
+            archive = await self._materialize(source)
+            try:
+                handle = await asyncio.to_thread(
+                    self._store.install,
+                    archive,
+                    expected_digest=digest,
+                    target_platform=platform,
+                )
+            finally:
+                if isinstance(source, str):
+                    with contextlib.suppress(OSError):
+                        archive.unlink(missing_ok=True)
+            if (
+                handle.asset_id != asset_id
+                or handle.version != version
+                or handle.platform != platform
+                or handle.digest != digest
+            ):
+                raise InvalidPluginPackage("runtime asset identity does not match its reference")
+            return handle
+
+    async def _materialize(self, source: Path | str) -> Path:
+        if isinstance(source, Path):
+            if not source.is_file():
+                raise InvalidPluginPackage("approved runtime asset source is unavailable")
+            return source
+        parsed = urlsplit(source)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            raise InvalidPluginPackage("approved runtime asset source URL is invalid")
+        self._download_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd, raw_path = tempfile.mkstemp(
+            prefix="asset-",
+            suffix=".shejane-runtime-asset",
+            dir=self._download_root,
+        )
+        os.close(fd)
+        destination = Path(raw_path)
+        try:
+            await self._downloader(source, destination)
+        except InvalidPluginPackage:
+            destination.unlink(missing_ok=True)
+            raise
+        except asyncio.CancelledError:
+            with contextlib.suppress(OSError):
+                destination.unlink(missing_ok=True)
+            raise
+        except Exception as exc:
+            destination.unlink(missing_ok=True)
+            raise InvalidPluginPackage("runtime asset download failed") from exc
+        return destination
+
+
+async def _download_runtime_asset(url: str, destination: Path) -> None:
+    current_url = url
+    try:
+        for redirect_count in range(_MAX_ASSET_REDIRECTS + 1):
+            parsed = urlsplit(current_url)
+            if parsed.scheme != "https":
+                raise InvalidPluginPackage("runtime asset download requires HTTPS")
+            transport, reason = _pinned_transport(current_url)
+            if transport is None:
+                raise InvalidPluginPackage(f"runtime asset download was blocked: {reason}")
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(300.0, connect=15.0),
+                follow_redirects=False,
+                transport=transport,
+            ) as client:
+                async with client.stream(
+                    "GET",
+                    current_url,
+                    headers={
+                        "Accept": "application/octet-stream",
+                        "User-Agent": "SheJane-Runtime-Asset/1",
+                    },
+                ) as response:
+                    location = response.headers.get("location")
+                    if response.status_code in {301, 302, 303, 307, 308} and location:
+                        if redirect_count >= _MAX_ASSET_REDIRECTS:
+                            raise InvalidPluginPackage(
+                                "runtime asset download has too many redirects"
+                            )
+                        current_url = urljoin(current_url, location)
+                        continue
+                    response.raise_for_status()
+                    declared = response.headers.get("content-length")
+                    if declared is not None and int(declared) > _MAX_ASSET_ARCHIVE_BYTES:
+                        raise InvalidPluginPackage("runtime asset download exceeds the size limit")
+                    written = 0
+                    with destination.open("wb") as output:
+                        async for chunk in response.aiter_bytes(chunk_size=256 * 1024):
+                            written += len(chunk)
+                            if written > _MAX_ASSET_ARCHIVE_BYTES:
+                                raise InvalidPluginPackage(
+                                    "runtime asset download exceeds the size limit"
+                                )
+                            output.write(chunk)
+                    if written == 0:
+                        raise InvalidPluginPackage("runtime asset download is empty")
+                    return
+        raise InvalidPluginPackage("runtime asset download has too many redirects")
+    except (httpx.HTTPError, ValueError) as exc:
+        raise InvalidPluginPackage("runtime asset download failed") from exc
 
 
 def _prepare_asset_executables(root: Path, manifest: RuntimeAssetManifest) -> None:

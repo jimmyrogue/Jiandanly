@@ -7,6 +7,7 @@ import platform
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -48,25 +49,6 @@ def default_browser_qa_package() -> Path | None:
     return package if package.is_file() else None
 
 
-def default_browser_qa_runtime_asset() -> Path | None:
-    machine = platform.machine().lower()
-    if sys.platform == "darwin" and machine in {"arm64", "aarch64"}:
-        target = "darwin-arm64"
-    elif sys.platform == "win32" and machine in {"amd64", "x86_64"}:
-        target = "windows-amd64"
-    else:
-        return None
-    frozen_root = getattr(sys, "_MEIPASS", None)
-    if not frozen_root:
-        return None
-    asset = (
-        Path(frozen_root)
-        / "builtin-assets"
-        / f"browser-qa-runtime-1.61.1-{target}.shejane-runtime-asset"
-    )
-    return asset if asset.is_file() else None
-
-
 def default_ocr_package() -> Path | None:
     machine = platform.machine().lower()
     if sys.platform == "darwin" and machine in {"arm64", "aarch64"}:
@@ -80,25 +62,6 @@ def default_ocr_package() -> Path | None:
         return None
     package = Path(frozen_root) / "builtin-plugins" / f"ocr-0.1.2-{target}.shejane-plugin"
     return package if package.is_file() else None
-
-
-def default_ocr_runtime_asset() -> Path | None:
-    machine = platform.machine().lower()
-    if sys.platform == "darwin" and machine in {"arm64", "aarch64"}:
-        target = "darwin-arm64"
-    elif sys.platform == "win32" and machine in {"amd64", "x86_64"}:
-        target = "windows-amd64"
-    else:
-        return None
-    frozen_root = getattr(sys, "_MEIPASS", None)
-    if not frozen_root:
-        return None
-    asset = (
-        Path(frozen_root)
-        / "builtin-assets"
-        / f"rapidocr-runtime-3.9.1-{target}.shejane-runtime-asset"
-    )
-    return asset if asset.is_file() else None
 
 
 def clamp_run_budget(field: str, value: int) -> int:
@@ -148,9 +111,10 @@ class Settings(BaseSettings):
     managed_worker_linux_assets: Path | None = None
     computer_use_package: Path | None = Field(default_factory=default_computer_use_package)
     browser_qa_package: Path | None = Field(default_factory=default_browser_qa_package)
-    browser_qa_runtime_asset: Path | None = Field(default_factory=default_browser_qa_runtime_asset)
+    browser_qa_runtime_asset: Path | None = None
     ocr_package: Path | None = Field(default_factory=default_ocr_package)
-    ocr_runtime_asset: Path | None = Field(default_factory=default_ocr_runtime_asset)
+    ocr_runtime_asset: Path | None = None
+    fixed_runtime_asset_base_url: str | None = None
 
     @field_validator(
         "managed_worker_vm_assets",
@@ -166,6 +130,24 @@ class Settings(BaseSettings):
         if value is not None and not value.is_absolute():
             raise ValueError("Runtime asset paths must be absolute")
         return value
+
+    @field_validator("fixed_runtime_asset_base_url")
+    @classmethod
+    def require_https_runtime_asset_base_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.rstrip("/")
+        parsed = urlsplit(normalized)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("fixed Runtime Asset base URL must be credential-free HTTPS")
+        return normalized
 
     # When set, the agent uses a deterministic in-process fake LLM instead of
     # any model service — no network, no key. Used by the SSE contract test to

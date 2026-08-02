@@ -66,9 +66,7 @@ class PluginRegistry:
         runtime_version: str,
         computer_use_package: Path | None = None,
         browser_qa_package: Path | None = None,
-        browser_qa_runtime_asset: Path | None = None,
         ocr_package: Path | None = None,
-        ocr_runtime_asset: Path | None = None,
     ) -> None:
         self._store = store
         self._root = data_dir / "plugins"
@@ -84,9 +82,6 @@ class PluginRegistry:
             )
             if package is not None
         }
-        self._fixed_runtime_assets = tuple(
-            path for path in (browser_qa_runtime_asset, ocr_runtime_asset) if path is not None
-        )
         self._fixed_capabilities_ready_for: set[str] = set()
         self._fixed_capability_lock = asyncio.Lock()
 
@@ -309,21 +304,6 @@ class PluginRegistry:
                         "Built-in plugin does not target this operating system and architecture",
                         status_code=409,
                     )
-                target_platform = manifest.runtime.execution.platforms[0]
-                for reference in manifest.runtime.execution.runtime_assets:
-                    try:
-                        self._runtime_assets.resolve(
-                            asset_id=reference.id,
-                            version=reference.version,
-                            platform=target_platform,
-                            digest=reference.digest,
-                        )
-                    except InvalidPluginPackage as exc:
-                        raise PluginRegistryError(
-                            "plugin_runtime_asset_unavailable",
-                            f"required runtime asset {reference.id} is unavailable",
-                            status_code=409,
-                        ) from exc
             try:
                 compatible = Version(self._runtime_version) >= Version(manifest.runtime.min_version)
             except InvalidVersion as exc:
@@ -652,23 +632,6 @@ class PluginRegistry:
         async with self._fixed_capability_lock:
             if principal_id in self._fixed_capabilities_ready_for:
                 return
-            for source in self._fixed_runtime_assets:
-                if not source.is_file():
-                    raise PluginRegistryError(
-                        "builtin_capability_unavailable",
-                        "fixed capability Runtime Asset is unavailable",
-                        status_code=409,
-                    )
-                try:
-                    await asyncio.to_thread(
-                        self._runtime_assets.install,
-                        source,
-                        target_platform=current_managed_worker_platform(),
-                    )
-                except InvalidPluginPackage as exc:
-                    raise PluginRegistryError(
-                        "builtin_capability_unavailable", str(exc), status_code=409
-                    ) from exc
             for plugin_id, source in self._fixed_packages.items():
                 if source.is_file():
                     await self._ensure_fixed_plugin(principal_id, plugin_id, source)

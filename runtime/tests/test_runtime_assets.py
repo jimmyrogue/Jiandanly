@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import shutil
 import stat
 import zipfile
 from pathlib import Path
@@ -11,6 +13,7 @@ from shejane_runtime.plugins.package import InvalidPluginPackage
 from shejane_runtime.plugins.platforms import current_managed_worker_execution_platform
 from shejane_runtime.plugins.runtime_assets import (
     _MAX_ASSET_ARCHIVE_BYTES,
+    RuntimeAssetResolver,
     RuntimeAssetStore,
     _prepare_asset_executables,
     canonical_runtime_asset_digest,
@@ -113,6 +116,112 @@ def test_runtime_asset_store_installs_and_resolves_exact_digest(tmp_path: Path) 
     assert first.digest == canonical_runtime_asset_digest(first.root)
     assert first.payload == first.root / "payload" / "libreoffice"
     assert (first.payload / "program.bin").read_bytes() == b"pinned engine"
+
+
+@pytest.mark.asyncio
+async def test_runtime_asset_resolver_downloads_exact_asset_once(tmp_path: Path) -> None:
+    source = _asset_tree(tmp_path / "source")
+    archive = tmp_path / "libreoffice.shejane-runtime-asset"
+    _pack(source, archive)
+    digest = canonical_runtime_asset_digest(source)
+    manifest = load_runtime_asset_manifest(source)
+    downloads: list[str] = []
+
+    async def download(url: str, destination: Path) -> None:
+        downloads.append(url)
+        shutil.copyfile(archive, destination)
+
+    resolver = RuntimeAssetResolver(
+        tmp_path / "data",
+        sources={manifest.id: "https://downloads.example.test/libreoffice.shejane-runtime-asset"},
+        downloader=download,
+    )
+
+    first, replay = await asyncio.gather(
+        resolver.ensure(
+            asset_id=manifest.id,
+            version=manifest.version,
+            platform=manifest.platform,
+            digest=digest,
+        ),
+        resolver.ensure(
+            asset_id=manifest.id,
+            version=manifest.version,
+            platform=manifest.platform,
+            digest=digest,
+        ),
+    )
+
+    assert first == replay
+    assert downloads == ["https://downloads.example.test/libreoffice.shejane-runtime-asset"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_asset_resolver_rejects_download_with_wrong_digest(tmp_path: Path) -> None:
+    source = _asset_tree(tmp_path / "source")
+    archive = tmp_path / "libreoffice.shejane-runtime-asset"
+    _pack(source, archive)
+    manifest = load_runtime_asset_manifest(source)
+
+    async def download(_url: str, destination: Path) -> None:
+        shutil.copyfile(archive, destination)
+
+    resolver = RuntimeAssetResolver(
+        tmp_path / "data",
+        sources={manifest.id: "https://downloads.example.test/libreoffice.shejane-runtime-asset"},
+        downloader=download,
+    )
+
+    with pytest.raises(InvalidPluginPackage, match="expected digest"):
+        await resolver.ensure(
+            asset_id=manifest.id,
+            version=manifest.version,
+            platform=manifest.platform,
+            digest="sha256:" + "f" * 64,
+        )
+
+    packages = tmp_path / "data" / "plugins" / "runtime-assets" / "packages"
+    assert not packages.exists() or list(packages.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_runtime_asset_resolver_retries_after_offline_failure(tmp_path: Path) -> None:
+    source = _asset_tree(tmp_path / "source")
+    archive = tmp_path / "libreoffice.shejane-runtime-asset"
+    _pack(source, archive)
+    digest = canonical_runtime_asset_digest(source)
+    manifest = load_runtime_asset_manifest(source)
+    attempts = 0
+
+    async def download(_url: str, destination: Path) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("offline")
+        shutil.copyfile(archive, destination)
+
+    resolver = RuntimeAssetResolver(
+        tmp_path / "data",
+        sources={manifest.id: "https://downloads.example.test/libreoffice.shejane-runtime-asset"},
+        downloader=download,
+    )
+
+    with pytest.raises(InvalidPluginPackage, match="download failed"):
+        await resolver.ensure(
+            asset_id=manifest.id,
+            version=manifest.version,
+            platform=manifest.platform,
+            digest=digest,
+        )
+
+    installed = await resolver.ensure(
+        asset_id=manifest.id,
+        version=manifest.version,
+        platform=manifest.platform,
+        digest=digest,
+    )
+    assert installed.digest == digest
+    assert attempts == 2
 
 
 def test_runtime_asset_store_rejects_wrong_platform(tmp_path: Path) -> None:

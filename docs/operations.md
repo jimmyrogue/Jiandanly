@@ -195,11 +195,11 @@ Runtime 接受单个 `.shejane-plugin` ZIP，通过 `plugin.install` Command 安
 
 第三方插件以 `.shejane-plugin` 文件分发。用户下载、接收或自行构建后，从“插件”页本地导入；Runtime 不维护远程插件来源、索引或来源公钥。普通插件继续执行上述签名或未签名确认策略。
 
-Computer Use、Browser QA 和 OCR 是 Runtime 随应用提供的固定能力，不属于外部插件分发面。Runtime 只自动接纳构建时固定的身份、版本、平台和 `computer_use` / `browser_qa` / `ocr` 适配器；外部安装、更新、回滚和移除都会被拒绝，因此不要求用户确认这些内置包的发布者签名。插件包和 Runtime Asset 仍进入内容寻址存储并冻结到 Run，不能携带另一种宿主执行器。Browser QA 与 OCR 提供 macOS arm64、Windows AMD64 原生产物；Computer Use 仍只提供 macOS arm64。
+Computer Use、Browser QA 和 OCR 是 Runtime 随应用提供的固定能力，不属于外部插件分发面。Runtime 只自动接纳构建时固定的身份、版本、平台和 `computer_use` / `browser_qa` / `ocr` 适配器；外部安装、更新、回滚和移除都会被拒绝，因此不要求用户确认这些内置包的发布者签名。插件包和 Runtime Asset 仍进入内容寻址存储并冻结到 Run，不能携带另一种宿主执行器。Browser QA 与 OCR 的小型插件包进入安装包；macOS arm64、Windows AMD64 大型 Runtime Asset 作为同一 Client Release 的独立附件发布。Computer Use 仍只提供 macOS arm64。
 
-打包版 Client 冷启动时，托管 Runtime 会校验并安装 Browser QA 与 OCR 的大型固定 Runtime Asset；P1 就绪握手为这条路径保留最多 120 秒。外部本机 Runtime 不执行这项安装，连接检查仍为 30 秒。打包 smoke 必须等待真实 `/v1/runtime` 会话和正常退出，不得用强制清理成功掩盖启动超时或残留进程。
+打包版 Client 启动托管 Runtime 时传入与 `app.getVersion()` 对应的 GitHub Release HTTPS 基址，但 P1 冷启动不下载大型资产。启用 Browser QA 或 OCR 后，首次 Run 在 P6 绑定该能力时先查内容寻址缓存；缺失才下载同一 Release 的精确平台文件。下载限制为 HTTPS、无 URL 凭据、逐跳 DNS/IP 校验、最多五次重定向和 768 MiB，并继续复用现有平台、canonical digest、临时目录与原子安装校验；并发 Run 对同一 digest 只获取一次。断网、超限或摘要不符会以 `plugin_runtime_asset_unavailable` fail closed，删除临时下载且不回退系统 Chrome、系统 OCR 或其他版本；网络恢复后重试 Run 即可。外部本机 Runtime 可显式传本地 `--browser-qa-runtime-asset` / `--ocr-runtime-asset`，或配置 `--fixed-runtime-asset-base-url`。
 
-Browser QA 只打包 Playwright 1.61.1 的完整 Chromium for Testing；headed 和 new-headless 都固定使用 `channel: chromium`，构建命令使用 `playwright install --no-shell chromium`，不得再把独立 `chromium_headless_shell` 放进 Runtime Asset。真实发布门禁必须分别运行 headed 与 headless E2E。
+Browser QA Runtime Asset 只包含 Playwright 1.61.1 的完整 Chromium for Testing；headed 和 new-headless 都固定使用 `channel: chromium`，构建命令使用 `playwright install --no-shell chromium`，不得再把独立 `chromium_headless_shell` 放进 Runtime Asset。真实发布门禁必须分别运行 headed 与 headless E2E。
 
 macOS 首版固定 `injaneity/pi-computer-use` 提交 `9f59ed0eeac09b115897732c46b794ee8ca4e5b0`（0.5.0/MIT），只向模型暴露八个 state-scoped 桌面 Action。启用时由“插件”页依次完成 Helper、屏幕录制、辅助功能三步；每次用户操作最多触发一个系统授权，返回 SheJane 后自动复检。安装器把 Helper 固定在 `~/Applications/pi-computer-use.app`，并保留稳定的 macOS 代码签名身份；这里不能用“内置包免验签”替代 Helper 签名，否则系统可能把升级后的 Helper 视为新应用并重复要求 TCC 授权。每个 Run 只保持一个服务，P11 关闭；所有桌面 Action 继续经过参数校验、审批和持久回执。当前只完成 macOS arm64，其他平台不属于已发布能力。
 
@@ -307,7 +307,7 @@ macOS 正式分发必须配置以下全部 GitHub Actions secrets：
 
 Client 构建只把 Electron Main 运行时依赖放进 `app.asar`，Renderer/Vite 依赖属于开发依赖；Electron locale 只保留英文、简体中文和繁体中文。DMG、ZIP 和 Windows EXE 必须各自带同名 `.blockmap`，发布工作流缺少任一 sidecar 都会失败，并把 blockmap 与 `latest*.yml` 一起上传。客户端在可用时执行差分更新，旧包或 sidecar 不可用时由 `electron-updater` 回退到完整下载。
 
-Client 发布会把锁定的 macOS/Windows 固定能力和 RapidOCR Runtime Asset 按平台与源码摘要缓存在 GitHub Actions。相关构建文件合入 `main` 时会预热这些缓存；tag 发布只读取 `main` 的精确缓存，命中后仍检查插件和 Runtime Asset 身份，未命中则执行原来的可复现构建。缓存不会包含最终 DMG/EXE、签名证书或 keychain，也不会替代安装包 smoke 和签名验证。
+Client 发布会把锁定的 macOS/Windows 固定能力和 RapidOCR Runtime Asset 按平台与源码摘要缓存在 GitHub Actions。相关构建文件合入 `main` 时会预热这些缓存；tag 发布只读取 `main` 的精确缓存，命中后仍检查插件和 Runtime Asset 身份，未命中则执行原来的可复现构建。Browser QA 与 RapidOCR 的四个按需 Runtime Asset 随 DMG/ZIP/EXE 一起上传到同一 tag 的 GitHub Release，但不进入安装包；打包 smoke 明确拒绝冻结 Runtime 中出现 `_internal/builtin-assets`。缓存不会包含最终 DMG/EXE、签名证书或 keychain，也不会替代安装包 smoke 和签名验证。
 
 普通 tag 发布不会构建可选的 Linux arm64 Worker/Runtime Asset。需要复核这些候选资产时，手动运行 `Release Client` 并开启 `extended_asset_verification`；这项开关只构建并检查资产，不会构建 VM、执行 Managed Worker，或改变 Registry Gate。
 
@@ -315,6 +315,7 @@ Client 发布会把锁定的 macOS/Windows 固定能力和 RapidOCR Runtime Asse
 
 - 从同一次提交构建并内置对应平台和架构的 Runtime；
 - 固定并内置主 Agent `execute` 使用的 SRT launcher；Managed Worker packaged backend 缺失时保持关闭；
+- 不内置 Browser QA/RapidOCR 大型 Runtime Asset，并在同一 tag 发布精确平台附件；
 - 只停止 Electron Main 自己启动的 Runtime，不停止外部 Runtime。
 
 ## 验证

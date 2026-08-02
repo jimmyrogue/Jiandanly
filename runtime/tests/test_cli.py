@@ -28,6 +28,8 @@ def test_runtime_cli_accepts_desktop_owned_launch_values(tmp_path: Path) -> None
             str(tmp_path / "ocr.shejane-plugin"),
             "--ocr-runtime-asset",
             str(tmp_path / "rapidocr.shejane-runtime-asset"),
+            "--fixed-runtime-asset-base-url",
+            "https://downloads.example.test/client-v0.1.27",
             "--validate-managed-worker-vm-assets",
         ]
     )
@@ -43,6 +45,7 @@ def test_runtime_cli_accepts_desktop_owned_launch_values(tmp_path: Path) -> None
     assert args.browser_qa_runtime_asset == tmp_path / "browser-qa.shejane-runtime-asset"
     assert args.ocr_package == tmp_path / "ocr.shejane-plugin"
     assert args.ocr_runtime_asset == tmp_path / "rapidocr.shejane-runtime-asset"
+    assert args.fixed_runtime_asset_base_url == "https://downloads.example.test/client-v0.1.27"
     assert args.validate_managed_worker_vm_assets is True
 
 

@@ -1,5 +1,10 @@
 const REQUIRED_RUNTIME_CAPABILITIES = ['agent.run', 'agent.stream']
 const BUNDLED_RUNTIME_START_TIMEOUT_MS = 120000
+const OFFICIAL_CLIENT_RELEASES_URL = 'https://github.com/jimmyrogue/SheJane/releases/download'
+
+function fixedRuntimeAssetBaseURL(version) {
+  return `${OFFICIAL_CLIENT_RELEASES_URL}/client-v${encodeURIComponent(version)}`
+}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -166,6 +171,7 @@ async function installUpdateAfterRuntimeStop({ stopRuntime, quitAndInstall }) {
 
 module.exports = {
   BUNDLED_RUNTIME_START_TIMEOUT_MS,
+  fixedRuntimeAssetBaseURL,
   installUpdateAfterRuntimeStop,
   isPortConflictError,
   startRuntimeWithPortRetry,

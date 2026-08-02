@@ -85,20 +85,15 @@ def test_windows_locked_package_names_resolve_to_canonical_pypi_projects() -> No
     assert fetcher.pypi_version("onnxruntime-1.27.0-cp312-cp312-win_amd64.whl") == "1.27.0"
 
 
-def test_frozen_windows_runtime_discovers_fixed_ocr_artifacts(
+def test_frozen_windows_runtime_discovers_only_fixed_ocr_plugin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     plugin = tmp_path / "builtin-plugins" / "ocr-0.1.2-windows-amd64.shejane-plugin"
-    asset = (
-        tmp_path / "builtin-assets" / "rapidocr-runtime-3.9.1-windows-amd64.shejane-runtime-asset"
-    )
     plugin.parent.mkdir()
-    asset.parent.mkdir()
     plugin.write_bytes(b"plugin")
-    asset.write_bytes(b"asset")
     monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
     monkeypatch.setattr(config.sys, "platform", "win32")
     monkeypatch.setattr(config.platform, "machine", lambda: "AMD64")
 
     assert config.default_ocr_package() == plugin
-    assert config.default_ocr_runtime_asset() == asset
+    assert config.Settings().ocr_runtime_asset is None

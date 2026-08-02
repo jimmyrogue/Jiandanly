@@ -58,6 +58,10 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="bundled fixed RapidOCR Runtime Asset",
     )
     parser.add_argument(
+        "--fixed-runtime-asset-base-url",
+        help="approved HTTPS base URL for on-demand fixed Runtime Assets",
+    )
+    parser.add_argument(
         "--validate-managed-worker-vm-assets",
         action="store_true",
         help="validate the bundled macOS VM asset set and exit",
@@ -87,6 +91,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "browser_qa_runtime_asset": args.browser_qa_runtime_asset,
             "ocr_package": args.ocr_package,
             "ocr_runtime_asset": args.ocr_runtime_asset,
+            "fixed_runtime_asset_base_url": args.fixed_runtime_asset_base_url,
         }.items()
         if value is not None
     }

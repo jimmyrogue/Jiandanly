@@ -1370,22 +1370,14 @@ jobs:
               runtime/plugins/computer-use/dist/
             cp "${RUNNER_TEMP}/shejane-fixed-plugins-darwin/browser-qa-0.1.2-darwin-arm64.shejane-plugin" \
               runtime/plugins/browser-qa/dist/
-            cp "${RUNNER_TEMP}/shejane-fixed-plugins-darwin/browser-qa-runtime-1.61.1-darwin-arm64.shejane-runtime-asset" \
-              runtime/plugins/browser-qa/dist/
             cp "${RUNNER_TEMP}/shejane-fixed-plugins-darwin/ocr-0.1.2-darwin-arm64.shejane-plugin" \
-              runtime/plugins/ocr/dist/
-            cp "${RUNNER_TEMP}/shejane-fixed-plugins-darwin/rapidocr-runtime-3.9.1-darwin-arm64.shejane-runtime-asset" \
               runtime/plugins/ocr/dist/
           elif [[ "${{ matrix.platform }}" == "windows" && "${{ matrix.arch }}" == "x64" ]]; then
             mkdir -p runtime/plugins/ocr/dist
             cp "${RUNNER_TEMP}/shejane-fixed-plugins-windows/ocr-0.1.2-windows-amd64.shejane-plugin" \
               runtime/plugins/ocr/dist/
-            cp "${RUNNER_TEMP}/shejane-fixed-plugins-windows/rapidocr-runtime-3.9.1-windows-amd64.shejane-runtime-asset" \
-              runtime/plugins/ocr/dist/
             mkdir -p runtime/plugins/browser-qa/dist
             cp "${RUNNER_TEMP}/shejane-fixed-plugins-windows/browser-qa-0.1.2-windows-amd64.shejane-plugin" \
-              runtime/plugins/browser-qa/dist/
-            cp "${RUNNER_TEMP}/shejane-fixed-plugins-windows/browser-qa-runtime-1.61.1-windows-amd64.shejane-runtime-asset" \
               runtime/plugins/browser-qa/dist/
           fi
           cd runtime
@@ -1418,6 +1410,19 @@ jobs:
           else
             pnpm exec electron-builder --${{ matrix.target }} --${{ matrix.arch }} --publish never
           fi
+      - name: Stage on-demand Runtime Assets outside the installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.platform }}" == "macos" ]]; then
+            source="${RUNNER_TEMP}/shejane-fixed-plugins-darwin"
+            target="darwin-arm64"
+          else
+            source="${RUNNER_TEMP}/shejane-fixed-plugins-windows"
+            target="windows-amd64"
+          fi
+          cp "${source}/browser-qa-runtime-1.61.1-${target}.shejane-runtime-asset" client/release/
+          cp "${source}/rapidocr-runtime-3.9.1-${target}.shejane-runtime-asset" client/release/
       - name: Verify packaged macOS application
         if: matrix.platform == 'macos'
         working-directory: client
@@ -1474,6 +1479,7 @@ jobs:
             client/release/*.exe
             client/release/*.blockmap
             client/release/latest*.yml
+            client/release/*.shejane-runtime-asset
           if-no-files-found: error
 
   release:

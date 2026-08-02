@@ -15,7 +15,7 @@ MCP Server 只从 Runtime 自有配置读取，不会隐式启动 Claude Desktop
 > **状态**：本文只记录当前代码如何运行，不定义 P1-P12 目标编号。阶段编号以 [harness-runtime-stages.md](harness-runtime-stages.md) 为准。
 > **边界**：业务平台连接器不属于 Runtime 核心，通过标准工具或 MCP 接入。
 
-桌面发行版由 Electron Main 为自带 Runtime 分配本机端点、数据目录和一次性配对 Token，并通过源码与打包产物共用的命令行入口启动进程。Client 不提供 Runtime 连接设置；开发者仍可通过 Main 进程配置接入自己管理的 loopback Runtime，地址和加密 Token 不会回传 Renderer，Electron 也不会关闭外部进程。Runtime 拒绝非 loopback 监听，未来远程客户端必须通过独立接入网关或用户自管的同机私网代理。两种本机模式都使用带认证的 `/v1/runtime` 握手，要求协议版本为 1 且具备 `agent.run`、`agent.stream` 能力。托管子进程只有明确报告“地址已占用”并退出时才换端点重试；包含 Browser QA 与 OCR 固定 Runtime Asset 的首次冷启动允许所有尝试共享 120 秒期限。外部本机 Runtime 的连接检查仍使用 30 秒期限。其他启动错误或仍存活却未在期限内就绪时直接失败。连接失败时 Client 进入离线状态，提示用户重启应用或检查开发配置。桌面托管进程在应用退出时先收到 `SIGTERM`，有限等待后仍未退出才会被强制结束。
+桌面发行版由 Electron Main 为自带 Runtime 分配本机端点、数据目录和一次性配对 Token，并通过源码与打包产物共用的命令行入口启动进程。Client 不提供 Runtime 连接设置；开发者仍可通过 Main 进程配置接入自己管理的 loopback Runtime，地址和加密 Token 不会回传 Renderer，Electron 也不会关闭外部进程。Runtime 拒绝非 loopback 监听，未来远程客户端必须通过独立接入网关或用户自管的同机私网代理。两种本机模式都使用带认证的 `/v1/runtime` 握手，要求协议版本为 1 且具备 `agent.run`、`agent.stream` 能力。托管子进程只有明确报告“地址已占用”并退出时才换端点重试，所有尝试共享 120 秒期限；外部本机 Runtime 的连接检查仍使用 30 秒期限。Browser QA 与 OCR 的大型固定 Runtime Asset 不参与 P1 冷启动。其他启动错误或仍存活却未在期限内就绪时直接失败。连接失败时 Client 进入离线状态，提示用户重启应用或检查开发配置。桌面托管进程在应用退出时先收到 `SIGTERM`，有限等待后仍未退出才会被强制结束。
 
 ---
 
@@ -100,8 +100,9 @@ MCP Server 只从 Runtime 自有配置读取，不会隐式启动 Claude Desktop
   │   agent = build_agent(按结构指纹复用或编译)                                       │
   │   execution_resources = AsyncExitStack      ← 本次执行结束时关闭模型客户端         │
   │     ├─ RuntimeContext                    ← P7 注入身份、任务和本次执行依赖          │
-  │     ├─ PluginCatalog.acquire_snapshot    ← P6 重验精确包 digest 并持有 lease       │
-  │     │   └─ 固定 Action/Skill/Command 描述与 catalog hash；缺包不回退最新版         │
+  │     ├─ PluginCatalog.acquire_snapshot    ← P6 重验精确包/资产 digest 并持有 lease  │
+  │     │   ├─ 固定 Action/Skill/Command 描述与 catalog hash；缺包不回退最新版         │
+  │     │   └─ 首次绑定 Browser QA/OCR 时按当前 Client Release 获取精确资产并原子安装  │
   │     ├─ backend factory → FilesystemBackend(授权工作区或本次执行临时目录)            │
   │     │                                      ← 文件工具和子代理共享当前执行边界      │
   │     ├─ SkillsMiddleware sources = [skills_dir]   ← 只读挂载，渐进披露 Markdown Skills │

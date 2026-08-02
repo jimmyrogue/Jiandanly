@@ -198,3 +198,14 @@ def test_release_does_not_package_builtin_ocr_as_a_linux_worker() -> None:
 
     assert "ocr-0.1.0-" not in workflow
     assert "ocr-0.1.2-linux-arm64.shejane-plugin" not in workflow
+
+
+def test_release_publishes_browser_and_ocr_assets_outside_installers() -> None:
+    workflow = (REPO_ROOT / ".github" / "workflows" / "release-client.yml").read_text(
+        encoding="utf-8"
+    )
+    spec = (REPO_ROOT / "runtime" / "shejane-runtime.spec").read_text(encoding="utf-8")
+
+    assert "builtin-assets" not in spec
+    assert "Stage on-demand Runtime Assets outside the installer" in workflow
+    assert "client/release/*.shejane-runtime-asset" in workflow

@@ -19,16 +19,19 @@ import shejane_runtime.plugins.ocr as ocr_module
 import shejane_runtime.runs as runs_module
 from shejane_runtime.config import reset_settings_for_tests
 from shejane_runtime.plugins.browser_qa import BROWSER_QA_PLUGIN_VERSION
-from shejane_runtime.plugins.catalog import PluginCatalog
 from shejane_runtime.plugins.computer_use import COMPUTER_USE_PLUGIN_VERSION
 from shejane_runtime.plugins.identity import plugin_action_catalog_hash
 from shejane_runtime.plugins.manifest import load_plugin_manifest
 from shejane_runtime.plugins.ocr import OCR_PLUGIN_VERSION
-from shejane_runtime.plugins.package import canonical_package_digest, extract_plugin_archive
+from shejane_runtime.plugins.package import (
+    InvalidPluginPackage,
+    canonical_package_digest,
+    extract_plugin_archive,
+)
 from shejane_runtime.plugins.platforms import current_managed_worker_execution_platform
 from shejane_runtime.plugins.runtime_assets import RuntimeAssetStore
 from shejane_runtime.runs import RunCoordinator
-from shejane_runtime.server import create_app
+from shejane_runtime.server import _fixed_runtime_asset_sources, create_app
 from shejane_runtime.store.sqlite import LocalStore
 from tests.helpers import run_command
 
@@ -276,6 +279,32 @@ def test_plugin_source_api_and_commands_are_not_exposed(client: TestClient) -> N
     assert response.status_code == 422
 
 
+def test_fixed_runtime_asset_release_sources_match_current_platform(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "shejane_runtime.server.current_managed_worker_platform",
+        lambda: "darwin/arm64",
+    )
+    settings = reset_settings_for_tests(
+        data_dir=tmp_path,
+        fixed_runtime_asset_base_url=(
+            "https://github.com/jimmyrogue/SheJane/releases/download/client-v0.1.27"
+        ),
+    )
+
+    assert _fixed_runtime_asset_sources(settings) == {
+        "org.shejane.browser-qa.runtime": (
+            "https://github.com/jimmyrogue/SheJane/releases/download/client-v0.1.27/"
+            "browser-qa-runtime-1.61.1-darwin-arm64.shejane-runtime-asset"
+        ),
+        "org.rapidocr.runtime": (
+            "https://github.com/jimmyrogue/SheJane/releases/download/client-v0.1.27/"
+            "rapidocr-runtime-3.9.1-darwin-arm64.shejane-runtime-asset"
+        ),
+    }
+
+
 def test_computer_use_is_runtime_managed_and_cannot_be_installed_or_removed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -369,6 +398,13 @@ def test_browser_qa_is_runtime_managed_and_cannot_be_removed(
             settings.data_dir / "plugins" / "packages" / plugin["digest"].removeprefix("sha256:")
         )
         manifest = load_plugin_manifest(package_root).model_dump(mode="json")
+        with pytest.raises(InvalidPluginPackage, match="not installed"):
+            RuntimeAssetStore(settings.data_dir).resolve(
+                asset_id="org.shejane.browser-qa.runtime",
+                version="1.61.1+chromium1228.2",
+                platform="darwin/arm64",
+                digest=digest,
+            )
 
         async def verify_catalog_asset() -> None:
             binding = {
@@ -379,7 +415,7 @@ def test_browser_qa_is_runtime_managed_and_cannot_be_removed(
                     manifest, plugin_digest=plugin["digest"]
                 ),
             }
-            async with PluginCatalog(settings.data_dir).acquire_snapshot(
+            async with builtin_client.app.state.coordinator.plugin_catalog.acquire_snapshot(
                 [binding], execution_context=object()
             ) as lease:
                 assert lease.actions[0].runtime_assets[0].asset_id == (
@@ -587,6 +623,33 @@ def test_ocr_asset_and_plugin_are_runtime_managed_and_cannot_be_removed(
         plugin = listed.json()["plugins"][0]
         assert plugin["id"] == "org.shejane.ocr"
         assert plugin["execution_kind"] == "builtin"
+        package_root = (
+            settings.data_dir / "plugins" / "packages" / plugin["digest"].removeprefix("sha256:")
+        )
+        manifest = load_plugin_manifest(package_root).model_dump(mode="json")
+        with pytest.raises(InvalidPluginPackage, match="not installed"):
+            RuntimeAssetStore(settings.data_dir).resolve(
+                asset_id="org.rapidocr.runtime",
+                version="3.9.1+ppocrv6-small.1",
+                platform="darwin/arm64",
+                digest=digest,
+            )
+
+        async def verify_catalog_asset() -> None:
+            binding = {
+                "plugin_id": plugin["id"],
+                "version": plugin["version"],
+                "digest": plugin["digest"],
+                "action_catalog_hash": plugin_action_catalog_hash(
+                    manifest, plugin_digest=plugin["digest"]
+                ),
+            }
+            async with builtin_client.app.state.coordinator.plugin_catalog.acquire_snapshot(
+                [binding], execution_context=object()
+            ) as lease:
+                assert lease.actions[0].runtime_assets[0].asset_id == "org.rapidocr.runtime"
+
+        asyncio.run(verify_catalog_asset())
 
         remove = builtin_client.post(
             "/v1/commands",
