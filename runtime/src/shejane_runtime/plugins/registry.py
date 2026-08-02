@@ -209,6 +209,26 @@ class PluginRegistry:
             ) from exc
         return {"plugin_id": plugin_id, "downloaded": True}
 
+    async def remove_fixed_runtime_asset(
+        self,
+        *,
+        principal_id: str,
+        plugin_id: str,
+    ) -> dict[str, Any]:
+        record = await self._fixed_runtime_asset_record(
+            principal_id=principal_id,
+            plugin_id=plugin_id,
+        )
+        reference = record["manifest"]["runtime"]["execution"]["runtime_assets"][0]
+        try:
+            await self._plugin_catalog.remove_runtime_asset(
+                asset_id=str(reference["id"]),
+                digest=str(reference["digest"]),
+            )
+        except PluginCatalogError as exc:
+            raise PluginRegistryError(exc.code, str(exc), status_code=409) from exc
+        return {"plugin_id": plugin_id, "downloaded": False}
+
     async def _fixed_runtime_asset_record(
         self,
         *,

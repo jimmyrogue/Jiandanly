@@ -142,6 +142,19 @@ class RuntimeAssetStore:
             ignore_errors=True,
         )
 
+    def remove(self, digest: str) -> None:
+        key = digest.removeprefix("sha256:")
+        if len(key) != 64 or any(char not in "0123456789abcdef" for char in key):
+            raise InvalidPluginPackage("runtime asset digest is invalid")
+        for path in (self._root / "quarantine" / key, self._root / "packages" / key):
+            try:
+                if path.is_symlink() or path.is_file():
+                    path.unlink()
+                else:
+                    shutil.rmtree(path)
+            except FileNotFoundError:
+                pass
+
     def install(
         self,
         source: Path,
@@ -260,6 +273,9 @@ class RuntimeAssetResolver:
             platform=platform,
             digest=digest,
         )
+
+    def remove(self, digest: str) -> None:
+        self._store.remove(digest)
 
     async def ensure(
         self,

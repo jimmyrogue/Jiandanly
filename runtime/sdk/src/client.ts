@@ -1543,6 +1543,21 @@ export async function prepareLocalFixedRuntimeAsset(
   return decodeLocalResponse<FixedRuntimeAssetStatus>(response)
 }
 
+export async function removeLocalFixedRuntimeAsset(
+  pluginID: FixedRuntimeAssetPluginID,
+  config: RuntimeClientConfig,
+  fetcher: Fetcher = fetch,
+): Promise<FixedRuntimeAssetStatus> {
+  const response = await fetcher(
+    `${normalizeBaseURL(config.baseURL)}/v1/plugins/${encodeURIComponent(pluginID)}/runtime-asset`,
+    {
+      method: 'DELETE',
+      headers: localHeaders(config, false),
+    },
+  )
+  return decodeLocalResponse<FixedRuntimeAssetStatus>(response)
+}
+
 export async function bindLocalPluginModelCommand(
   commandID: string,
   pluginID: string,
@@ -2233,6 +2248,12 @@ export class SheJaneRuntimeClient {
     pluginID: FixedRuntimeAssetPluginID,
   ): Promise<FixedRuntimeAssetStatus> {
     return prepareLocalFixedRuntimeAsset(pluginID, this.config, this.fetcher)
+  }
+
+  removeFixedRuntimeAsset(
+    pluginID: FixedRuntimeAssetPluginID,
+  ): Promise<FixedRuntimeAssetStatus> {
+    return removeLocalFixedRuntimeAsset(pluginID, this.config, this.fetcher)
   }
 
   bindPluginModel(

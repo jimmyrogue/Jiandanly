@@ -483,7 +483,8 @@ export interface paths {
         /** Prepare Fixed Runtime Asset */
         put: operations["prepare_fixed_runtime_asset_v1_plugins__plugin_id__runtime_asset_put"];
         post?: never;
-        delete?: never;
+        /** Remove Fixed Runtime Asset */
+        delete: operations["remove_fixed_runtime_asset_v1_plugins__plugin_id__runtime_asset_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -4405,6 +4406,37 @@ export interface operations {
         };
     };
     prepare_fixed_runtime_asset_v1_plugins__plugin_id__runtime_asset_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FixedRuntimeAssetStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_fixed_runtime_asset_v1_plugins__plugin_id__runtime_asset_delete: {
         parameters: {
             query?: never;
             header?: never;

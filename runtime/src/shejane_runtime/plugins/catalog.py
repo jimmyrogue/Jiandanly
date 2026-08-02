@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import shutil
+import threading
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -12,7 +14,11 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
-from .browser_qa import is_allowed_browser_qa_package
+from .browser_qa import (
+    BROWSER_QA_PLUGIN_ID,
+    RUNTIME_ALIAS_DIGEST_CHARS,
+    is_allowed_browser_qa_package,
+)
 from .computer_use import is_allowed_computer_use_package
 from .identity import plugin_action_catalog_hash
 from .manifest import load_plugin_manifest
@@ -139,11 +145,14 @@ class PluginCatalog:
         runtime_asset_downloader: RuntimeAssetDownloader | None = None,
     ) -> None:
         self._packages_root = data_dir / "plugins" / "packages"
+        self._browser_runtime_root = data_dir / "browser-qa" / "runtime"
         self._runtime_assets = RuntimeAssetResolver(
             data_dir,
             sources=runtime_asset_sources,
             downloader=runtime_asset_downloader,
         )
+        self._runtime_asset_lease_lock = threading.Lock()
+        self._active_runtime_asset_leases: dict[str, int] = {}
 
     @asynccontextmanager
     async def acquire_snapshot(
@@ -156,7 +165,7 @@ class PluginCatalog:
         while True:
             try:
                 lease = await asyncio.to_thread(
-                    self._load_snapshot,
+                    self._load_leased_snapshot,
                     bindings,
                     execution_context,
                 )
@@ -185,6 +194,56 @@ class PluginCatalog:
             yield lease
         finally:
             await lease.aclose()
+            await asyncio.to_thread(self._release_runtime_assets, lease)
+
+    async def remove_runtime_asset(self, *, asset_id: str, digest: str) -> None:
+        await asyncio.to_thread(self._remove_runtime_asset, asset_id, digest)
+
+    def _load_leased_snapshot(
+        self,
+        frozen_bindings: tuple[dict[str, Any], ...],
+        execution_context: object,
+    ) -> PluginExecutionLease:
+        with self._runtime_asset_lease_lock:
+            lease = self._load_snapshot(frozen_bindings, execution_context)
+            for asset in lease.runtime_assets:
+                self._active_runtime_asset_leases[asset.digest] = (
+                    self._active_runtime_asset_leases.get(asset.digest, 0) + 1
+                )
+            return lease
+
+    def _release_runtime_assets(self, lease: PluginExecutionLease) -> None:
+        with self._runtime_asset_lease_lock:
+            for asset in lease.runtime_assets:
+                remaining = self._active_runtime_asset_leases[asset.digest] - 1
+                if remaining:
+                    self._active_runtime_asset_leases[asset.digest] = remaining
+                else:
+                    del self._active_runtime_asset_leases[asset.digest]
+
+    def _remove_runtime_asset(self, asset_id: str, digest: str) -> None:
+        with self._runtime_asset_lease_lock:
+            if self._active_runtime_asset_leases.get(digest, 0):
+                raise PluginCatalogError(
+                    "plugin_runtime_asset_in_use",
+                    "runtime asset is in use",
+                )
+            key = digest.removeprefix("sha256:")
+            browser_alias = self._browser_runtime_root / key[:RUNTIME_ALIAS_DIGEST_CHARS]
+            try:
+                if asset_id == f"{BROWSER_QA_PLUGIN_ID}.runtime":
+                    if browser_alias.is_symlink() or browser_alias.is_file():
+                        browser_alias.unlink()
+                    else:
+                        shutil.rmtree(browser_alias)
+                self._runtime_assets.remove(digest)
+            except FileNotFoundError:
+                self._runtime_assets.remove(digest)
+            except (InvalidPluginPackage, OSError) as exc:
+                raise PluginCatalogError(
+                    "plugin_runtime_asset_delete_failed",
+                    "runtime asset could not be deleted",
+                ) from exc
 
     def _load_snapshot(
         self,

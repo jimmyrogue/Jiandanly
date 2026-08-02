@@ -622,6 +622,7 @@ describe('SheJaneRuntimeClient', () => {
     const fetcher = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify(missing), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify(downloaded), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(missing), { status: 200 }))
     const client = new SheJaneRuntimeClient({
       baseURL: 'http://127.0.0.1:17371',
       token: 'runtime-token',
@@ -634,6 +635,9 @@ describe('SheJaneRuntimeClient', () => {
     await expect(client.prepareFixedRuntimeAsset(
       'org.shejane.browser-qa',
     )).resolves.toEqual(downloaded)
+    await expect(client.removeFixedRuntimeAsset(
+      'org.shejane.browser-qa',
+    )).resolves.toEqual(missing)
     expect(fetcher).toHaveBeenNthCalledWith(1,
       'http://127.0.0.1:17371/v1/plugins/org.shejane.browser-qa/runtime-asset',
       {
@@ -644,6 +648,12 @@ describe('SheJaneRuntimeClient', () => {
       'http://127.0.0.1:17371/v1/plugins/org.shejane.browser-qa/runtime-asset',
       {
         method: 'PUT',
+        headers: { Authorization: 'Bearer runtime-token' },
+      })
+    expect(fetcher).toHaveBeenNthCalledWith(3,
+      'http://127.0.0.1:17371/v1/plugins/org.shejane.browser-qa/runtime-asset',
+      {
+        method: 'DELETE',
         headers: { Authorization: 'Bearer runtime-token' },
       })
   })

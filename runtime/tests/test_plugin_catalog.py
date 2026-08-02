@@ -143,6 +143,32 @@ async def test_catalog_leases_exact_managed_worker_runtime_assets(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_catalog_only_removes_runtime_asset_after_lease_closes(tmp_path: Path) -> None:
+    binding, asset_digest = _worker_binding_with_asset(tmp_path)
+    catalog = PluginCatalog(tmp_path)
+    store = RuntimeAssetStore(tmp_path)
+
+    async with catalog.acquire_snapshot([binding], execution_context=object()):
+        with pytest.raises(PluginCatalogError) as raised:
+            await catalog.remove_runtime_asset(
+                asset_id="org.libreoffice.runtime",
+                digest=asset_digest,
+            )
+        assert raised.value.code == "plugin_runtime_asset_in_use"
+        assert store.contains(asset_digest)
+
+    await catalog.remove_runtime_asset(
+        asset_id="org.libreoffice.runtime",
+        digest=asset_digest,
+    )
+    assert not store.contains(asset_digest)
+    await catalog.remove_runtime_asset(
+        asset_id="org.libreoffice.runtime",
+        digest=asset_digest,
+    )
+
+
+@pytest.mark.asyncio
 async def test_catalog_marks_runtime_asset_download_failure_retryable(tmp_path: Path) -> None:
     binding, asset_digest = _worker_binding_with_asset(tmp_path)
     shutil.rmtree(

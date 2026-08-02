@@ -468,6 +468,28 @@ def test_browser_qa_is_runtime_managed_and_cannot_be_removed(
         )
         assert repaired.status_code == 200, repaired.text
         assert repaired.json() == {"plugin_id": plugin["id"], "downloaded": True}
+        browser_alias = (
+            settings.data_dir / "browser-qa" / "runtime" / digest.removeprefix("sha256:")[:32]
+        )
+        browser_alias.mkdir(parents=True)
+        (browser_alias / ".shejane-runtime-digest").write_text(digest)
+        deleted = builtin_client.delete(
+            f"/v1/plugins/{plugin['id']}/runtime-asset",
+            headers=AUTH,
+        )
+        assert deleted.status_code == 200, deleted.text
+        assert deleted.json() == {"plugin_id": plugin["id"], "downloaded": False}
+        assert not browser_alias.exists()
+        replay_delete = builtin_client.delete(
+            f"/v1/plugins/{plugin['id']}/runtime-asset",
+            headers=AUTH,
+        )
+        assert replay_delete.json() == deleted.json()
+        redownloaded = builtin_client.put(
+            f"/v1/plugins/{plugin['id']}/runtime-asset",
+            headers=AUTH,
+        )
+        assert redownloaded.status_code == 200, redownloaded.text
 
         shutil.rmtree(package_root)
         asset.unlink()

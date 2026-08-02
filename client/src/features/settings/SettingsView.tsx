@@ -124,6 +124,7 @@ function useSettingsViewModel({
   onModelServicesChange,
   getRuntimeAssetStatus,
   onDownloadRuntimeAsset,
+  onRemoveRuntimeAsset,
 }: {
   isDesktop?: boolean
   agentSettings: Required<AgentSettings>
@@ -138,6 +139,7 @@ function useSettingsViewModel({
   onModelServicesChange?: () => void
   getRuntimeAssetStatus?: (pluginID: FixedRuntimeAssetPluginID) => Promise<FixedRuntimeAssetStatus>
   onDownloadRuntimeAsset?: (pluginID: FixedRuntimeAssetPluginID) => Promise<unknown>
+  onRemoveRuntimeAsset?: (pluginID: FixedRuntimeAssetPluginID) => Promise<unknown>
 }) {
   const { t, locale, setLocale } = useI18n()
   const importInputRef = useRef<HTMLInputElement>(null)
@@ -149,7 +151,7 @@ function useSettingsViewModel({
   const [clearingMemory, setClearingMemory] = useState(false)
   const [clientUpdate, setClientUpdate] = useState<ClientUpdateState | null>(null)
   const [runtimeAssetDownloads, setRuntimeAssetDownloads] = useState<Partial<
-    Record<FixedRuntimeAssetPluginID, 'downloading' | 'downloaded' | 'error'>
+    Record<FixedRuntimeAssetPluginID, 'downloading' | 'downloaded' | 'deleting' | 'error' | 'delete_error'>
   >>({})
 
   const memoryEnabled = (agentSettings.memory ?? 'on') === 'on'
@@ -227,7 +229,7 @@ function useSettingsViewModel({
         .then((status) => {
           if (!active) return
           setRuntimeAssetDownloads((current) => {
-            if (current[pluginID] === 'downloading') return current
+            if (current[pluginID] === 'downloading' || current[pluginID] === 'deleting') return current
             const next = { ...current }
             if (status.downloaded) next[pluginID] = 'downloaded'
             else delete next[pluginID]
@@ -236,7 +238,9 @@ function useSettingsViewModel({
         })
         .catch(() => {
           if (!active) return
-          setRuntimeAssetDownloads((current) => current[pluginID] === 'downloading'
+          setRuntimeAssetDownloads((current) => (
+            current[pluginID] === 'downloading' || current[pluginID] === 'deleting'
+          )
             ? current
             : { ...current, [pluginID]: 'error' })
         })
@@ -308,7 +312,22 @@ function useSettingsViewModel({
     }
   }, [onDownloadRuntimeAsset])
 
-  return { activeSection, adv, advancedSettingsReady, agentSettings, clearMemoryConfirmOpen, clearingMemory, downloadRuntimeAsset, importInputRef, isDesktop, locale, memoryEnabled, navItems, onAgentSettingsChange, onClearMemory, onDownloadRuntimeAsset, onExportLocalData, onImportLocalData, onModelServiceAddOpened, onModelServicesChange, openModelServiceAdd, runtimeAssetDownloads, runtimeConnection, selectSection, setAdv, setClearMemoryConfirmOpen, setClearingMemory, setClientUpdate, setLocale, settingsScrollRef, t, updateAction, updateActiveSectionFromScroll, updateHint, updateStatus }
+  const removeRuntimeAsset = useCallback(async (pluginID: FixedRuntimeAssetPluginID) => {
+    if (!onRemoveRuntimeAsset) return
+    setRuntimeAssetDownloads((current) => ({ ...current, [pluginID]: 'deleting' }))
+    try {
+      await onRemoveRuntimeAsset(pluginID)
+      setRuntimeAssetDownloads((current) => {
+        const next = { ...current }
+        delete next[pluginID]
+        return next
+      })
+    } catch {
+      setRuntimeAssetDownloads((current) => ({ ...current, [pluginID]: 'delete_error' }))
+    }
+  }, [onRemoveRuntimeAsset])
+
+  return { activeSection, adv, advancedSettingsReady, agentSettings, clearMemoryConfirmOpen, clearingMemory, downloadRuntimeAsset, importInputRef, isDesktop, locale, memoryEnabled, navItems, onAgentSettingsChange, onClearMemory, onDownloadRuntimeAsset, onExportLocalData, onImportLocalData, onModelServiceAddOpened, onModelServicesChange, onRemoveRuntimeAsset, openModelServiceAdd, removeRuntimeAsset, runtimeAssetDownloads, runtimeConnection, selectSection, setAdv, setClearMemoryConfirmOpen, setClearingMemory, setClientUpdate, setLocale, settingsScrollRef, t, updateAction, updateActiveSectionFromScroll, updateHint, updateStatus }
 }
 
 export function SettingsView(props: Parameters<typeof useSettingsViewModel>[0]) {
@@ -316,7 +335,7 @@ export function SettingsView(props: Parameters<typeof useSettingsViewModel>[0]) 
 }
 
 function SettingsViewContent({ view }: { view: ReturnType<typeof useSettingsViewModel> }) {
-  const { activeSection, adv, advancedSettingsReady, agentSettings, clearMemoryConfirmOpen, clearingMemory, downloadRuntimeAsset, importInputRef, isDesktop, locale, memoryEnabled, navItems, onAgentSettingsChange, onClearMemory, onDownloadRuntimeAsset, onExportLocalData, onImportLocalData, onModelServiceAddOpened, onModelServicesChange, openModelServiceAdd, runtimeAssetDownloads, runtimeConnection, selectSection, setAdv, setClearMemoryConfirmOpen, setClearingMemory, setClientUpdate, setLocale, settingsScrollRef, t, updateAction, updateActiveSectionFromScroll, updateHint, updateStatus } = view
+  const { activeSection, adv, advancedSettingsReady, agentSettings, clearMemoryConfirmOpen, clearingMemory, downloadRuntimeAsset, importInputRef, isDesktop, locale, memoryEnabled, navItems, onAgentSettingsChange, onClearMemory, onDownloadRuntimeAsset, onExportLocalData, onImportLocalData, onModelServiceAddOpened, onModelServicesChange, onRemoveRuntimeAsset, openModelServiceAdd, removeRuntimeAsset, runtimeAssetDownloads, runtimeConnection, selectSection, setAdv, setClearMemoryConfirmOpen, setClearingMemory, setClientUpdate, setLocale, settingsScrollRef, t, updateAction, updateActiveSectionFromScroll, updateHint, updateStatus } = view
   return (
     <section className="workspace">
       <header className="topbar topbar-page">
@@ -428,33 +447,55 @@ function SettingsViewContent({ view }: { view: ReturnType<typeof useSettingsView
                 ) : null}
                 {isDesktop ? FIXED_RUNTIME_ASSETS.map(({ pluginID, name }) => {
                   const status = runtimeAssetDownloads[pluginID]
+                  const downloaded = status === 'downloaded' || status === 'deleting' || status === 'delete_error'
                   const action = status === 'downloading'
                     ? t('settings.runtimeAsset.downloading')
-                    : status === 'downloaded'
-                      ? t('settings.runtimeAsset.downloaded')
+                    : status === 'deleting'
+                      ? t('settings.runtimeAsset.deleting')
+                      : downloaded
+                        ? t('settings.runtimeAsset.delete')
                       : t('settings.runtimeAsset.download')
-                  const ariaLabel = status === 'downloaded'
-                    ? t('settings.runtimeAsset.downloadedAria', { name })
+                  const ariaLabel = status === 'deleting'
+                    ? t('settings.runtimeAsset.deletingAria', { name })
                     : status === 'downloading'
                       ? t('settings.runtimeAsset.downloadingAria', { name })
+                      : downloaded
+                        ? t('settings.runtimeAsset.deleteAria', { name })
                       : t('settings.runtimeAsset.downloadAria', { name })
+                  const liveStatus = status === 'delete_error'
+                    ? t('settings.runtimeAsset.deleteErrorAria', { name })
+                    : status === 'deleting'
+                      ? ariaLabel
+                      : downloaded
+                      ? t('settings.runtimeAsset.downloadedAria', { name })
+                      : ariaLabel
                   return (
                     <SettingRow
                       key={pluginID}
                       label={name}
                       hint={status === 'error'
                         ? t('settings.runtimeAsset.error')
-                        : t('settings.runtimeAsset.hint')}
+                        : status === 'delete_error'
+                          ? t('settings.runtimeAsset.deleteError')
+                          : t('settings.runtimeAsset.hint')}
                     >
+                      {downloaded && status !== 'deleting' ? (
+                        <span className="settings-row-value">{t('settings.runtimeAsset.downloaded')}</span>
+                      ) : null}
                       <SettingsRowButton
                         ariaLabel={ariaLabel}
-                        disabled={!onDownloadRuntimeAsset || status === 'downloading' || status === 'downloaded'}
-                        onClick={() => void downloadRuntimeAsset(pluginID)}
+                        danger={downloaded}
+                        disabled={status === 'downloading' || status === 'deleting' || (
+                          downloaded ? !onRemoveRuntimeAsset : !onDownloadRuntimeAsset
+                        )}
+                        onClick={() => void (downloaded
+                          ? removeRuntimeAsset(pluginID)
+                          : downloadRuntimeAsset(pluginID))}
                       >
                         {action}
                       </SettingsRowButton>
                       <span className="sr-only" role="status" aria-live="polite">
-                        {ariaLabel}
+                        {liveStatus}
                       </span>
                     </SettingRow>
                   )

@@ -7590,6 +7590,43 @@
       }
     },
     "/v1/plugins/{plugin_id}/runtime-asset": {
+      "delete": {
+        "operationId": "remove_fixed_runtime_asset_v1_plugins__plugin_id__runtime_asset_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plugin_id",
+            "required": true,
+            "schema": {
+              "title": "Plugin Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedRuntimeAssetStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Fixed Runtime Asset"
+      },
       "get": {
         "operationId": "inspect_fixed_runtime_asset_v1_plugins__plugin_id__runtime_asset_get",
         "parameters": [

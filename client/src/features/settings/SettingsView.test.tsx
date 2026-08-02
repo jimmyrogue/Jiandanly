@@ -75,11 +75,11 @@ describe('SettingsView', () => {
     )
 
     fireEvent.click(screen.getByRole('button', { name: '下载 Browser QA' }))
-    await screen.findByRole('button', { name: 'Browser QA 已下载' })
+    await screen.findByRole('button', { name: '删除 Browser QA' })
     expect(downloadRuntimeAsset).toHaveBeenCalledWith('org.shejane.browser-qa')
 
     fireEvent.click(screen.getByRole('button', { name: '下载 RapidOCR' }))
-    await screen.findByRole('button', { name: 'RapidOCR 已下载' })
+    await screen.findByRole('button', { name: '删除 RapidOCR' })
     expect(downloadRuntimeAsset).toHaveBeenCalledWith('org.shejane.ocr')
     expect(screen.getAllByRole('status').some((status) => (
       status.textContent === 'RapidOCR 已下载'
@@ -91,6 +91,7 @@ describe('SettingsView', () => {
       plugin_id: pluginID as 'org.shejane.browser-qa' | 'org.shejane.ocr',
       downloaded: pluginID === 'org.shejane.browser-qa',
     }))
+    const removeRuntimeAsset = vi.fn().mockResolvedValue(undefined)
     render(
       <I18nProvider>
         <SettingsView
@@ -100,11 +101,14 @@ describe('SettingsView', () => {
           onImportLocalData={vi.fn()}
           getRuntimeAssetStatus={getRuntimeAssetStatus}
           onDownloadRuntimeAsset={vi.fn().mockResolvedValue(undefined)}
+          onRemoveRuntimeAsset={removeRuntimeAsset}
         />
       </I18nProvider>,
     )
 
-    expect(await screen.findByRole('button', { name: 'Browser QA 已下载' })).toBeDisabled()
+    fireEvent.click(await screen.findByRole('button', { name: '删除 Browser QA' }))
+    expect(await screen.findByRole('button', { name: '下载 Browser QA' })).toBeEnabled()
+    expect(removeRuntimeAsset).toHaveBeenCalledWith('org.shejane.browser-qa')
     expect(screen.getByRole('button', { name: '下载 RapidOCR' })).toBeEnabled()
   })
 

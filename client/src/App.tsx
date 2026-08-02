@@ -100,6 +100,7 @@ import {
   injectLocalRunInstruction,
   parseRuntimeModelSpec,
   prepareLocalFixedRuntimeAsset,
+  removeLocalFixedRuntimeAsset,
   probeRuntime,
   resolveLocalPlanCommand,
   resolveLocalPermissionCommand,
@@ -3171,6 +3172,9 @@ function AppContentView({ view }: { view: AppContentViewModel }) {
     download: (pluginID: FixedRuntimeAssetPluginID) => (
       prepareLocalFixedRuntimeAsset(pluginID, runtimeConnection)
     ),
+    remove: (pluginID: FixedRuntimeAssetPluginID) => (
+      removeLocalFixedRuntimeAsset(pluginID, runtimeConnection)
+    ),
   } : null, [runtimeConnection])
 
   return (
@@ -3351,6 +3355,7 @@ function AppContentView({ view }: { view: AppContentViewModel }) {
               runtimeConnection={runtimeConnection}
               getRuntimeAssetStatus={runtimeAssetControls?.getStatus}
               onDownloadRuntimeAsset={runtimeAssetControls?.download}
+              onRemoveRuntimeAsset={runtimeAssetControls?.remove}
               openModelServiceAdd={modelServiceAddRequested}
               onModelServiceAddOpened={() => setModelServiceAddRequested(false)}
               onModelServicesChange={() => setModelCatalogVersion((version) => version + 1)}

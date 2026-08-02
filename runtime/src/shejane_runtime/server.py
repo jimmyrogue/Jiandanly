@@ -2861,6 +2861,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 detail={"code": exc.code, "message": str(exc)},
             ) from exc
 
+    @app.delete(
+        "/v1/plugins/{plugin_id}/runtime-asset",
+        response_model=FixedRuntimeAssetStatus,
+    )
+    async def remove_fixed_runtime_asset(request: Request, plugin_id: str) -> dict[str, Any]:
+        registry: PluginRegistry = app.state.plugin_registry
+        try:
+            return await registry.remove_fixed_runtime_asset(
+                principal_id=request.state.principal_id,
+                plugin_id=plugin_id,
+            )
+        except PluginRegistryError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
+
     @app.get(
         "/v1/plugins/{plugin_id}/readiness",
         response_model=PluginReadinessSnapshot,
