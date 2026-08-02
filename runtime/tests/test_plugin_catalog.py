@@ -143,6 +143,32 @@ async def test_catalog_leases_exact_managed_worker_runtime_assets(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_catalog_marks_runtime_asset_download_failure_retryable(tmp_path: Path) -> None:
+    binding, asset_digest = _worker_binding_with_asset(tmp_path)
+    shutil.rmtree(
+        tmp_path / "plugins" / "runtime-assets" / "packages" / asset_digest.removeprefix("sha256:")
+    )
+
+    async def offline(_url: str, _destination: Path) -> None:
+        raise OSError("offline")
+
+    catalog = PluginCatalog(
+        tmp_path,
+        runtime_asset_sources={
+            "org.libreoffice.runtime": "https://downloads.example.test/runtime-asset"
+        },
+        runtime_asset_downloader=offline,
+    )
+
+    with pytest.raises(PluginCatalogError) as raised:
+        async with catalog.acquire_snapshot([binding], execution_context=object()):
+            pass
+
+    assert raised.value.code == "plugin_runtime_asset_unavailable"
+    assert raised.value.retryable is True
+
+
+@pytest.mark.asyncio
 async def test_catalog_missing_exact_digest_never_falls_back_to_active_version(
     tmp_path: Path,
 ) -> None:

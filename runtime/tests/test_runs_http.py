@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 
 from shejane_runtime.auth import LOCAL_OWNER_PRINCIPAL_ID
 from shejane_runtime.config import reset_settings_for_tests
+from shejane_runtime.plugins.catalog import PluginCatalogError
 from shejane_runtime.runs import _completion_failure_payload, _run_failed_payload
 from shejane_runtime.server import RequestBodyLimitMiddleware, create_app
 from tests.helpers import run_command
@@ -2003,6 +2004,20 @@ def test_run_failed_payload_includes_failure_policy_for_generic_exceptions() -> 
     assert payload["action_kind"] == "operator_action"
     assert payload["recovery_action"] == "diagnostics"
     assert "implementation" in payload["suggested_action"]
+
+
+def test_runtime_asset_download_failure_is_retryable() -> None:
+    payload = _run_failed_payload(
+        PluginCatalogError(
+            "plugin_runtime_asset_unavailable",
+            "plugin runtime asset is unavailable",
+            retryable=True,
+        )
+    )
+
+    assert payload["code"] == "plugin_runtime_asset_unavailable"
+    assert payload["retryable"] is True
+    assert payload["recoverable"] is True
 
 
 def test_completion_router_block_becomes_structured_run_failure() -> None:

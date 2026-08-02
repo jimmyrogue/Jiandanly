@@ -23,9 +23,11 @@ from .runtime_assets import RuntimeAssetDownloader, RuntimeAssetHandle, RuntimeA
 
 
 class PluginCatalogError(RuntimeError):
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, *, retryable: bool | None = None) -> None:
         super().__init__(message)
         self.code = code
+        if retryable is not None:
+            self.retryable = retryable
 
 
 class _RuntimeAssetRequired(RuntimeError):
@@ -177,6 +179,7 @@ class PluginCatalog:
                     raise PluginCatalogError(
                         "plugin_runtime_asset_unavailable",
                         str(missing),
+                        retryable=True,
                     ) from exc
         try:
             yield lease
