@@ -1656,6 +1656,29 @@
         "title": "FeatureLedger",
         "type": "object"
       },
+      "FixedRuntimeAssetStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "downloaded": {
+            "title": "Downloaded",
+            "type": "boolean"
+          },
+          "plugin_id": {
+            "enum": [
+              "org.shejane.browser-qa",
+              "org.shejane.ocr"
+            ],
+            "title": "Plugin Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "plugin_id",
+          "downloaded"
+        ],
+        "title": "FixedRuntimeAssetStatus",
+        "type": "object"
+      },
       "ForkRunRequest": {
         "additionalProperties": false,
         "properties": {
@@ -5635,33 +5658,11 @@
             ],
             "title": "Expected Digest"
           },
-          "plugin_id": {
-            "anyOf": [
-              {
-                "enum": [
-                  "org.shejane.browser-qa",
-                  "org.shejane.ocr"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Plugin Id"
-          },
           "source_path": {
-            "anyOf": [
-              {
-                "maxLength": 4096,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Source Path"
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Source Path",
+            "type": "string"
           },
           "type": {
             "const": "plugin.runtime_asset.install",
@@ -5671,7 +5672,8 @@
         },
         "required": [
           "type",
-          "command_id"
+          "command_id",
+          "source_path"
         ],
         "title": "RuntimeAssetInstallCommand",
         "type": "object"
@@ -7585,6 +7587,82 @@
           }
         },
         "summary": "Inspect Plugin Readiness"
+      }
+    },
+    "/v1/plugins/{plugin_id}/runtime-asset": {
+      "get": {
+        "operationId": "inspect_fixed_runtime_asset_v1_plugins__plugin_id__runtime_asset_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plugin_id",
+            "required": true,
+            "schema": {
+              "title": "Plugin Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedRuntimeAssetStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Inspect Fixed Runtime Asset"
+      },
+      "put": {
+        "operationId": "prepare_fixed_runtime_asset_v1_plugins__plugin_id__runtime_asset_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plugin_id",
+            "required": true,
+            "schema": {
+              "title": "Plugin Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixedRuntimeAssetStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Prepare Fixed Runtime Asset"
       }
     },
     "/v1/pptx-outline": {

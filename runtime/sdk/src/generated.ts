@@ -471,6 +471,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/plugins/{plugin_id}/runtime-asset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Inspect Fixed Runtime Asset */
+        get: operations["inspect_fixed_runtime_asset_v1_plugins__plugin_id__runtime_asset_get"];
+        /** Prepare Fixed Runtime Asset */
+        put: operations["prepare_fixed_runtime_asset_v1_plugins__plugin_id__runtime_asset_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/pptx-outline": {
         parameters: {
             query?: never;
@@ -1625,6 +1643,16 @@ export interface components {
             unresolved_risks?: string[];
             /** Validation Commands */
             validation_commands?: string[];
+        };
+        /** FixedRuntimeAssetStatus */
+        FixedRuntimeAssetStatus: {
+            /** Downloaded */
+            downloaded: boolean;
+            /**
+             * Plugin Id
+             * @enum {string}
+             */
+            plugin_id: "org.shejane.browser-qa" | "org.shejane.ocr";
         };
         /** ForkRunRequest */
         ForkRunRequest: {
@@ -3164,10 +3192,8 @@ export interface components {
             command_id: string;
             /** Expected Digest */
             expected_digest?: string | null;
-            /** Plugin Id */
-            plugin_id?: ("org.shejane.browser-qa" | "org.shejane.ocr") | null;
             /** Source Path */
-            source_path?: string | null;
+            source_path: string;
             /**
              * Type
              * @constant
@@ -4334,6 +4360,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PluginReadinessSnapshot"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    inspect_fixed_runtime_asset_v1_plugins__plugin_id__runtime_asset_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FixedRuntimeAssetStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    prepare_fixed_runtime_asset_v1_plugins__plugin_id__runtime_asset_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FixedRuntimeAssetStatus"];
                 };
             };
             /** @description Validation Error */

@@ -79,6 +79,7 @@ import {
   hasRuntimeAuthorization,
   getLocalArtifact,
   getLocalArtifactContent,
+  getLocalFixedRuntimeAssetStatus,
   getLocalPlugin,
   getLocalPluginReadiness,
   getLocalSkillFile,
@@ -98,6 +99,7 @@ import {
   importModelService,
   injectLocalRunInstruction,
   parseRuntimeModelSpec,
+  prepareLocalFixedRuntimeAsset,
   probeRuntime,
   resolveLocalPlanCommand,
   resolveLocalPermissionCommand,
@@ -3337,16 +3339,11 @@ function AppContentView({ view }: { view: AppContentViewModel }) {
               agentSettings={agentSettings}
               advancedSettingsReady={runtimeSettingsConfig === runtimeConnection && Boolean(runtime?.online)}
               runtimeConnection={runtimeConnection}
+              getRuntimeAssetStatus={runtimeConnection
+                ? (pluginId) => getLocalFixedRuntimeAssetStatus(pluginId, runtimeConnection)
+                : undefined}
               onDownloadRuntimeAsset={runtimeConnection
-                ? (pluginId) => {
-                    const commandId = createLocalID('cmd')
-                    return submitPluginCommand({
-                      type: 'plugin.runtime_asset.install',
-                      commandId,
-                      createdAt: new Date().toISOString(),
-                      input: { pluginId },
-                    })
-                  }
+                ? (pluginId) => prepareLocalFixedRuntimeAsset(pluginId, runtimeConnection)
                 : undefined}
               openModelServiceAdd={modelServiceAddRequested}
               onModelServiceAddOpened={() => setModelServiceAddRequested(false)}

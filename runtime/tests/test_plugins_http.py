@@ -432,33 +432,20 @@ def test_browser_qa_is_runtime_managed_and_cannot_be_removed(
             / "packages"
             / digest.removeprefix("sha256:")
         )
-        prepare = builtin_client.post(
-            "/v1/commands",
+        status = builtin_client.get(
+            f"/v1/plugins/{plugin['id']}/runtime-asset",
             headers=AUTH,
-            json={
-                "type": "plugin.runtime_asset.install",
-                "command_id": "cmd_prepare_browser_qa",
-                "plugin_id": plugin["id"],
-            },
+        )
+        assert status.json() == {"plugin_id": plugin["id"], "downloaded": False}
+        prepare = builtin_client.put(
+            f"/v1/plugins/{plugin['id']}/runtime-asset",
+            headers=AUTH,
         )
         assert prepare.status_code == 200, prepare.text
-        assert prepare.json() == {
-            "type": "plugin.runtime_asset.install",
-            "command_id": "cmd_prepare_browser_qa",
-            "asset_id": "org.shejane.browser-qa.runtime",
-            "version": "1.61.1+chromium1228.2",
-            "platform": "darwin/arm64",
-            "digest": digest,
-            "installed": True,
-        }
-        replay = builtin_client.post(
-            "/v1/commands",
+        assert prepare.json() == {"plugin_id": plugin["id"], "downloaded": True}
+        replay = builtin_client.put(
+            f"/v1/plugins/{plugin['id']}/runtime-asset",
             headers=AUTH,
-            json={
-                "type": "plugin.runtime_asset.install",
-                "command_id": "cmd_prepare_browser_qa",
-                "plugin_id": plugin["id"],
-            },
         )
         assert replay.json() == prepare.json()
 
@@ -470,14 +457,9 @@ def test_browser_qa_is_runtime_managed_and_cannot_be_removed(
             / digest.removeprefix("sha256:")
         )
         asset.unlink()
-        unavailable = builtin_client.post(
-            "/v1/commands",
+        unavailable = builtin_client.put(
+            f"/v1/plugins/{plugin['id']}/runtime-asset",
             headers=AUTH,
-            json={
-                "type": "plugin.runtime_asset.install",
-                "command_id": "cmd_prepare_browser_qa_offline",
-                "plugin_id": plugin["id"],
-            },
         )
         assert unavailable.status_code == 503
         assert unavailable.json()["detail"]["code"] == "plugin_runtime_asset_unavailable"
@@ -716,18 +698,12 @@ def test_ocr_asset_and_plugin_are_runtime_managed_and_cannot_be_removed(
             / "packages"
             / digest.removeprefix("sha256:")
         )
-        prepare = builtin_client.post(
-            "/v1/commands",
+        prepare = builtin_client.put(
+            f"/v1/plugins/{plugin['id']}/runtime-asset",
             headers=AUTH,
-            json={
-                "type": "plugin.runtime_asset.install",
-                "command_id": "cmd_prepare_ocr",
-                "plugin_id": plugin["id"],
-            },
         )
         assert prepare.status_code == 200, prepare.text
-        assert prepare.json()["asset_id"] == "org.rapidocr.runtime"
-        assert prepare.json()["digest"] == digest
+        assert prepare.json() == {"plugin_id": plugin["id"], "downloaded": True}
 
         remove = builtin_client.post(
             "/v1/commands",

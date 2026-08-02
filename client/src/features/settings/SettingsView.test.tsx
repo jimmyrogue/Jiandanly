@@ -81,6 +81,31 @@ describe('SettingsView', () => {
     fireEvent.click(screen.getByRole('button', { name: '下载 RapidOCR' }))
     await screen.findByRole('button', { name: 'RapidOCR 已下载' })
     expect(downloadRuntimeAsset).toHaveBeenCalledWith('org.shejane.ocr')
+    expect(screen.getAllByRole('status').some((status) => (
+      status.textContent === 'RapidOCR 已下载'
+    ))).toBe(true)
+  })
+
+  it('restores downloaded asset state from Runtime when settings reopens', async () => {
+    const getRuntimeAssetStatus = vi.fn(async (pluginID: string) => ({
+      plugin_id: pluginID as 'org.shejane.browser-qa' | 'org.shejane.ocr',
+      downloaded: pluginID === 'org.shejane.browser-qa',
+    }))
+    render(
+      <I18nProvider>
+        <SettingsView
+          isDesktop
+          agentSettings={settings}
+          onAgentSettingsChange={vi.fn()}
+          onImportLocalData={vi.fn()}
+          getRuntimeAssetStatus={getRuntimeAssetStatus}
+          onDownloadRuntimeAsset={vi.fn().mockResolvedValue(undefined)}
+        />
+      </I18nProvider>,
+    )
+
+    expect(await screen.findByRole('button', { name: 'Browser QA 已下载' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '下载 RapidOCR' })).toBeEnabled()
   })
 
   it('lets desktop users see their version and check for Client updates', async () => {

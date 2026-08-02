@@ -1275,20 +1275,11 @@ class RuntimeAssetInstallCommand(BaseModel):
         max_length=128,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
     )
-    source_path: str | None = Field(default=None, min_length=1, max_length=4096)
-    plugin_id: Literal["org.shejane.browser-qa", "org.shejane.ocr"] | None = None
+    source_path: str = Field(min_length=1, max_length=4096)
     expected_digest: str | None = Field(
         default=None,
         pattern=r"^sha256:[0-9a-f]{64}$",
     )
-
-    @model_validator(mode="after")
-    def require_one_asset_source(self) -> RuntimeAssetInstallCommand:
-        if (self.source_path is None) == (self.plugin_id is None):
-            raise ValueError("provide exactly one of source_path or plugin_id")
-        if self.plugin_id is not None and self.expected_digest is not None:
-            raise ValueError("fixed Runtime Asset digest is owned by Runtime")
-        return self
 
 
 class RuntimeAssetInstallCommandReceipt(BaseModel):
@@ -1301,6 +1292,13 @@ class RuntimeAssetInstallCommandReceipt(BaseModel):
     platform: str
     digest: str
     installed: Literal[True] = True
+
+
+class FixedRuntimeAssetStatus(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    plugin_id: Literal["org.shejane.browser-qa", "org.shejane.ocr"]
+    downloaded: bool
 
 
 class _PluginStateCommand(BaseModel):

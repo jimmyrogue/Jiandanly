@@ -180,8 +180,9 @@ EventSource API 也能用，但不能传 Authorization 头；fetch + ReadableStr
 | `POST /v1/runs` | `{command_id, client_message_id, goal, permission_mode?, attachment_paths?, history?, settings?, ...}` | `permission_mode` 为 `ask`、`auto` 或 `full_access`，省略时使用 `ask`；附件必须是本机现有文件，最多 10 个，接纳时流式导入 Runtime 的不可变内容寻址输入存储（单个及单 Run 合计上限 200 MiB）；后续执行不再依赖原始主机路径。任务附件和 PDF 文件的模型读取上限为 200 MiB，其他 workspace、Skill、Memory 与子任务文件读取上限为 20 MiB；更大的文件必须由兼容插件流式处理；创建后开 stream → `run.started` |
 | `POST /v1/runs/:id/fork` | `{command_id, client_message_id, assistant_message_id, thread_id, protocol_version, required_capabilities, checkpoint_id, ...}` | 创建分支后开 stream → `run.started` |
 | `GET /v1/runs/:id/stream` | — | （本协议） |
-| `POST /v1/commands` | Run/HITL 命令，以及 `plugin.install`、`plugin.runtime_asset.install`、`plugin.enable/disable/update/rollback/remove`、`plugin.model.bind`、`plugin.setup.advance` 的严格联合类型 | Run 命令产生对应状态事件；插件命令写入幂等 Command 日志并返回收据。`plugin.runtime_asset.install` 接受本地 `source_path`，或仅对 Browser QA/RapidOCR 接受 Runtime 解析的 `plugin_id`，两者互斥；`plugin.setup.advance` 只接受固定 Computer Use 能力和当前 revision，且不会由 Client 后台自动重试系统授权动作 |
+| `POST /v1/commands` | Run/HITL 命令，以及 `plugin.install`、`plugin.runtime_asset.install`、`plugin.enable/disable/update/rollback/remove`、`plugin.model.bind`、`plugin.setup.advance` 的严格联合类型 | Run 命令产生对应状态事件；插件命令写入幂等 Command 日志并返回收据。`plugin.setup.advance` 只接受固定 Computer Use 能力和当前 revision，且不会由 Client 后台自动重试系统授权动作 |
 | `GET /v1/plugins` / `GET /v1/plugins/:id` | — | 返回当前 principal 可见的安装、版本、Action、Command、签名、能力与安全模型绑定摘要，不返回密钥、credential ref 或模型服务地址 |
+| `GET/PUT /v1/plugins/:id/runtime-asset` | — | 仅对固定 Browser QA/RapidOCR 返回是否已下载，或幂等准备 Runtime 解析的精确平台资产；不向 Client 暴露下载 URL、文件名或 digest |
 | `GET /v1/plugins/:id/readiness` | — | 返回固定 Computer Use 能力的只读准备状态、当前单步动作和 revision；读取不会触发系统授权 |
 | `GET /v1/artifacts/:id` | — | 返回授权后的 Artifact 元数据；旧的小型文本可内联，文件 Artifact 只返回 `storage_kind=blob`、大小和摘要 |
 | `GET /v1/artifacts/:id/content` | — | 按所属 Run 授权并流式返回正文；支持 HTTP Range，不暴露内部存储路径 |

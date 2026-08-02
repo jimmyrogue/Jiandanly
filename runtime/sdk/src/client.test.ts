@@ -260,36 +260,6 @@ describe('plugin command outbox delivery', () => {
     })
   })
 
-  it('delivers fixed Runtime Asset preparation through the shared outbox', async () => {
-    const receipt = {
-      type: 'plugin.runtime_asset.install',
-      command_id: 'cmd-asset-ocr',
-      asset_id: 'org.rapidocr.runtime',
-      version: '3.9.1+ppocrv6-small.1',
-      platform: 'darwin/arm64',
-      digest: `sha256:${'d'.repeat(64)}`,
-      installed: true,
-    }
-    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(receipt), { status: 200 }))
-    const settle = vi.fn().mockResolvedValue(undefined)
-
-    await expect(deliverPendingRuntimeCommands(
-      [{
-        type: 'plugin.runtime_asset.install',
-        commandId: 'cmd-asset-ocr',
-        createdAt: '2026-08-02T00:00:00Z',
-        input: { pluginId: 'org.shejane.ocr' },
-      }],
-      { baseURL: 'http://127.0.0.1:17371', token: 'runtime-token' },
-      settle,
-      fetcher,
-    )).resolves.toEqual({ delivered: 1, failures: [] })
-    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toEqual({
-      type: 'plugin.runtime_asset.install',
-      command_id: 'cmd-asset-ocr',
-      plugin_id: 'org.shejane.ocr',
-    })
-  })
 })
 
 describe('parseRuntimeModelSpec', () => {
@@ -646,32 +616,36 @@ describe('SheJaneRuntimeClient', () => {
     })
   })
 
-  it('prepares a fixed Runtime Asset without exposing its URL or digest', async () => {
-    const receipt = {
-      type: 'plugin.runtime_asset.install',
-      command_id: 'cmd-asset-browser',
-      asset_id: 'org.shejane.browser-qa.runtime',
-      version: '1.61.1+chromium1228.2',
-      platform: 'darwin/arm64',
-      digest: `sha256:${'c'.repeat(64)}`,
-      installed: true,
-    }
-    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(receipt), { status: 200 }))
+  it('reads and prepares a fixed Runtime Asset without exposing its URL or digest', async () => {
+    const missing = { plugin_id: 'org.shejane.browser-qa', downloaded: false }
+    const downloaded = { ...missing, downloaded: true }
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(missing), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(downloaded), { status: 200 }))
     const client = new SheJaneRuntimeClient({
       baseURL: 'http://127.0.0.1:17371',
       token: 'runtime-token',
       fetcher,
     })
 
-    await expect(client.prepareRuntimeAsset(
-      'cmd-asset-browser',
+    await expect(client.getFixedRuntimeAssetStatus(
       'org.shejane.browser-qa',
-    )).resolves.toEqual(receipt)
-    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toEqual({
-      type: 'plugin.runtime_asset.install',
-      command_id: 'cmd-asset-browser',
-      plugin_id: 'org.shejane.browser-qa',
-    })
+    )).resolves.toEqual(missing)
+    await expect(client.prepareFixedRuntimeAsset(
+      'org.shejane.browser-qa',
+    )).resolves.toEqual(downloaded)
+    expect(fetcher).toHaveBeenNthCalledWith(1,
+      'http://127.0.0.1:17371/v1/plugins/org.shejane.browser-qa/runtime-asset',
+      {
+        method: 'GET',
+        headers: { Authorization: 'Bearer runtime-token' },
+      })
+    expect(fetcher).toHaveBeenNthCalledWith(2,
+      'http://127.0.0.1:17371/v1/plugins/org.shejane.browser-qa/runtime-asset',
+      {
+        method: 'PUT',
+        headers: { Authorization: 'Bearer runtime-token' },
+      })
   })
 
   it('reads and advances the fixed Computer Use setup flow', async () => {

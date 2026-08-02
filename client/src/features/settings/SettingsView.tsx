@@ -24,6 +24,7 @@ import type {
   AdvancedAgentSettings,
   AgentSettings,
   FixedRuntimeAssetPluginID,
+  FixedRuntimeAssetStatus,
   RuntimeConnection,
 } from '@/runtime/client'
 import { ModelServicesSettings } from './ModelServicesSettings'
@@ -31,6 +32,13 @@ import { ModelServicesSettings } from './ModelServicesSettings'
 type SettingsSectionID = 'models' | 'agent' | 'general' | 'data'
 
 const SETTINGS_SECTION_TOP_OFFSET = 72
+const FIXED_RUNTIME_ASSETS: ReadonlyArray<{
+  pluginID: FixedRuntimeAssetPluginID
+  name: string
+}> = [
+  { pluginID: 'org.shejane.browser-qa', name: 'Browser QA' },
+  { pluginID: 'org.shejane.ocr', name: 'RapidOCR' },
+]
 
 function SettingRow({
   label,
@@ -114,6 +122,7 @@ function useSettingsViewModel({
   openModelServiceAdd,
   onModelServiceAddOpened,
   onModelServicesChange,
+  getRuntimeAssetStatus,
   onDownloadRuntimeAsset,
 }: {
   isDesktop?: boolean
@@ -127,6 +136,7 @@ function useSettingsViewModel({
   openModelServiceAdd?: boolean
   onModelServiceAddOpened?: () => void
   onModelServicesChange?: () => void
+  getRuntimeAssetStatus?: (pluginID: FixedRuntimeAssetPluginID) => Promise<FixedRuntimeAssetStatus>
   onDownloadRuntimeAsset?: (pluginID: FixedRuntimeAssetPluginID) => Promise<unknown>
 }) {
   const { t, locale, setLocale } = useI18n()
@@ -208,6 +218,33 @@ function useSettingsViewModel({
     void updates.getState().then(setClientUpdate).catch(() => undefined)
     return unsubscribe
   }, [isDesktop])
+
+  useEffect(() => {
+    if (!isDesktop || !getRuntimeAssetStatus) return
+    let active = true
+    for (const { pluginID } of FIXED_RUNTIME_ASSETS) {
+      void getRuntimeAssetStatus(pluginID)
+        .then((status) => {
+          if (!active) return
+          setRuntimeAssetDownloads((current) => {
+            if (current[pluginID] === 'downloading') return current
+            const next = { ...current }
+            if (status.downloaded) next[pluginID] = 'downloaded'
+            else delete next[pluginID]
+            return next
+          })
+        })
+        .catch(() => {
+          if (!active) return
+          setRuntimeAssetDownloads((current) => current[pluginID] === 'downloading'
+            ? current
+            : { ...current, [pluginID]: 'error' })
+        })
+    }
+    return () => {
+      active = false
+    }
+  }, [getRuntimeAssetStatus, isDesktop])
 
   const updateStatus = clientUpdate?.status ?? 'unavailable'
   const updateVersion = clientUpdate?.availableVersion ?? clientUpdate?.currentVersion ?? '—'
@@ -389,16 +426,18 @@ function SettingsViewContent({ view }: { view: ReturnType<typeof useSettingsView
                     </SettingsRowButton>
                   </SettingRow>
                 ) : null}
-                {isDesktop ? ([
-                  ['org.shejane.browser-qa', 'Browser QA'] as const,
-                  ['org.shejane.ocr', 'RapidOCR'] as const,
-                ]).map(([pluginID, name]) => {
+                {isDesktop ? FIXED_RUNTIME_ASSETS.map(({ pluginID, name }) => {
                   const status = runtimeAssetDownloads[pluginID]
                   const action = status === 'downloading'
                     ? t('settings.runtimeAsset.downloading')
                     : status === 'downloaded'
                       ? t('settings.runtimeAsset.downloaded')
                       : t('settings.runtimeAsset.download')
+                  const ariaLabel = status === 'downloaded'
+                    ? t('settings.runtimeAsset.downloadedAria', { name })
+                    : status === 'downloading'
+                      ? t('settings.runtimeAsset.downloadingAria', { name })
+                      : t('settings.runtimeAsset.downloadAria', { name })
                   return (
                     <SettingRow
                       key={pluginID}
@@ -408,16 +447,15 @@ function SettingsViewContent({ view }: { view: ReturnType<typeof useSettingsView
                         : t('settings.runtimeAsset.hint')}
                     >
                       <SettingsRowButton
-                        ariaLabel={status === 'downloaded'
-                          ? t('settings.runtimeAsset.downloadedAria', { name })
-                          : status === 'downloading'
-                            ? t('settings.runtimeAsset.downloadingAria', { name })
-                            : t('settings.runtimeAsset.downloadAria', { name })}
+                        ariaLabel={ariaLabel}
                         disabled={!onDownloadRuntimeAsset || status === 'downloading' || status === 'downloaded'}
                         onClick={() => void downloadRuntimeAsset(pluginID)}
                       >
                         {action}
                       </SettingsRowButton>
+                      <span className="sr-only" role="status" aria-live="polite">
+                        {ariaLabel}
+                      </span>
                     </SettingRow>
                   )
                 }) : null}

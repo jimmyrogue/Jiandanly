@@ -57,6 +57,7 @@ from .api_schemas import (
     CreateWorkspaceRequest,
     DeleteLocalThreadResponse,
     DiagnoseWorkspaceRequest,
+    FixedRuntimeAssetStatus,
     ForkRunRequest,
     HealthResponse,
     ImportModelServiceRequest,
@@ -2827,6 +2828,40 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ) from exc
 
     @app.get(
+        "/v1/plugins/{plugin_id}/runtime-asset",
+        response_model=FixedRuntimeAssetStatus,
+    )
+    async def inspect_fixed_runtime_asset(request: Request, plugin_id: str) -> dict[str, Any]:
+        registry: PluginRegistry = app.state.plugin_registry
+        try:
+            return await registry.fixed_runtime_asset_status(
+                principal_id=request.state.principal_id,
+                plugin_id=plugin_id,
+            )
+        except PluginRegistryError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
+
+    @app.put(
+        "/v1/plugins/{plugin_id}/runtime-asset",
+        response_model=FixedRuntimeAssetStatus,
+    )
+    async def prepare_fixed_runtime_asset(request: Request, plugin_id: str) -> dict[str, Any]:
+        registry: PluginRegistry = app.state.plugin_registry
+        try:
+            return await registry.prepare_fixed_runtime_asset(
+                principal_id=request.state.principal_id,
+                plugin_id=plugin_id,
+            )
+        except PluginRegistryError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
+
+    @app.get(
         "/v1/plugins/{plugin_id}/readiness",
         response_model=PluginReadinessSnapshot,
     )
@@ -2932,7 +2967,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     principal_id=request.state.principal_id,
                     command_id=body.command_id,
                     source_path=body.source_path,
-                    plugin_id=body.plugin_id,
                     expected_digest=body.expected_digest,
                 )
             except CommandConflictError as exc:
