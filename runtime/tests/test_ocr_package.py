@@ -209,3 +209,15 @@ def test_release_publishes_browser_and_ocr_assets_outside_installers() -> None:
     assert "builtin-assets" not in spec
     assert "Stage on-demand Runtime Assets outside the installer" in workflow
     assert "client/release/*.shejane-runtime-asset" in workflow
+
+
+def test_runtime_collection_strips_native_dependencies_safely() -> None:
+    spec = (REPO_ROOT / "runtime" / "shejane-runtime.spec").read_text(encoding="utf-8")
+    exe_config = spec.split("exe = EXE(", 1)[1].split("coll = COLLECT(", 1)[0]
+    collect_config = spec.split("coll = COLLECT(", 1)[1]
+
+    assert "strip=" not in exe_config
+    assert 'strip=sys.platform != "win32"' in collect_config
+    assert "binaries.append((str(wasmtime_library)" in spec
+    assert spec.index("binaries.append((str(wasmtime_library)") < spec.index("a = Analysis(")
+    assert "copy2(wasmtime_library" not in spec

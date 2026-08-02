@@ -38,6 +38,17 @@
 
 锁文件净移除了 22 个不再需要的包，包括 MarkItDown、Magika、ONNX Runtime、pandas 与 NumPy；`pdfplumber`/`pypdfium2` 暂时保留，以免 PDF 表格和表单提取质量倒退。实现审查后又补上 200 MB 源文件上限、OOXML 成员数量/单项/总展开大小/压缩比上限、XLSX 100,000 单元格上限，以及 Office/附件文本输出上限，避免小型压缩文件在主 Runtime 内无限展开。同步后的干净环境通过 Runtime 全量测试（1069 passed，57 skipped）；冻结产物通过 `--help`、完整启动和 `/v1/health`。这里记录的是主 Runtime，不是最终 DMG；最终安装包和安装后体积仍要在后续改造完成后统一重建测量。
 
+## 实施进度：安全裁剪原生依赖
+
+2026-08-02 已在 PyInstaller `COLLECT` 阶段对 macOS/Linux 的 `BINARY` 与 `EXTENSION` 启用裁剪，Windows 依照 PyInstaller 的兼容性警告保持关闭。主可执行文件不在裁剪范围内；Wasmtime 动态库也从事后复制改为正常 binary collection，统一经过 PyInstaller 的路径修正和 macOS 重签名。
+
+| 指标 | 裁剪前 | 裁剪后 | 变化 |
+|---|---:|---:|---:|
+| frozen Runtime 磁盘分配 | 148,640 KiB | 146,724 KiB | **-1,916 KiB，-1.3%** |
+| `tar.gz` 压缩代理 | 80,101,840 bytes | 79,277,885 bytes | **-823,955 bytes，-1.0%** |
+
+正式实现采用 PyInstaller 在 macOS 上默认的保守 `strip -S`，因此收益小于此前手工副本使用 `strip -S -x` 的上限实验，但避免额外维护一条符号裁剪和签名链。冻结主程序与全部可执行原生依赖通过 `codesign --verify --strict`，并通过 `--help`、完整启动和 `/v1/health`。Developer ID 深签名与公证仍需等最终 Client 导出产物统一验证。
+
 ## 当前基线与测量方法
 
 ### 原始结果
@@ -173,13 +184,13 @@ PyInstaller 的 [`--strip`](https://pyinstaller.org/en/stable/usage.html#how-to-
 
 裁剪后的 frozen Runtime `--help` 正常；RapidOCR engine 无输入时仍按协议以状态 2、空 stdout/stderr 退出。也就是说，当前二进制并非已经完全裁剪：核心 Runtime 的毛收益约 **34.7 MB 安装后、5.5 MB 压缩**，OCR 资产约 **40.0 MB 安装后、5.2 MB 下载代理**。
 
-这些数字不能与移除 ONNX 直接相加：核心裁剪收益中约 18.9 MB 来自 ONNX Runtime。先移除 Magika/ONNX 后，剩余 `strip` 安装后收益约 15.8 MB，压缩收益预计更小，仍需正式构建 A/B。
+这些数字不能与移除 ONNX 直接相加：核心裁剪收益中约 18.9 MB 来自 ONNX Runtime，而且副本实验使用了比 PyInstaller macOS 默认值更激进的 `-x`。正式构建在移除 Magika/ONNX 后采用保守 `strip -S`，实测仅再减少 1,916 KiB 磁盘分配与 823,955 bytes 压缩代理。
 
 不要对已经组装完成的 PyInstaller 主可执行文件手工执行 `strip`：本次验证会把附加在 Mach-O 后的 PKG archive 截掉，程序报 `Could not load PyInstaller's embedded PKG archive`。正确位置是 PyInstaller 组装/签名前的 `strip=True` 或等价 build hook，之后重新签名、公证并跑 packaged smoke。
 
 PyInstaller 的 [UPX 文档](https://pyinstaller.org/en/stable/usage.html#using-upx)更加明确：UPX 目前只在 Windows 使用；macOS dylib 处理失败，压缩文件也无法通过 Apple Silicon 所需的 `codesign` 校验；Windows 某些 CFG DLL 和原生模块也可能被破坏。
 
-结论：把 macOS `strip` 纳入隔离构建实验，但不在未经完整测试时直接打开；UPX 仍不纳入 macOS，Windows 只有独立实验能证明稳定净收益时才考虑，并保留 DLL 排除列表和签名后 smoke test。
+结论：macOS/Linux 已在 PyInstaller 收集阶段启用保守裁剪，Windows 保持关闭；UPX 仍不纳入 macOS，Windows 只有独立实验能证明稳定净收益时才考虑，并保留 DLL 排除列表和签名后 smoke test。
 
 ### electron-builder compression：maximum 不值得
 
