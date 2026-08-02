@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import shutil
 import sqlite3
 import zipfile
 from functools import partial
@@ -424,6 +425,63 @@ def test_browser_qa_is_runtime_managed_and_cannot_be_removed(
 
         asyncio.run(verify_catalog_asset())
 
+        shutil.rmtree(
+            settings.data_dir
+            / "plugins"
+            / "runtime-assets"
+            / "packages"
+            / digest.removeprefix("sha256:")
+        )
+        prepare = builtin_client.post(
+            "/v1/commands",
+            headers=AUTH,
+            json={
+                "type": "plugin.runtime_asset.install",
+                "command_id": "cmd_prepare_browser_qa",
+                "plugin_id": plugin["id"],
+            },
+        )
+        assert prepare.status_code == 200, prepare.text
+        assert prepare.json() == {
+            "type": "plugin.runtime_asset.install",
+            "command_id": "cmd_prepare_browser_qa",
+            "asset_id": "org.shejane.browser-qa.runtime",
+            "version": "1.61.1+chromium1228.2",
+            "platform": "darwin/arm64",
+            "digest": digest,
+            "installed": True,
+        }
+        replay = builtin_client.post(
+            "/v1/commands",
+            headers=AUTH,
+            json={
+                "type": "plugin.runtime_asset.install",
+                "command_id": "cmd_prepare_browser_qa",
+                "plugin_id": plugin["id"],
+            },
+        )
+        assert replay.json() == prepare.json()
+
+        shutil.rmtree(
+            settings.data_dir
+            / "plugins"
+            / "runtime-assets"
+            / "packages"
+            / digest.removeprefix("sha256:")
+        )
+        asset.unlink()
+        unavailable = builtin_client.post(
+            "/v1/commands",
+            headers=AUTH,
+            json={
+                "type": "plugin.runtime_asset.install",
+                "command_id": "cmd_prepare_browser_qa_offline",
+                "plugin_id": plugin["id"],
+            },
+        )
+        assert unavailable.status_code == 503
+        assert unavailable.json()["detail"]["code"] == "plugin_runtime_asset_unavailable"
+
         remove = builtin_client.post(
             "/v1/commands",
             headers=AUTH,
@@ -650,6 +708,26 @@ def test_ocr_asset_and_plugin_are_runtime_managed_and_cannot_be_removed(
                 assert lease.actions[0].runtime_assets[0].asset_id == "org.rapidocr.runtime"
 
         asyncio.run(verify_catalog_asset())
+
+        shutil.rmtree(
+            settings.data_dir
+            / "plugins"
+            / "runtime-assets"
+            / "packages"
+            / digest.removeprefix("sha256:")
+        )
+        prepare = builtin_client.post(
+            "/v1/commands",
+            headers=AUTH,
+            json={
+                "type": "plugin.runtime_asset.install",
+                "command_id": "cmd_prepare_ocr",
+                "plugin_id": plugin["id"],
+            },
+        )
+        assert prepare.status_code == 200, prepare.text
+        assert prepare.json()["asset_id"] == "org.rapidocr.runtime"
+        assert prepare.json()["digest"] == digest
 
         remove = builtin_client.post(
             "/v1/commands",

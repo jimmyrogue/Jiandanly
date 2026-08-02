@@ -5635,11 +5635,33 @@
             ],
             "title": "Expected Digest"
           },
+          "plugin_id": {
+            "anyOf": [
+              {
+                "enum": [
+                  "org.shejane.browser-qa",
+                  "org.shejane.ocr"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plugin Id"
+          },
           "source_path": {
-            "maxLength": 4096,
-            "minLength": 1,
-            "title": "Source Path",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Path"
           },
           "type": {
             "const": "plugin.runtime_asset.install",
@@ -5649,8 +5671,7 @@
         },
         "required": [
           "type",
-          "command_id",
-          "source_path"
+          "command_id"
         ],
         "title": "RuntimeAssetInstallCommand",
         "type": "object"

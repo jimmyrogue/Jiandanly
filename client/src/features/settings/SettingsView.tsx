@@ -20,7 +20,12 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { useI18n, type Locale } from '@/shared/i18n/i18n'
-import type { AdvancedAgentSettings, AgentSettings, RuntimeConnection } from '@/runtime/client'
+import type {
+  AdvancedAgentSettings,
+  AgentSettings,
+  FixedRuntimeAssetPluginID,
+  RuntimeConnection,
+} from '@/runtime/client'
 import { ModelServicesSettings } from './ModelServicesSettings'
 
 type SettingsSectionID = 'models' | 'agent' | 'general' | 'data'
@@ -50,11 +55,13 @@ function SettingRow({
 }
 
 function SettingsRowButton({
+  ariaLabel,
   children,
   danger,
   disabled,
   onClick,
 }: {
+  ariaLabel?: string
   children: ReactNode
   danger?: boolean
   disabled?: boolean
@@ -63,6 +70,7 @@ function SettingsRowButton({
   return (
     <button
       type="button"
+      aria-label={ariaLabel}
       className={`settings-row-button${danger ? ' settings-row-button-danger' : ''}`}
       disabled={disabled}
       onClick={onClick}
@@ -106,6 +114,7 @@ function useSettingsViewModel({
   openModelServiceAdd,
   onModelServiceAddOpened,
   onModelServicesChange,
+  onDownloadRuntimeAsset,
 }: {
   isDesktop?: boolean
   agentSettings: Required<AgentSettings>
@@ -118,6 +127,7 @@ function useSettingsViewModel({
   openModelServiceAdd?: boolean
   onModelServiceAddOpened?: () => void
   onModelServicesChange?: () => void
+  onDownloadRuntimeAsset?: (pluginID: FixedRuntimeAssetPluginID) => Promise<unknown>
 }) {
   const { t, locale, setLocale } = useI18n()
   const importInputRef = useRef<HTMLInputElement>(null)
@@ -128,6 +138,9 @@ function useSettingsViewModel({
   const [clearMemoryConfirmOpen, setClearMemoryConfirmOpen] = useState(false)
   const [clearingMemory, setClearingMemory] = useState(false)
   const [clientUpdate, setClientUpdate] = useState<ClientUpdateState | null>(null)
+  const [runtimeAssetDownloads, setRuntimeAssetDownloads] = useState<Partial<
+    Record<FixedRuntimeAssetPluginID, 'downloading' | 'downloaded' | 'error'>
+  >>({})
 
   const memoryEnabled = (agentSettings.memory ?? 'on') === 'on'
   const adv: AdvancedAgentSettings = agentSettings.advanced ?? {}
@@ -247,7 +260,18 @@ function useSettingsViewModel({
     }
   }
 
-  return { activeSection, adv, advancedSettingsReady, agentSettings, clearMemoryConfirmOpen, clearingMemory, importInputRef, isDesktop, locale, memoryEnabled, navItems, onAgentSettingsChange, onClearMemory, onExportLocalData, onImportLocalData, onModelServiceAddOpened, onModelServicesChange, openModelServiceAdd, runtimeConnection, selectSection, setAdv, setClearMemoryConfirmOpen, setClearingMemory, setClientUpdate, setLocale, settingsScrollRef, t, updateAction, updateActiveSectionFromScroll, updateHint, updateStatus }
+  const downloadRuntimeAsset = useCallback(async (pluginID: FixedRuntimeAssetPluginID) => {
+    if (!onDownloadRuntimeAsset) return
+    setRuntimeAssetDownloads((current) => ({ ...current, [pluginID]: 'downloading' }))
+    try {
+      await onDownloadRuntimeAsset(pluginID)
+      setRuntimeAssetDownloads((current) => ({ ...current, [pluginID]: 'downloaded' }))
+    } catch {
+      setRuntimeAssetDownloads((current) => ({ ...current, [pluginID]: 'error' }))
+    }
+  }, [onDownloadRuntimeAsset])
+
+  return { activeSection, adv, advancedSettingsReady, agentSettings, clearMemoryConfirmOpen, clearingMemory, downloadRuntimeAsset, importInputRef, isDesktop, locale, memoryEnabled, navItems, onAgentSettingsChange, onClearMemory, onDownloadRuntimeAsset, onExportLocalData, onImportLocalData, onModelServiceAddOpened, onModelServicesChange, openModelServiceAdd, runtimeAssetDownloads, runtimeConnection, selectSection, setAdv, setClearMemoryConfirmOpen, setClearingMemory, setClientUpdate, setLocale, settingsScrollRef, t, updateAction, updateActiveSectionFromScroll, updateHint, updateStatus }
 }
 
 export function SettingsView(props: Parameters<typeof useSettingsViewModel>[0]) {
@@ -255,7 +279,7 @@ export function SettingsView(props: Parameters<typeof useSettingsViewModel>[0]) 
 }
 
 function SettingsViewContent({ view }: { view: ReturnType<typeof useSettingsViewModel> }) {
-  const { activeSection, adv, advancedSettingsReady, agentSettings, clearMemoryConfirmOpen, clearingMemory, importInputRef, isDesktop, locale, memoryEnabled, navItems, onAgentSettingsChange, onClearMemory, onExportLocalData, onImportLocalData, onModelServiceAddOpened, onModelServicesChange, openModelServiceAdd, runtimeConnection, selectSection, setAdv, setClearMemoryConfirmOpen, setClearingMemory, setClientUpdate, setLocale, settingsScrollRef, t, updateAction, updateActiveSectionFromScroll, updateHint, updateStatus } = view
+  const { activeSection, adv, advancedSettingsReady, agentSettings, clearMemoryConfirmOpen, clearingMemory, downloadRuntimeAsset, importInputRef, isDesktop, locale, memoryEnabled, navItems, onAgentSettingsChange, onClearMemory, onDownloadRuntimeAsset, onExportLocalData, onImportLocalData, onModelServiceAddOpened, onModelServicesChange, openModelServiceAdd, runtimeAssetDownloads, runtimeConnection, selectSection, setAdv, setClearMemoryConfirmOpen, setClearingMemory, setClientUpdate, setLocale, settingsScrollRef, t, updateAction, updateActiveSectionFromScroll, updateHint, updateStatus } = view
   return (
     <section className="workspace">
       <header className="topbar topbar-page">
@@ -365,6 +389,38 @@ function SettingsViewContent({ view }: { view: ReturnType<typeof useSettingsView
                     </SettingsRowButton>
                   </SettingRow>
                 ) : null}
+                {isDesktop ? ([
+                  ['org.shejane.browser-qa', 'Browser QA'] as const,
+                  ['org.shejane.ocr', 'RapidOCR'] as const,
+                ]).map(([pluginID, name]) => {
+                  const status = runtimeAssetDownloads[pluginID]
+                  const action = status === 'downloading'
+                    ? t('settings.runtimeAsset.downloading')
+                    : status === 'downloaded'
+                      ? t('settings.runtimeAsset.downloaded')
+                      : t('settings.runtimeAsset.download')
+                  return (
+                    <SettingRow
+                      key={pluginID}
+                      label={name}
+                      hint={status === 'error'
+                        ? t('settings.runtimeAsset.error')
+                        : t('settings.runtimeAsset.hint')}
+                    >
+                      <SettingsRowButton
+                        ariaLabel={status === 'downloaded'
+                          ? t('settings.runtimeAsset.downloadedAria', { name })
+                          : status === 'downloading'
+                            ? t('settings.runtimeAsset.downloadingAria', { name })
+                            : t('settings.runtimeAsset.downloadAria', { name })}
+                        disabled={!onDownloadRuntimeAsset || status === 'downloading' || status === 'downloaded'}
+                        onClick={() => void downloadRuntimeAsset(pluginID)}
+                      >
+                        {action}
+                      </SettingsRowButton>
+                    </SettingRow>
+                  )
+                }) : null}
                 <SettingRow label={t('settings.language')}>
                   <Select value={locale} onValueChange={(value) => setLocale(value as Locale)}>
                     <SelectTrigger className="settings-language-select" aria-label={t('settings.language')}>

@@ -1591,6 +1591,7 @@ async def lifespan(app: FastAPI):
         store=store,
         data_dir=settings.data_dir,
         runtime_version=__version__,
+        plugin_catalog=plugin_catalog,
         computer_use_package=settings.computer_use_package,
         browser_qa_package=settings.browser_qa_package,
         ocr_package=settings.ocr_package,
@@ -2931,6 +2932,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     principal_id=request.state.principal_id,
                     command_id=body.command_id,
                     source_path=body.source_path,
+                    plugin_id=body.plugin_id,
                     expected_digest=body.expected_digest,
                 )
             except CommandConflictError as exc:

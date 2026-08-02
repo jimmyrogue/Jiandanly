@@ -14,6 +14,7 @@ from packaging.version import InvalidVersion, Version
 
 from ..store.sqlite import LocalStore, PluginStateError, PluginVersionConflictError
 from .browser_qa import BROWSER_QA_PLUGIN_ID, is_allowed_browser_qa_package
+from .catalog import PluginCatalog, PluginCatalogError
 from .computer_use import (
     COMPUTER_USE_PLUGIN_ID,
     ComputerUseError,
@@ -21,6 +22,7 @@ from .computer_use import (
     ComputerUseService,
     is_allowed_computer_use_package,
 )
+from .identity import plugin_action_catalog_hash
 from .manifest import load_plugin_manifest
 from .ocr import OCR_PLUGIN_ID, is_allowed_ocr_package
 from .package import (
@@ -35,7 +37,7 @@ from .platforms import (
     prepare_managed_worker_entrypoint,
 )
 from .policy import PluginTrustError, verify_trusted_package
-from .runtime_assets import RuntimeAssetStore
+from .runtime_assets import RuntimeAssetHandle, RuntimeAssetStore
 from .sandbox_runtime import managed_worker_release_gate
 
 
@@ -64,6 +66,7 @@ class PluginRegistry:
         store: LocalStore,
         data_dir: Path,
         runtime_version: str,
+        plugin_catalog: PluginCatalog,
         computer_use_package: Path | None = None,
         browser_qa_package: Path | None = None,
         ocr_package: Path | None = None,
@@ -73,6 +76,7 @@ class PluginRegistry:
         self._data_dir = data_dir
         self._runtime_version = runtime_version
         self._runtime_assets = RuntimeAssetStore(data_dir)
+        self._plugin_catalog = plugin_catalog
         self._fixed_packages = {
             plugin_id: package
             for plugin_id, package in (
@@ -90,13 +94,17 @@ class PluginRegistry:
         *,
         principal_id: str,
         command_id: str,
-        source_path: str,
+        source_path: str | None,
+        plugin_id: str | None,
         expected_digest: str | None,
     ) -> dict[str, Any]:
         command_payload: dict[str, Any] = {
             "type": "plugin.runtime_asset.install",
-            "source_path": source_path,
         }
+        if source_path is not None:
+            command_payload["source_path"] = source_path
+        if plugin_id is not None:
+            command_payload["plugin_id"] = plugin_id
         if expected_digest is not None:
             command_payload["expected_digest"] = expected_digest
         replay = await self._store.accepted_command_receipt(
@@ -107,18 +115,25 @@ class PluginRegistry:
         )
         if replay is not None:
             return replay
-        try:
-            handle = await asyncio.to_thread(
-                self._runtime_assets.install,
-                Path(source_path).expanduser(),
-                expected_digest=expected_digest,
+        if plugin_id is not None:
+            handle = await self._prepare_fixed_runtime_asset(
+                principal_id=principal_id,
+                plugin_id=plugin_id,
             )
-        except InvalidPluginPackage as exc:
-            raise PluginRegistryError(
-                "invalid_runtime_asset",
-                str(exc),
-                status_code=409,
-            ) from exc
+        else:
+            assert source_path is not None
+            try:
+                handle = await asyncio.to_thread(
+                    self._runtime_assets.install,
+                    Path(source_path).expanduser(),
+                    expected_digest=expected_digest,
+                )
+            except InvalidPluginPackage as exc:
+                raise PluginRegistryError(
+                    "invalid_runtime_asset",
+                    str(exc),
+                    status_code=409,
+                ) from exc
         receipt = {
             "type": "plugin.runtime_asset.install",
             "command_id": command_id,
@@ -135,6 +150,51 @@ class PluginRegistry:
             payload=command_payload,
             receipt=receipt,
         )
+
+    async def _prepare_fixed_runtime_asset(
+        self,
+        *,
+        principal_id: str,
+        plugin_id: str,
+    ) -> RuntimeAssetHandle:
+        if plugin_id not in {BROWSER_QA_PLUGIN_ID, OCR_PLUGIN_ID}:
+            raise PluginRegistryError(
+                "fixed_runtime_asset_unavailable",
+                "plugin does not have a downloadable fixed Runtime Asset",
+                status_code=409,
+            )
+        record = await self._store.get_plugin(principal_id=principal_id, plugin_id=plugin_id)
+        if record is None:
+            raise PluginRegistryError(
+                "plugin_not_found", "plugin is not installed", status_code=404
+            )
+        binding = {
+            "plugin_id": record["plugin_id"],
+            "version": record["version"],
+            "digest": record["digest"],
+            "action_catalog_hash": plugin_action_catalog_hash(
+                record["manifest"],
+                plugin_digest=record["digest"],
+            ),
+        }
+        try:
+            async with self._plugin_catalog.acquire_snapshot(
+                [binding],
+                execution_context=object(),
+            ) as lease:
+                if len(lease.runtime_assets) != 1:
+                    raise PluginRegistryError(
+                        "fixed_runtime_asset_unavailable",
+                        "fixed plugin does not declare exactly one Runtime Asset",
+                        status_code=409,
+                    )
+                return lease.runtime_assets[0]
+        except PluginCatalogError as exc:
+            raise PluginRegistryError(
+                exc.code,
+                str(exc),
+                status_code=503 if getattr(exc, "retryable", False) else 409,
+            ) from exc
 
     async def install(
         self,

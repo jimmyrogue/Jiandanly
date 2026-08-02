@@ -3337,6 +3337,17 @@ function AppContentView({ view }: { view: AppContentViewModel }) {
               agentSettings={agentSettings}
               advancedSettingsReady={runtimeSettingsConfig === runtimeConnection && Boolean(runtime?.online)}
               runtimeConnection={runtimeConnection}
+              onDownloadRuntimeAsset={runtimeConnection
+                ? (pluginId) => {
+                    const commandId = createLocalID('cmd')
+                    return submitPluginCommand({
+                      type: 'plugin.runtime_asset.install',
+                      commandId,
+                      createdAt: new Date().toISOString(),
+                      input: { pluginId },
+                    })
+                  }
+                : undefined}
               openModelServiceAdd={modelServiceAddRequested}
               onModelServiceAddOpened={() => setModelServiceAddRequested(false)}
               onModelServicesChange={() => setModelCatalogVersion((version) => version + 1)}

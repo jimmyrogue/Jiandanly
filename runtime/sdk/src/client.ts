@@ -65,6 +65,7 @@ export type PluginModelBindCommandReceipt = Schemas['PluginModelBindCommandRecei
 export type PluginModelBindingSummary = Schemas['PluginModelBindingSummary']
 export type RuntimeAssetInstallCommand = Schemas['RuntimeAssetInstallCommand']
 export type RuntimeAssetInstallCommandReceipt = Schemas['RuntimeAssetInstallCommandReceipt']
+export type FixedRuntimeAssetPluginID = NonNullable<RuntimeAssetInstallCommand['plugin_id']>
 export type PluginStateCommandReceipt = Schemas['PluginStateCommandReceipt']
 export type PluginVersionSwitchCommandReceipt = Schemas['PluginVersionSwitchCommandReceipt']
 export type PluginRemoveCommandReceipt = Schemas['PluginRemoveCommandReceipt']
@@ -628,7 +629,9 @@ export interface PendingPluginInstallCommand extends PendingRuntimeCommandBase {
 
 export interface PendingRuntimeAssetInstallCommand extends PendingRuntimeCommandBase {
   type: 'plugin.runtime_asset.install'
-  input: { sourcePath: string; expectedDigest?: string }
+  input:
+    | { sourcePath: string; expectedDigest?: string; pluginId?: never }
+    | { pluginId: FixedRuntimeAssetPluginID; sourcePath?: never; expectedDigest?: never }
 }
 
 export interface PendingPluginModelBindCommand extends PendingRuntimeCommandBase {
@@ -905,13 +908,20 @@ async function deliverRuntimeCommand(
         fetcher,
       )
     case 'plugin.runtime_asset.install':
-      return installLocalRuntimeAssetCommand(
-        command.commandId,
-        command.input.sourcePath,
-        command.input.expectedDigest,
-        config,
-        fetcher,
-      )
+      return command.input.pluginId !== undefined
+        ? prepareLocalRuntimeAssetCommand(
+            command.commandId,
+            command.input.pluginId,
+            config,
+            fetcher,
+          )
+        : installLocalRuntimeAssetCommand(
+            command.commandId,
+            command.input.sourcePath,
+            command.input.expectedDigest,
+            config,
+            fetcher,
+          )
     case 'plugin.model.bind':
       return bindLocalPluginModelCommand(
         command.commandId,
@@ -1505,6 +1515,25 @@ export async function installLocalRuntimeAssetCommand(
     command_id: commandID,
     source_path: sourcePath,
     ...(expectedDigest ? { expected_digest: expectedDigest } : {}),
+  }
+  const response = await fetcher(`${normalizeBaseURL(config.baseURL)}/v1/commands`, {
+    method: 'POST',
+    headers: localHeaders(config, true),
+    body: JSON.stringify(body),
+  })
+  return decodeLocalResponse<RuntimeAssetInstallCommandReceipt>(response)
+}
+
+export async function prepareLocalRuntimeAssetCommand(
+  commandID: string,
+  pluginID: FixedRuntimeAssetPluginID,
+  config: RuntimeClientConfig,
+  fetcher: Fetcher = fetch,
+): Promise<RuntimeAssetInstallCommandReceipt> {
+  const body: RuntimeAssetInstallCommand = {
+    type: 'plugin.runtime_asset.install',
+    command_id: commandID,
+    plugin_id: pluginID,
   }
   const response = await fetcher(`${normalizeBaseURL(config.baseURL)}/v1/commands`, {
     method: 'POST',
@@ -2192,6 +2221,13 @@ export class SheJaneRuntimeClient {
       this.config,
       this.fetcher,
     )
+  }
+
+  prepareRuntimeAsset(
+    commandID: string,
+    pluginID: FixedRuntimeAssetPluginID,
+  ): Promise<RuntimeAssetInstallCommandReceipt> {
+    return prepareLocalRuntimeAssetCommand(commandID, pluginID, this.config, this.fetcher)
   }
 
   bindPluginModel(

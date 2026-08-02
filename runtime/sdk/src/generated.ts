@@ -3164,8 +3164,10 @@ export interface components {
             command_id: string;
             /** Expected Digest */
             expected_digest?: string | null;
+            /** Plugin Id */
+            plugin_id?: ("org.shejane.browser-qa" | "org.shejane.ocr") | null;
             /** Source Path */
-            source_path: string;
+            source_path?: string | null;
             /**
              * Type
              * @constant

@@ -66,7 +66,7 @@ MCP Server 只从 Runtime 自有配置读取，不会隐式启动 Claude Desktop
   │       ├─ 同编号同内容返回原回执；同编号不同内容返回 409                         │
   │       ├─ 回执后协调器停止当前执行；权威终态仍由事件与快照返回                   │
   │       ├─ 四类等待事务写决定、事件和回执；等待周期齐全时同事务创建恢复作业       │
-  │       ├─ 插件 install/enable/disable/update/rollback/remove 与 source add/refresh/install/remove 使用同一待发队列与幂等回执 │
+  │       ├─ 插件生命周期、固定 Runtime Asset 手动准备与 source add/refresh/install/remove 使用同一待发队列与幂等回执 │
   │       ├─ 来源刷新先验证精确索引字节和独立 Ed25519 签名，失败时保留 last-known-good │
   │       └─ 对应旧接口暂时兼容，桌面客户端已不再调用                              │
   │                                                                                  │

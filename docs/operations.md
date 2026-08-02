@@ -197,7 +197,7 @@ Runtime 接受单个 `.shejane-plugin` ZIP，通过 `plugin.install` Command 安
 
 Computer Use、Browser QA 和 OCR 是 Runtime 随应用提供的固定能力，不属于外部插件分发面。Runtime 只自动接纳构建时固定的身份、版本、平台和 `computer_use` / `browser_qa` / `ocr` 适配器；外部安装、更新、回滚和移除都会被拒绝，因此不要求用户确认这些内置包的发布者签名。插件包和 Runtime Asset 仍进入内容寻址存储并冻结到 Run，不能携带另一种宿主执行器。Browser QA 与 OCR 的小型插件包进入安装包；macOS arm64、Windows AMD64 大型 Runtime Asset 作为同一 Client Release 的独立附件发布。Computer Use 仍只提供 macOS arm64。
 
-打包版 Client 启动托管 Runtime 时传入与 `app.getVersion()` 对应的 GitHub Release HTTPS 基址，但 P1 冷启动不下载大型资产。启用 Browser QA 或 OCR 后，首次 Run 在 P6 绑定该能力时先查内容寻址缓存；缺失才下载同一 Release 的精确平台文件。下载限制为 HTTPS、无 URL 凭据、逐跳 DNS/IP 校验、最多五次重定向和 768 MiB，并继续复用现有平台、canonical digest、临时目录与原子安装校验；并发 Run 对同一 digest 只获取一次。断网、超限或摘要不符会以 `plugin_runtime_asset_unavailable` fail closed，删除临时下载且不回退系统 Chrome、系统 OCR 或其他版本；网络恢复后重试 Run 即可。外部本机 Runtime 可显式传本地 `--browser-qa-runtime-asset` / `--ocr-runtime-asset`，或配置 `--fixed-runtime-asset-base-url`。
+打包版 Client 启动托管 Runtime 时传入与 `app.getVersion()` 对应的 GitHub Release HTTPS 基址，但 P1 冷启动不下载大型资产。用户可在“设置 → 通用”分别提前下载 Browser QA 与 RapidOCR；未手动下载时，首次 Run 在 P6 绑定该能力时仍会自动获取。两条路径都先查内容寻址缓存，缺失才下载同一 Release 的精确平台文件。下载限制为 HTTPS、无 URL 凭据、逐跳 DNS/IP 校验、最多五次重定向和 768 MiB，并继续复用现有平台、canonical digest、临时目录与原子安装校验；并发请求对同一 digest 只获取一次。断网、超限或摘要不符会以 `plugin_runtime_asset_unavailable` fail closed，删除临时下载且不回退系统 Chrome、系统 OCR 或其他版本；网络恢复后重试即可。外部本机 Runtime 可显式传本地 `--browser-qa-runtime-asset` / `--ocr-runtime-asset`，或配置 `--fixed-runtime-asset-base-url`。
 
 Browser QA Runtime Asset 只包含 Playwright 1.61.1 的完整 Chromium for Testing；headed 和 new-headless 都固定使用 `channel: chromium`，构建命令使用 `playwright install --no-shell chromium`，不得再把独立 `chromium_headless_shell` 放进 Runtime Asset。真实发布门禁必须分别运行 headed 与 headless E2E。
 

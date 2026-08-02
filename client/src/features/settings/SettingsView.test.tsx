@@ -60,6 +60,29 @@ describe('SettingsView', () => {
     expect(screen.getAllByText('数据与安全')).not.toHaveLength(0)
   })
 
+  it('lets desktop users manually download Browser QA and RapidOCR assets', async () => {
+    const downloadRuntimeAsset = vi.fn().mockResolvedValue(undefined)
+    render(
+      <I18nProvider>
+        <SettingsView
+          isDesktop
+          agentSettings={settings}
+          onAgentSettingsChange={vi.fn()}
+          onImportLocalData={vi.fn()}
+          onDownloadRuntimeAsset={downloadRuntimeAsset}
+        />
+      </I18nProvider>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: '下载 Browser QA' }))
+    await screen.findByRole('button', { name: 'Browser QA 已下载' })
+    expect(downloadRuntimeAsset).toHaveBeenCalledWith('org.shejane.browser-qa')
+
+    fireEvent.click(screen.getByRole('button', { name: '下载 RapidOCR' }))
+    await screen.findByRole('button', { name: 'RapidOCR 已下载' })
+    expect(downloadRuntimeAsset).toHaveBeenCalledWith('org.shejane.ocr')
+  })
+
   it('lets desktop users see their version and check for Client updates', async () => {
     const check = vi.fn().mockResolvedValue({ currentVersion: '0.1.11', status: 'current' })
     const install = vi.fn().mockResolvedValue(true)

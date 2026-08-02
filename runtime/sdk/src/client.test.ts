@@ -259,6 +259,37 @@ describe('plugin command outbox delivery', () => {
       expected_digest: digest,
     })
   })
+
+  it('delivers fixed Runtime Asset preparation through the shared outbox', async () => {
+    const receipt = {
+      type: 'plugin.runtime_asset.install',
+      command_id: 'cmd-asset-ocr',
+      asset_id: 'org.rapidocr.runtime',
+      version: '3.9.1+ppocrv6-small.1',
+      platform: 'darwin/arm64',
+      digest: `sha256:${'d'.repeat(64)}`,
+      installed: true,
+    }
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(receipt), { status: 200 }))
+    const settle = vi.fn().mockResolvedValue(undefined)
+
+    await expect(deliverPendingRuntimeCommands(
+      [{
+        type: 'plugin.runtime_asset.install',
+        commandId: 'cmd-asset-ocr',
+        createdAt: '2026-08-02T00:00:00Z',
+        input: { pluginId: 'org.shejane.ocr' },
+      }],
+      { baseURL: 'http://127.0.0.1:17371', token: 'runtime-token' },
+      settle,
+      fetcher,
+    )).resolves.toEqual({ delivered: 1, failures: [] })
+    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toEqual({
+      type: 'plugin.runtime_asset.install',
+      command_id: 'cmd-asset-ocr',
+      plugin_id: 'org.shejane.ocr',
+    })
+  })
 })
 
 describe('parseRuntimeModelSpec', () => {
@@ -612,6 +643,34 @@ describe('SheJaneRuntimeClient', () => {
       command_id: 'cmd-asset-1',
       source_path: '/tmp/libreoffice.shejane-runtime-asset',
       expected_digest: digest,
+    })
+  })
+
+  it('prepares a fixed Runtime Asset without exposing its URL or digest', async () => {
+    const receipt = {
+      type: 'plugin.runtime_asset.install',
+      command_id: 'cmd-asset-browser',
+      asset_id: 'org.shejane.browser-qa.runtime',
+      version: '1.61.1+chromium1228.2',
+      platform: 'darwin/arm64',
+      digest: `sha256:${'c'.repeat(64)}`,
+      installed: true,
+    }
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(receipt), { status: 200 }))
+    const client = new SheJaneRuntimeClient({
+      baseURL: 'http://127.0.0.1:17371',
+      token: 'runtime-token',
+      fetcher,
+    })
+
+    await expect(client.prepareRuntimeAsset(
+      'cmd-asset-browser',
+      'org.shejane.browser-qa',
+    )).resolves.toEqual(receipt)
+    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toEqual({
+      type: 'plugin.runtime_asset.install',
+      command_id: 'cmd-asset-browser',
+      plugin_id: 'org.shejane.browser-qa',
     })
   })
 
