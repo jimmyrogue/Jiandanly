@@ -113,6 +113,7 @@ import {
   updateRuntimeSettings,
   type AgentSettings,
   type CreateLocalRunInput,
+  type FixedRuntimeAssetPluginID,
   type LocalArtifact,
   type RuntimeConnection,
   type LocalToolReconciliationDecision,
@@ -3163,6 +3164,15 @@ function AppContentView({ view }: { view: AppContentViewModel }) {
     togglePinConversation,
   } = view
 
+  const runtimeAssetControls = useMemo(() => runtimeConnection ? {
+    getStatus: (pluginID: FixedRuntimeAssetPluginID) => (
+      getLocalFixedRuntimeAssetStatus(pluginID, runtimeConnection)
+    ),
+    download: (pluginID: FixedRuntimeAssetPluginID) => (
+      prepareLocalFixedRuntimeAsset(pluginID, runtimeConnection)
+    ),
+  } : null, [runtimeConnection])
+
   return (
     <TooltipProvider>
       <main className={shellClassName}>
@@ -3339,12 +3349,8 @@ function AppContentView({ view }: { view: AppContentViewModel }) {
               agentSettings={agentSettings}
               advancedSettingsReady={runtimeSettingsConfig === runtimeConnection && Boolean(runtime?.online)}
               runtimeConnection={runtimeConnection}
-              getRuntimeAssetStatus={runtimeConnection
-                ? (pluginId) => getLocalFixedRuntimeAssetStatus(pluginId, runtimeConnection)
-                : undefined}
-              onDownloadRuntimeAsset={runtimeConnection
-                ? (pluginId) => prepareLocalFixedRuntimeAsset(pluginId, runtimeConnection)
-                : undefined}
+              getRuntimeAssetStatus={runtimeAssetControls?.getStatus}
+              onDownloadRuntimeAsset={runtimeAssetControls?.download}
               openModelServiceAdd={modelServiceAddRequested}
               onModelServiceAddOpened={() => setModelServiceAddRequested(false)}
               onModelServicesChange={() => setModelCatalogVersion((version) => version + 1)}

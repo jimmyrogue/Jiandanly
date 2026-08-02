@@ -91,6 +91,45 @@ describe('desktop shell', () => {
     vi.useRealTimers()
   })
 
+  it('does not recheck large Runtime Assets when settings rerenders', async () => {
+    Object.defineProperty(window, 'shejaneClient', {
+      configurable: true,
+      value: {
+        platform: 'darwin',
+        runtime: { baseURL: 'http://127.0.0.1:17371', session: 'client', ready: true },
+      },
+    })
+    const assetRequests: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/v1/health')) {
+        return new Response(JSON.stringify({ status: 'ok', mode: 'runtime', worker: 'user' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (url.endsWith('/runtime-asset')) {
+        assetRequests.push(url)
+        return new Response(JSON.stringify({
+          plugin_id: url.includes('browser-qa') ? 'org.shejane.browser-qa' : 'org.shejane.ocr',
+          downloaded: false,
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      throw new Error('catalog unavailable in asset-poll test')
+    }))
+
+    render(<App />)
+    await vi.waitFor(() => {
+      expect(screen.getByLabelText(/Runtime 已连接/)).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByRole('button', { name: '设置' }))
+    await vi.waitFor(() => expect(assetRequests).toHaveLength(2))
+
+    fireEvent.click(screen.getByRole('combobox', { name: '语言' }))
+    fireEvent.click(screen.getByRole('option', { name: 'English' }))
+    expect(assetRequests).toHaveLength(2)
+  })
+
   it('does not expose purchase or usage-billing actions', async () => {
     render(<App />)
 
