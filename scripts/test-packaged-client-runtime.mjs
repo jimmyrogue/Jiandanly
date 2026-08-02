@@ -100,7 +100,7 @@ async function verifyPackagedContents() {
     paths: [resolve('client')],
   })
   const { listPackage } = createRequire(electronBuilderPackage)('@electron/asar')
-  const packagedFiles = listPackage(appAsar)
+  const packagedFiles = listPackage(appAsar).map((path) => path.replaceAll('\\', '/'))
   for (const moduleName of FORBIDDEN_PACKAGED_MODULES) {
     const prefix = `/node_modules/${moduleName}/`
     if (packagedFiles.some((path) => path.startsWith(prefix))) {
@@ -112,6 +112,32 @@ async function verifyPackagedContents() {
     if (!packagedFiles.some((path) => path.startsWith(prefix))) {
       throw new Error(`packaged Client is missing required production dependency: ${moduleName}`)
     }
+  }
+  for (const requiredPath of [
+    '/node_modules/@anthropic-ai/sandbox-runtime/dist/cli.js',
+    '/node_modules/@anthropic-ai/sandbox-runtime/package.json',
+    '/node_modules/@anthropic-ai/sandbox-runtime/LICENSE',
+  ]) {
+    if (!packagedFiles.includes(requiredPath)) {
+      throw new Error(`packaged Client is missing required Sandbox Runtime file: ${requiredPath}`)
+    }
+  }
+  await access(join(resourcesPath, 'sandbox', 'srt-launcher.mjs'), constants.R_OK)
+  if (isWindowsExecutable) {
+    await access(
+      join(
+        resourcesPath,
+        'app.asar.unpacked',
+        'node_modules',
+        '@anthropic-ai',
+        'sandbox-runtime',
+        'vendor',
+        'srt-win',
+        'x64',
+        'srt-win.exe',
+      ),
+      constants.R_OK,
+    )
   }
   const sourceMap = packagedFiles.find((path) => path.endsWith('.map'))
   if (sourceMap) {

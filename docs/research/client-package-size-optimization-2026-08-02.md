@@ -90,7 +90,7 @@
 
 ## 实施进度：清理 Client 非运行文件
 
-2026-08-02 已从所有平台的生产包中排除 source map、`zod/src` 和 Sandbox Runtime 类型声明，并只在 macOS 排除 Linux-only seccomp 目录。SRT 的 JavaScript、许可证及 Windows/Linux 平台文件仍按原规则保留；Windows/Linux 不应用 macOS 的 seccomp 排除。
+2026-08-02 已配置从所有平台的生产包中排除 source map、`zod/src` 和 Sandbox Runtime 类型声明，并只在 macOS 排除 Linux-only seccomp 目录。SRT 的 JavaScript、许可证及 Windows/Linux 平台文件仍按原规则保留；Windows/Linux 不应用 macOS 的 seccomp 排除。本地验证覆盖 macOS arm64，Windows x64 仍由发布矩阵构建与成品门禁确认。
 
 | 指标 | 修改前 | 修改后 | 变化 |
 |---|---:|---:|---:|
@@ -99,6 +99,21 @@
 | 两者磁盘分配 | 11,540 KiB | 8,956 KiB | **-2,584 KiB，-22.4%** |
 
 本轮 Client 内容合计减少 **2,402,402 bytes（20.8%）**。成品清单门禁会拒绝上述非运行文件；真实打包应用通过 Electron → Runtime 启动、健康检查、正常退出、签名验证，并使用成品 Electron 与 `srt-launcher.mjs` 通过 macOS Seatbelt 文件、网络、Unix socket 和进程访问隔离测试。
+
+## 最终 macOS arm64 成品
+
+2026-08-02 以当前工作区重建 `0.1.19` 的签名本地产物。它包含本轮之外同时存在的 Client 开发变更，因此小型前端差异不是纯净 A/B；Runtime、Resources 和整体数量级仍能直接反映本轮主要收益。
+
+| 指标 | 原始基线 | 最终成品 | 变化 |
+|---|---:|---:|---:|
+| DMG | 201,304,778 bytes | 152,709,950 bytes | **-48,594,828 bytes，-24.1%** |
+| updater ZIP | 未记录精确基线 | 152,799,344 bytes | — |
+| `.app` 规则文件逻辑字节 | 452,171,890 bytes | 337,788,817 bytes | **-114,383,073 bytes，-25.3%** |
+| `.app` 磁盘分配 | 446,164 KiB | 335,292 KiB | **-110,872 KiB，-24.9%** |
+| Resources 磁盘分配 | 247,812 KiB | 137,036 KiB | **-110,776 KiB，-44.7%** |
+| packaged Runtime 磁盘分配 | 235,944 KiB | 127,752 KiB | **-108,192 KiB，-45.9%** |
+
+最终应用使用 Apple Development 身份签名；由于本机没有可用的 notarize 选项，electron-builder 明确跳过了公证，所以这是体积与功能验证成品，不是可直接公开分发的已公证 Release。
 
 ## 当前基线与测量方法
 
@@ -278,6 +293,8 @@ Anthropic 官方仓库明确说明 `apply-seccomp` 是 Linux 的 seccomp 实现�
 ### 2. 收窄 PyInstaller collect_all
 
 第一轮只关闭 raw source collection；第二轮才按包把 `collect_all` 换为“明确 data + 动态 imports”。不要同时改多个包，否则 packaged-only 回归难定位。
+
+本轮实验曾实测减少 6,584 KiB frozen Runtime 和 1,159,865 bytes 压缩代理，但复审确认无 raw `.py` 时 PyInstaller 的 source loader 会返回 `None`，LangGraph/LangChain 的部分源码反射会静默失去嵌套 `subgraphs`、闭包依赖、Runnable schema 或 `config_specs` 推断。基础 Run、SSE、工具和 Subagent 成品 smoke 虽通过，仍不足以覆盖 checkpoint restart/fork 和嵌套图语义，因此已完整回退，不计入最终结果。
 
 **预计效果：** 第一轮上限约 5.5 MB 安装后、1 到 3 MB 安装包；第二轮未知，必须由 `Analysis-00.toc` 和成品 diff 决定。
 
