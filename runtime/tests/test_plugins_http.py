@@ -388,6 +388,83 @@ def test_fixed_runtime_asset_status_reports_active_download_progress(
         assert responses[0].status_code == 200
 
 
+def test_runtime_asset_storage_cleans_history_separately_from_current_assets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current_asset = tmp_path / "browser-current.shejane-runtime-asset"
+    _pack_runtime_asset(
+        current_asset,
+        asset_id="org.shejane.browser-qa.runtime",
+        version="1.61.1+chromium1228.2",
+        platform="darwin/arm64",
+    )
+    current_digest = (
+        RuntimeAssetStore(tmp_path / "asset-store")
+        .install(current_asset, target_platform="darwin/arm64")
+        .digest
+    )
+    package = tmp_path / "browser-qa.shejane-plugin"
+    _pack_browser_qa_builtin(package, current_digest)
+    history_asset = tmp_path / "browser-history.shejane-runtime-asset"
+    _pack_runtime_asset(
+        history_asset,
+        asset_id="org.shejane.browser-qa.runtime",
+        version="1.61.1+chromium1228.1",
+        platform="darwin/arm64",
+    )
+    for target in (
+        "shejane_runtime.server.current_managed_worker_platform",
+        "shejane_runtime.plugins.registry.current_managed_worker_platform",
+        "shejane_runtime.plugins.catalog.current_managed_worker_platform",
+    ):
+        monkeypatch.setattr(target, lambda: "darwin/arm64")
+    settings = reset_settings_for_tests(
+        SHEJANE_RUNTIME_TOKEN="tok",
+        data_dir=tmp_path / "runtime",
+        computer_use_package=None,
+        browser_qa_package=package,
+        browser_qa_runtime_asset=current_asset,
+    )
+
+    with TestClient(create_app(settings)) as builtin_client:
+        prepared = builtin_client.put(
+            "/v1/plugins/org.shejane.browser-qa/runtime-asset",
+            headers=AUTH,
+        )
+        assert prepared.status_code == 200, prepared.text
+        history = RuntimeAssetStore(settings.data_dir).install(
+            history_asset,
+            target_platform="darwin/arm64",
+        )
+        assert history.digest != current_digest
+
+        storage = builtin_client.get("/v1/plugins/runtime-assets/storage", headers=AUTH)
+        assert storage.status_code == 200, storage.text
+        assert storage.json()["asset_count"] == 2
+        assert storage.json()["history_asset_count"] == 1
+        assert storage.json()["history_bytes"] > 0
+
+        cleaned_history = builtin_client.delete(
+            "/v1/plugins/runtime-assets/storage?scope=history",
+            headers=AUTH,
+        )
+        assert cleaned_history.status_code == 200, cleaned_history.text
+        assert cleaned_history.json()["asset_count"] == 1
+        assert cleaned_history.json()["history_asset_count"] == 0
+        assert cleaned_history.json()["freed_bytes"] > 0
+        assert RuntimeAssetStore(settings.data_dir).contains(current_digest)
+
+        cleaned_all = builtin_client.delete(
+            "/v1/plugins/runtime-assets/storage?scope=all",
+            headers=AUTH,
+        )
+        assert cleaned_all.status_code == 200, cleaned_all.text
+        assert cleaned_all.json()["total_bytes"] == 0
+        assert cleaned_all.json()["asset_count"] == 0
+        assert not RuntimeAssetStore(settings.data_dir).contains(current_digest)
+
+
 def test_computer_use_is_runtime_managed_and_cannot_be_installed_or_removed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

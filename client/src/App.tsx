@@ -62,6 +62,7 @@ import {
   answerLocalQuestionCommand,
   cancelLocalRunCommand,
   clearLocalMemory,
+  cleanupLocalRuntimeAssetStorage,
   createLocalSkill,
   createLocalRun,
   deliverPendingRuntimeCommands,
@@ -80,6 +81,7 @@ import {
   getLocalArtifact,
   getLocalArtifactContent,
   getLocalFixedRuntimeAssetStatus,
+  getLocalRuntimeAssetStorage,
   getLocalPlugin,
   getLocalPluginReadiness,
   getLocalSkillFile,
@@ -3175,6 +3177,10 @@ function AppContentView({ view }: { view: AppContentViewModel }) {
     remove: (pluginID: FixedRuntimeAssetPluginID) => (
       removeLocalFixedRuntimeAsset(pluginID, runtimeConnection)
     ),
+    getStorage: () => getLocalRuntimeAssetStorage(runtimeConnection),
+    cleanup: (scope: 'history' | 'all') => (
+      cleanupLocalRuntimeAssetStorage(scope, runtimeConnection)
+    ),
   } : null, [runtimeConnection])
 
   return (
@@ -3356,6 +3362,8 @@ function AppContentView({ view }: { view: AppContentViewModel }) {
               getRuntimeAssetStatus={runtimeAssetControls?.getStatus}
               onDownloadRuntimeAsset={runtimeAssetControls?.download}
               onRemoveRuntimeAsset={runtimeAssetControls?.remove}
+              getRuntimeAssetStorage={runtimeAssetControls?.getStorage}
+              onCleanupRuntimeAssets={runtimeAssetControls?.cleanup}
               openModelServiceAdd={modelServiceAddRequested}
               onModelServiceAddOpened={() => setModelServiceAddRequested(false)}
               onModelServicesChange={() => setModelCatalogVersion((version) => version + 1)}

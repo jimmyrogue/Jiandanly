@@ -156,6 +156,7 @@ class PluginCatalog:
             sources=runtime_asset_sources,
             downloader=runtime_asset_downloader,
         )
+        self._runtime_asset_maintenance_lock = asyncio.Lock()
         self._runtime_asset_lease_lock = threading.Lock()
         self._active_runtime_asset_leases: dict[str, int] = {}
 
@@ -167,51 +168,55 @@ class PluginCatalog:
     ) -> AsyncIterator[PluginExecutionLease]:
         bindings = tuple(dict(binding) for binding in frozen_bindings)
         attempted: set[str] = set()
-        while True:
-            load_task = asyncio.create_task(
-                asyncio.to_thread(
-                    self._load_leased_snapshot,
-                    bindings,
-                    execution_context,
-                )
-            )
-            try:
-                lease = await asyncio.shield(load_task)
-                break
-            except asyncio.CancelledError:
-                while not load_task.done():
-                    try:
-                        await asyncio.shield(load_task)
-                    except asyncio.CancelledError:
-                        continue
-                if not load_task.cancelled():
-                    try:
-                        cancelled_lease = load_task.result()
-                    except Exception:
-                        pass
-                    else:
-                        self._release_runtime_assets(cancelled_lease)
-                raise
-            except _RuntimeAssetRequired as missing:
-                if missing.digest in attempted:
-                    raise PluginCatalogError(
-                        "plugin_runtime_asset_unavailable",
-                        str(missing),
-                    ) from missing
-                attempted.add(missing.digest)
-                try:
-                    await self._runtime_assets.ensure(
-                        asset_id=missing.asset_id,
-                        version=missing.version,
-                        platform=missing.platform,
-                        digest=missing.digest,
+        await self._runtime_asset_maintenance_lock.acquire()
+        try:
+            while True:
+                load_task = asyncio.create_task(
+                    asyncio.to_thread(
+                        self._load_leased_snapshot,
+                        bindings,
+                        execution_context,
                     )
-                except InvalidPluginPackage as exc:
-                    raise PluginCatalogError(
-                        "plugin_runtime_asset_unavailable",
-                        str(missing),
-                        retryable=True,
-                    ) from exc
+                )
+                try:
+                    lease = await asyncio.shield(load_task)
+                    break
+                except asyncio.CancelledError:
+                    while not load_task.done():
+                        try:
+                            await asyncio.shield(load_task)
+                        except asyncio.CancelledError:
+                            continue
+                    if not load_task.cancelled():
+                        try:
+                            cancelled_lease = load_task.result()
+                        except Exception:
+                            pass
+                        else:
+                            self._release_runtime_assets(cancelled_lease)
+                    raise
+                except _RuntimeAssetRequired as missing:
+                    if missing.digest in attempted:
+                        raise PluginCatalogError(
+                            "plugin_runtime_asset_unavailable",
+                            str(missing),
+                        ) from missing
+                    attempted.add(missing.digest)
+                    try:
+                        await self._runtime_assets.ensure(
+                            asset_id=missing.asset_id,
+                            version=missing.version,
+                            platform=missing.platform,
+                            digest=missing.digest,
+                        )
+                    except InvalidPluginPackage as exc:
+                        raise PluginCatalogError(
+                            "plugin_runtime_asset_unavailable",
+                            str(missing),
+                            retryable=True,
+                        ) from exc
+        finally:
+            self._runtime_asset_maintenance_lock.release()
         try:
             yield lease
         finally:
@@ -232,7 +237,25 @@ class PluginCatalog:
                     raise release_cancelled
 
     async def remove_runtime_asset(self, *, asset_id: str, digest: str) -> None:
-        await asyncio.to_thread(self._remove_runtime_asset, asset_id, digest)
+        async with self._runtime_asset_maintenance_lock:
+            await asyncio.to_thread(self._remove_runtime_asset, asset_id, digest)
+
+    async def runtime_asset_storage(self) -> tuple[dict[str, int], int]:
+        async with self._runtime_asset_maintenance_lock:
+            return await asyncio.to_thread(self._runtime_assets.storage_usage)
+
+    async def cleanup_runtime_assets(
+        self,
+        digests: set[str] | None,
+        *,
+        clear_transient: bool,
+    ) -> None:
+        async with self._runtime_asset_maintenance_lock:
+            await asyncio.to_thread(
+                self._cleanup_runtime_assets,
+                digests,
+                clear_transient,
+            )
 
     def runtime_asset_download_progress(
         self,
@@ -269,22 +292,60 @@ class PluginCatalog:
                     "plugin_runtime_asset_in_use",
                     "runtime asset is in use",
                 )
-            key = digest.removeprefix("sha256:")
-            browser_alias = self._browser_runtime_root / key[:RUNTIME_ALIAS_DIGEST_CHARS]
-            try:
-                if asset_id == f"{BROWSER_QA_PLUGIN_ID}.runtime":
-                    if browser_alias.is_symlink() or browser_alias.is_file():
-                        browser_alias.unlink()
-                    else:
-                        shutil.rmtree(browser_alias)
-                self._runtime_assets.remove(digest)
-            except FileNotFoundError:
-                self._runtime_assets.remove(digest)
-            except (InvalidPluginPackage, OSError) as exc:
+            self._remove_runtime_asset_unlocked(
+                digest,
+                remove_browser_alias=asset_id == f"{BROWSER_QA_PLUGIN_ID}.runtime",
+            )
+
+    def _cleanup_runtime_assets(
+        self,
+        digests: set[str] | None,
+        clear_transient: bool,
+    ) -> None:
+        with self._runtime_asset_lease_lock:
+            targets = (
+                set(self._runtime_assets.storage_usage()[0]) if digests is None else set(digests)
+            )
+            if any(self._active_runtime_asset_leases.get(digest, 0) for digest in targets):
                 raise PluginCatalogError(
-                    "plugin_runtime_asset_delete_failed",
-                    "runtime asset could not be deleted",
-                ) from exc
+                    "plugin_runtime_asset_in_use",
+                    "runtime asset is in use",
+                )
+            for digest in sorted(targets):
+                self._remove_runtime_asset_unlocked(digest)
+            if clear_transient:
+                self._runtime_assets.clear_transient()
+
+    def _remove_runtime_asset_unlocked(
+        self,
+        digest: str,
+        *,
+        remove_browser_alias: bool = False,
+    ) -> None:
+        key = digest.removeprefix("sha256:")
+        browser_alias = self._browser_runtime_root / key[:RUNTIME_ALIAS_DIGEST_CHARS]
+        if not remove_browser_alias:
+            marker = browser_alias / ".shejane-runtime-digest"
+            try:
+                remove_browser_alias = (
+                    not marker.is_symlink() and marker.read_text(encoding="utf-8").strip() == digest
+                )
+            except OSError:
+                pass
+        try:
+            if remove_browser_alias:
+                if browser_alias.is_symlink() or browser_alias.is_file():
+                    browser_alias.unlink()
+                else:
+                    shutil.rmtree(browser_alias)
+            self._runtime_assets.remove(digest)
+        except FileNotFoundError:
+            self._runtime_assets.remove(digest)
+        except (InvalidPluginPackage, OSError) as exc:
+            raise PluginCatalogError(
+                "plugin_runtime_asset_delete_failed",
+                "runtime asset could not be deleted",
+            ) from exc
 
     def _load_snapshot(
         self,

@@ -25,6 +25,9 @@ import type {
   AgentSettings,
   FixedRuntimeAssetPluginID,
   FixedRuntimeAssetStatus,
+  RuntimeAssetCleanupResult,
+  RuntimeAssetCleanupScope,
+  RuntimeAssetStorage,
   RuntimeConnection,
 } from '@/runtime/client'
 import { ModelServicesSettings } from './ModelServicesSettings'
@@ -39,6 +42,19 @@ const FIXED_RUNTIME_ASSETS: ReadonlyArray<{
   { pluginID: 'org.shejane.browser-qa', name: 'Browser QA' },
   { pluginID: 'org.shejane.ocr', name: 'RapidOCR' },
 ]
+
+function formatStorageBytes(bytes: number, locale: Locale): string {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let value = Math.max(0, bytes)
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit += 1
+  }
+  return `${new Intl.NumberFormat(locale === 'zh' ? 'zh-CN' : 'en-US', {
+    maximumFractionDigits: unit === 0 ? 0 : 1,
+  }).format(value)} ${units[unit]}`
+}
 
 function SettingRow({
   label,
@@ -125,6 +141,8 @@ function useSettingsViewModel({
   getRuntimeAssetStatus,
   onDownloadRuntimeAsset,
   onRemoveRuntimeAsset,
+  getRuntimeAssetStorage,
+  onCleanupRuntimeAssets,
 }: {
   isDesktop?: boolean
   agentSettings: Required<AgentSettings>
@@ -140,6 +158,8 @@ function useSettingsViewModel({
   getRuntimeAssetStatus?: (pluginID: FixedRuntimeAssetPluginID) => Promise<FixedRuntimeAssetStatus>
   onDownloadRuntimeAsset?: (pluginID: FixedRuntimeAssetPluginID) => Promise<unknown>
   onRemoveRuntimeAsset?: (pluginID: FixedRuntimeAssetPluginID) => Promise<unknown>
+  getRuntimeAssetStorage?: () => Promise<RuntimeAssetStorage>
+  onCleanupRuntimeAssets?: (scope: RuntimeAssetCleanupScope) => Promise<RuntimeAssetCleanupResult>
 }) {
   const { t, locale, setLocale } = useI18n()
   const importInputRef = useRef<HTMLInputElement>(null)
@@ -158,6 +178,10 @@ function useSettingsViewModel({
   const [runtimeAssetProgress, setRuntimeAssetProgress] = useState<Partial<
     Record<FixedRuntimeAssetPluginID, number | null>
   >>({})
+  const [runtimeAssetStorage, setRuntimeAssetStorage] = useState<RuntimeAssetStorage | null>(null)
+  const [runtimeAssetStorageError, setRuntimeAssetStorageError] = useState<'load' | 'cleanup' | null>(null)
+  const [runtimeAssetCleanupConfirm, setRuntimeAssetCleanupConfirm] = useState<RuntimeAssetCleanupScope | null>(null)
+  const [cleaningRuntimeAssets, setCleaningRuntimeAssets] = useState<RuntimeAssetCleanupScope | null>(null)
 
   const memoryEnabled = (agentSettings.memory ?? 'on') === 'on'
   const adv: AdvancedAgentSettings = agentSettings.advanced ?? {}
@@ -262,6 +286,22 @@ function useSettingsViewModel({
       active = false
     }
   }, [getRuntimeAssetStatus, isDesktop])
+
+  useEffect(() => {
+    if (!isDesktop || !getRuntimeAssetStorage) return
+    let active = true
+    setRuntimeAssetStorageError(null)
+    void getRuntimeAssetStorage()
+      .then((storage) => {
+        if (active) setRuntimeAssetStorage(storage)
+      })
+      .catch(() => {
+        if (active) setRuntimeAssetStorageError('load')
+      })
+    return () => {
+      active = false
+    }
+  }, [getRuntimeAssetStorage, isDesktop])
 
   useEffect(() => {
     if (!getRuntimeAssetStatus) return
@@ -400,7 +440,27 @@ function useSettingsViewModel({
     }
   }, [onRemoveRuntimeAsset])
 
-  return { activeSection, adv, advancedSettingsReady, agentSettings, clearMemoryConfirmOpen, clearingMemory, downloadRuntimeAsset, importInputRef, isDesktop, locale, memoryEnabled, navItems, onAgentSettingsChange, onClearMemory, onDownloadRuntimeAsset, onExportLocalData, onImportLocalData, onModelServiceAddOpened, onModelServicesChange, onRemoveRuntimeAsset, openModelServiceAdd, removeRuntimeAsset, runtimeAssetDeleteConfirm, runtimeAssetDownloads, runtimeAssetProgress, runtimeConnection, selectSection, setAdv, setClearMemoryConfirmOpen, setClearingMemory, setClientUpdate, setLocale, setRuntimeAssetDeleteConfirm, settingsScrollRef, t, updateAction, updateActiveSectionFromScroll, updateHint, updateStatus }
+  const cleanupRuntimeAssets = useCallback(async (scope: RuntimeAssetCleanupScope) => {
+    if (!onCleanupRuntimeAssets) return
+    setCleaningRuntimeAssets(scope)
+    setRuntimeAssetStorageError(null)
+    try {
+      const result = await onCleanupRuntimeAssets(scope)
+      setRuntimeAssetStorage(result)
+      if (scope === 'all') {
+        runtimeAssetActiveDownloads.current.clear()
+        setRuntimeAssetDownloads({})
+        setRuntimeAssetProgress({})
+      }
+    } catch {
+      setRuntimeAssetStorageError('cleanup')
+    } finally {
+      setCleaningRuntimeAssets(null)
+      setRuntimeAssetCleanupConfirm(null)
+    }
+  }, [onCleanupRuntimeAssets])
+
+  return { activeSection, adv, advancedSettingsReady, agentSettings, cleanupRuntimeAssets, cleaningRuntimeAssets, clearMemoryConfirmOpen, clearingMemory, downloadRuntimeAsset, getRuntimeAssetStorage, importInputRef, isDesktop, locale, memoryEnabled, navItems, onAgentSettingsChange, onCleanupRuntimeAssets, onClearMemory, onDownloadRuntimeAsset, onExportLocalData, onImportLocalData, onModelServiceAddOpened, onModelServicesChange, onRemoveRuntimeAsset, openModelServiceAdd, removeRuntimeAsset, runtimeAssetCleanupConfirm, runtimeAssetDeleteConfirm, runtimeAssetDownloads, runtimeAssetProgress, runtimeAssetStorage, runtimeAssetStorageError, runtimeConnection, selectSection, setAdv, setClearMemoryConfirmOpen, setClearingMemory, setClientUpdate, setLocale, setRuntimeAssetCleanupConfirm, setRuntimeAssetDeleteConfirm, settingsScrollRef, t, updateAction, updateActiveSectionFromScroll, updateHint, updateStatus }
 }
 
 export function SettingsView(props: Parameters<typeof useSettingsViewModel>[0]) {
@@ -408,10 +468,13 @@ export function SettingsView(props: Parameters<typeof useSettingsViewModel>[0]) 
 }
 
 function SettingsViewContent({ view }: { view: ReturnType<typeof useSettingsViewModel> }) {
-  const { activeSection, adv, advancedSettingsReady, agentSettings, clearMemoryConfirmOpen, clearingMemory, downloadRuntimeAsset, importInputRef, isDesktop, locale, memoryEnabled, navItems, onAgentSettingsChange, onClearMemory, onDownloadRuntimeAsset, onExportLocalData, onImportLocalData, onModelServiceAddOpened, onModelServicesChange, onRemoveRuntimeAsset, openModelServiceAdd, removeRuntimeAsset, runtimeAssetDeleteConfirm, runtimeAssetDownloads, runtimeAssetProgress, runtimeConnection, selectSection, setAdv, setClearMemoryConfirmOpen, setClearingMemory, setClientUpdate, setLocale, setRuntimeAssetDeleteConfirm, settingsScrollRef, t, updateAction, updateActiveSectionFromScroll, updateHint, updateStatus } = view
+  const { activeSection, adv, advancedSettingsReady, agentSettings, cleanupRuntimeAssets, cleaningRuntimeAssets, clearMemoryConfirmOpen, clearingMemory, downloadRuntimeAsset, getRuntimeAssetStorage, importInputRef, isDesktop, locale, memoryEnabled, navItems, onAgentSettingsChange, onCleanupRuntimeAssets, onClearMemory, onDownloadRuntimeAsset, onExportLocalData, onImportLocalData, onModelServiceAddOpened, onModelServicesChange, onRemoveRuntimeAsset, openModelServiceAdd, removeRuntimeAsset, runtimeAssetCleanupConfirm, runtimeAssetDeleteConfirm, runtimeAssetDownloads, runtimeAssetProgress, runtimeAssetStorage, runtimeAssetStorageError, runtimeConnection, selectSection, setAdv, setClearMemoryConfirmOpen, setClearingMemory, setClientUpdate, setLocale, setRuntimeAssetCleanupConfirm, setRuntimeAssetDeleteConfirm, settingsScrollRef, t, updateAction, updateActiveSectionFromScroll, updateHint, updateStatus } = view
   const runtimeAssetDeleteName = FIXED_RUNTIME_ASSETS.find(
     ({ pluginID }) => pluginID === runtimeAssetDeleteConfirm,
   )?.name
+  const runtimeAssetCleanupBytes = runtimeAssetCleanupConfirm === 'history'
+    ? runtimeAssetStorage?.history_bytes ?? 0
+    : runtimeAssetStorage?.total_bytes ?? 0
   return (
     <section className="workspace">
       <header className="topbar topbar-page">
@@ -557,16 +620,21 @@ function SettingsViewContent({ view }: { view: ReturnType<typeof useSettingsView
                           : t('settings.runtimeAsset.hint')}
                     >
                       {downloaded && status !== 'deleting' ? (
-                        <span className="settings-row-value">{t('settings.runtimeAsset.downloaded')}</span>
+                        <span className="settings-runtime-asset-status">
+                          {t('settings.runtimeAsset.downloaded')}
+                        </span>
                       ) : null}
                       {status === 'downloading' ? (
                         <div className="settings-runtime-asset-progress">
+                          <div className="settings-runtime-asset-progress-label">
+                            <span>{action}</span>
+                            {typeof progress === 'number' ? <span>{progress}%</span> : null}
+                          </div>
                           <progress
                             aria-label={t('settings.runtimeAsset.progressAria', { name })}
                             max={100}
                             value={typeof progress === 'number' ? progress : undefined}
                           />
-                          <span>{typeof progress === 'number' ? `${progress}%` : action}</span>
                         </div>
                       ) : (
                         <SettingsRowButton
@@ -588,6 +656,45 @@ function SettingsViewContent({ view }: { view: ReturnType<typeof useSettingsView
                     </SettingRow>
                   )
                 }) : null}
+                {isDesktop && getRuntimeAssetStorage ? (
+                  <SettingRow
+                    label={t('settings.runtimeAsset.storage')}
+                    hint={runtimeAssetStorageError
+                      ? t(runtimeAssetStorageError === 'cleanup'
+                        ? 'settings.runtimeAsset.cleanupError'
+                        : 'settings.runtimeAsset.storageError')
+                      : runtimeAssetStorage
+                        ? t('settings.runtimeAsset.storageHint', {
+                            total: formatStorageBytes(runtimeAssetStorage.total_bytes, locale),
+                            history: formatStorageBytes(runtimeAssetStorage.history_bytes, locale),
+                          })
+                        : t('settings.runtimeAsset.storageLoading')}
+                  >
+                    <div className="settings-runtime-asset-maintenance">
+                      <SettingsRowButton
+                        disabled={!onCleanupRuntimeAssets
+                          || !runtimeAssetStorage?.history_bytes
+                          || cleaningRuntimeAssets !== null}
+                        onClick={() => setRuntimeAssetCleanupConfirm('history')}
+                      >
+                        {cleaningRuntimeAssets === 'history'
+                          ? t('settings.runtimeAsset.cleaning')
+                          : t('settings.runtimeAsset.cleanupHistory')}
+                      </SettingsRowButton>
+                      <SettingsRowButton
+                        danger
+                        disabled={!onCleanupRuntimeAssets
+                          || !runtimeAssetStorage?.total_bytes
+                          || cleaningRuntimeAssets !== null}
+                        onClick={() => setRuntimeAssetCleanupConfirm('all')}
+                      >
+                        {cleaningRuntimeAssets === 'all'
+                          ? t('settings.runtimeAsset.cleaning')
+                          : t('settings.runtimeAsset.cleanupAll')}
+                      </SettingsRowButton>
+                    </div>
+                  </SettingRow>
+                ) : null}
                 <SettingRow label={t('settings.language')}>
                   <Select value={locale} onValueChange={(value) => setLocale(value as Locale)}>
                     <SelectTrigger className="settings-language-select" aria-label={t('settings.language')}>
@@ -710,6 +817,59 @@ function SettingsViewContent({ view }: { view: ReturnType<typeof useSettingsView
             >
               <span className="conversation-delete-button-label">
                 {t('settings.runtimeAsset.deleteConfirmAction')}
+              </span>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={runtimeAssetCleanupConfirm !== null}
+        onOpenChange={(open) => {
+          if (!open && cleaningRuntimeAssets === null) setRuntimeAssetCleanupConfirm(null)
+        }}
+      >
+        <AlertDialogContent className="conversation-delete-dialog">
+          <AlertDialogHeader className="conversation-delete-header">
+            <AlertDialogMedia className="conversation-delete-media">
+              <IconTrash aria-hidden="true" />
+            </AlertDialogMedia>
+            <AlertDialogTitle>
+              {runtimeAssetCleanupConfirm === 'history'
+                ? t('settings.runtimeAsset.cleanupHistoryTitle')
+                : t('settings.runtimeAsset.cleanupAllTitle')}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {runtimeAssetCleanupConfirm === 'history'
+                ? t('settings.runtimeAsset.cleanupHistoryBody', {
+                    size: formatStorageBytes(runtimeAssetCleanupBytes, locale),
+                  })
+                : t('settings.runtimeAsset.cleanupAllBody', {
+                    size: formatStorageBytes(runtimeAssetCleanupBytes, locale),
+                  })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="conversation-delete-footer">
+            <AlertDialogCancel
+              variant="outline"
+              autoFocus
+              disabled={cleaningRuntimeAssets !== null}
+            >
+              <span className="conversation-delete-button-label">{t('sidebar.dialog.cancel')}</span>
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={!runtimeAssetCleanupConfirm || cleaningRuntimeAssets !== null}
+              onClick={async (event) => {
+                event.preventDefault()
+                if (!runtimeAssetCleanupConfirm) return
+                await cleanupRuntimeAssets(runtimeAssetCleanupConfirm)
+              }}
+            >
+              <span className="conversation-delete-button-label">
+                {cleaningRuntimeAssets
+                  ? t('settings.runtimeAsset.cleaning')
+                  : t('settings.runtimeAsset.cleanupConfirmAction')}
               </span>
             </AlertDialogAction>
           </AlertDialogFooter>

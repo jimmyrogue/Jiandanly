@@ -5660,6 +5660,45 @@
         "title": "ResolvePlanApprovalRequest",
         "type": "object"
       },
+      "RuntimeAssetCleanupResult": {
+        "additionalProperties": false,
+        "properties": {
+          "asset_count": {
+            "minimum": 0.0,
+            "title": "Asset Count",
+            "type": "integer"
+          },
+          "freed_bytes": {
+            "minimum": 0.0,
+            "title": "Freed Bytes",
+            "type": "integer"
+          },
+          "history_asset_count": {
+            "minimum": 0.0,
+            "title": "History Asset Count",
+            "type": "integer"
+          },
+          "history_bytes": {
+            "minimum": 0.0,
+            "title": "History Bytes",
+            "type": "integer"
+          },
+          "total_bytes": {
+            "minimum": 0.0,
+            "title": "Total Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total_bytes",
+          "history_bytes",
+          "asset_count",
+          "history_asset_count",
+          "freed_bytes"
+        ],
+        "title": "RuntimeAssetCleanupResult",
+        "type": "object"
+      },
       "RuntimeAssetInstallCommand": {
         "additionalProperties": false,
         "properties": {
@@ -5746,6 +5785,39 @@
           "digest"
         ],
         "title": "RuntimeAssetInstallCommandReceipt",
+        "type": "object"
+      },
+      "RuntimeAssetStorage": {
+        "additionalProperties": false,
+        "properties": {
+          "asset_count": {
+            "minimum": 0.0,
+            "title": "Asset Count",
+            "type": "integer"
+          },
+          "history_asset_count": {
+            "minimum": 0.0,
+            "title": "History Asset Count",
+            "type": "integer"
+          },
+          "history_bytes": {
+            "minimum": 0.0,
+            "title": "History Bytes",
+            "type": "integer"
+          },
+          "total_bytes": {
+            "minimum": 0.0,
+            "title": "Total Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total_bytes",
+          "history_bytes",
+          "asset_count",
+          "history_asset_count"
+        ],
+        "title": "RuntimeAssetStorage",
         "type": "object"
       },
       "RuntimeInfo": {
@@ -7533,6 +7605,65 @@
           }
         },
         "summary": "List Plugins"
+      }
+    },
+    "/v1/plugins/runtime-assets/storage": {
+      "delete": {
+        "operationId": "cleanup_runtime_asset_storage_v1_plugins_runtime_assets_storage_delete",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "scope",
+            "required": true,
+            "schema": {
+              "enum": [
+                "history",
+                "all"
+              ],
+              "title": "Scope",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeAssetCleanupResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cleanup Runtime Asset Storage"
+      },
+      "get": {
+        "operationId": "inspect_runtime_asset_storage_v1_plugins_runtime_assets_storage_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeAssetStorage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Inspect Runtime Asset Storage"
       }
     },
     "/v1/plugins/{plugin_id}": {

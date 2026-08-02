@@ -8745,31 +8745,71 @@ select {
 
 .settings-row-control {
   display: flex;
-  flex: none;
+  min-width: 0;
+  max-width: 100%;
+  flex: 0 1 auto;
   align-items: center;
   gap: 8px;
-}
-
-.settings-row-value {
-  color: var(--sj-ink-soft, #6F6B63);
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
 }
 
 .settings-runtime-asset-progress {
-  display: grid;
-  grid-template-columns: 112px 42px;
-  align-items: center;
-  gap: 8px;
+  display: flex;
+  width: 128px;
+  max-width: 100%;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
   color: var(--sj-ink-soft, #6F6B63);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
+.settings-runtime-asset-progress-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  white-space: nowrap;
+}
+
 .settings-runtime-asset-progress progress {
-  width: 112px;
-  height: 6px;
-  accent-color: var(--sj-seal, #B3532F);
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  height: 3px;
+  appearance: none;
+  border: 0;
+  background: var(--sj-line, #E8E5DE);
+}
+
+.settings-runtime-asset-progress progress::-webkit-progress-bar {
+  background: var(--sj-line, #E8E5DE);
+}
+
+.settings-runtime-asset-progress progress::-webkit-progress-value {
+  background: var(--sj-seal, #B3532F);
+}
+
+.settings-runtime-asset-status {
+  color: var(--sj-moss, #5E7A6E);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.settings-runtime-asset-maintenance {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.settings-runtime-asset-status + .settings-row-button {
+  min-width: auto;
+  min-height: 28px;
+  border-color: transparent;
+  background: transparent;
+  padding: 0 6px;
 }
 
 button.settings-row-button:focus-visible,
@@ -9523,6 +9563,22 @@ button.settings-row-button:focus-visible,
 
   .settings-main {
     width: min(660px, calc(100% - 32px));
+  }
+
+  .settings-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .settings-row-control,
+  .settings-runtime-asset-progress {
+    width: 100%;
+  }
+
+  .settings-row-control,
+  .settings-runtime-asset-maintenance {
+    justify-content: flex-end;
   }
 
 }

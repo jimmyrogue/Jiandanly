@@ -23,7 +23,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -117,8 +117,10 @@ from .api_schemas import (
     ResolvePermissionCommandReceipt,
     ResolvePermissionRequest,
     ResolvePlanApprovalRequest,
+    RuntimeAssetCleanupResult,
     RuntimeAssetInstallCommand,
     RuntimeAssetInstallCommandReceipt,
+    RuntimeAssetStorage,
     RuntimeInfo,
     RuntimeSettingsResponse,
     SetModelCapabilityBindingRequest,
@@ -2812,6 +2814,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def list_plugins(request: Request) -> dict[str, Any]:
         registry: PluginRegistry = app.state.plugin_registry
         return {"plugins": await registry.list(principal_id=request.state.principal_id)}
+
+    @app.get(
+        "/v1/plugins/runtime-assets/storage",
+        response_model=RuntimeAssetStorage,
+    )
+    async def inspect_runtime_asset_storage(request: Request) -> dict[str, Any]:
+        registry: PluginRegistry = app.state.plugin_registry
+        return await registry.runtime_asset_storage()
+
+    @app.delete(
+        "/v1/plugins/runtime-assets/storage",
+        response_model=RuntimeAssetCleanupResult,
+    )
+    async def cleanup_runtime_asset_storage(
+        request: Request,
+        scope: Literal["history", "all"] = Query(...),
+    ) -> dict[str, Any]:
+        registry: PluginRegistry = app.state.plugin_registry
+        try:
+            return await registry.cleanup_runtime_asset_storage(scope)
+        except PluginRegistryError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
 
     @app.get("/v1/plugins/{plugin_id}", response_model=PluginDetail)
     async def inspect_plugin(request: Request, plugin_id: str) -> dict[str, Any]:

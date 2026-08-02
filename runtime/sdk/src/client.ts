@@ -67,6 +67,9 @@ export type RuntimeAssetInstallCommand = Schemas['RuntimeAssetInstallCommand']
 export type RuntimeAssetInstallCommandReceipt = Schemas['RuntimeAssetInstallCommandReceipt']
 export type FixedRuntimeAssetStatus = Schemas['FixedRuntimeAssetStatus']
 export type FixedRuntimeAssetPluginID = FixedRuntimeAssetStatus['plugin_id']
+export type RuntimeAssetStorage = Schemas['RuntimeAssetStorage']
+export type RuntimeAssetCleanupResult = Schemas['RuntimeAssetCleanupResult']
+export type RuntimeAssetCleanupScope = 'history' | 'all'
 export type PluginStateCommandReceipt = Schemas['PluginStateCommandReceipt']
 export type PluginVersionSwitchCommandReceipt = Schemas['PluginVersionSwitchCommandReceipt']
 export type PluginRemoveCommandReceipt = Schemas['PluginRemoveCommandReceipt']
@@ -1558,6 +1561,29 @@ export async function removeLocalFixedRuntimeAsset(
   return decodeLocalResponse<FixedRuntimeAssetStatus>(response)
 }
 
+export async function getLocalRuntimeAssetStorage(
+  config: RuntimeClientConfig,
+  fetcher: Fetcher = fetch,
+): Promise<RuntimeAssetStorage> {
+  const response = await fetcher(
+    `${normalizeBaseURL(config.baseURL)}/v1/plugins/runtime-assets/storage`,
+    { method: 'GET', headers: localHeaders(config, false) },
+  )
+  return decodeLocalResponse<RuntimeAssetStorage>(response)
+}
+
+export async function cleanupLocalRuntimeAssetStorage(
+  scope: RuntimeAssetCleanupScope,
+  config: RuntimeClientConfig,
+  fetcher: Fetcher = fetch,
+): Promise<RuntimeAssetCleanupResult> {
+  const response = await fetcher(
+    `${normalizeBaseURL(config.baseURL)}/v1/plugins/runtime-assets/storage?scope=${scope}`,
+    { method: 'DELETE', headers: localHeaders(config, false) },
+  )
+  return decodeLocalResponse<RuntimeAssetCleanupResult>(response)
+}
+
 export async function bindLocalPluginModelCommand(
   commandID: string,
   pluginID: string,
@@ -2254,6 +2280,16 @@ export class SheJaneRuntimeClient {
     pluginID: FixedRuntimeAssetPluginID,
   ): Promise<FixedRuntimeAssetStatus> {
     return removeLocalFixedRuntimeAsset(pluginID, this.config, this.fetcher)
+  }
+
+  getRuntimeAssetStorage(): Promise<RuntimeAssetStorage> {
+    return getLocalRuntimeAssetStorage(this.config, this.fetcher)
+  }
+
+  cleanupRuntimeAssetStorage(
+    scope: RuntimeAssetCleanupScope,
+  ): Promise<RuntimeAssetCleanupResult> {
+    return cleanupLocalRuntimeAssetStorage(scope, this.config, this.fetcher)
   }
 
   bindPluginModel(

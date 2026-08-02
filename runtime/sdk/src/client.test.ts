@@ -658,6 +658,33 @@ describe('SheJaneRuntimeClient', () => {
       })
   })
 
+  it('inspects and cleans Runtime Asset storage by explicit scope', async () => {
+    const storage = {
+      total_bytes: 1_500_000_000,
+      history_bytes: 900_000_000,
+      asset_count: 4,
+      history_asset_count: 2,
+    }
+    const cleaned = { ...storage, history_bytes: 0, history_asset_count: 0, freed_bytes: 900_000_000 }
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(storage), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(cleaned), { status: 200 }))
+    const client = new SheJaneRuntimeClient({
+      baseURL: 'http://127.0.0.1:17371',
+      token: 'runtime-token',
+      fetcher,
+    })
+
+    await expect(client.getRuntimeAssetStorage()).resolves.toEqual(storage)
+    await expect(client.cleanupRuntimeAssetStorage('history')).resolves.toEqual(cleaned)
+    expect(fetcher).toHaveBeenNthCalledWith(1,
+      'http://127.0.0.1:17371/v1/plugins/runtime-assets/storage',
+      { method: 'GET', headers: { Authorization: 'Bearer runtime-token' } })
+    expect(fetcher).toHaveBeenNthCalledWith(2,
+      'http://127.0.0.1:17371/v1/plugins/runtime-assets/storage?scope=history',
+      { method: 'DELETE', headers: { Authorization: 'Bearer runtime-token' } })
+  })
+
   it('reads and advances the fixed Computer Use setup flow', async () => {
     const pluginId = 'org.shejane.computer-use' as const
     const readiness = {

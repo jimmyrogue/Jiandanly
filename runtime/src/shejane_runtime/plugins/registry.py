@@ -234,6 +234,57 @@ class PluginRegistry:
             raise PluginRegistryError(exc.code, str(exc), status_code=409) from exc
         return {"plugin_id": plugin_id, "downloaded": False}
 
+    async def runtime_asset_storage(self) -> dict[str, int]:
+        protected = await self._store.referenced_runtime_asset_digests()
+        packages, transient_bytes = await self._plugin_catalog.runtime_asset_storage()
+        return self._runtime_asset_storage_summary(packages, transient_bytes, protected)
+
+    async def cleanup_runtime_asset_storage(self, scope: str) -> dict[str, int]:
+        if scope not in {"history", "all"}:
+            raise PluginRegistryError(
+                "runtime_asset_cleanup_scope_invalid",
+                "runtime asset cleanup scope is invalid",
+                status_code=422,
+            )
+        protected = await self._store.referenced_runtime_asset_digests()
+        before_packages, before_transient = await self._plugin_catalog.runtime_asset_storage()
+        targets = None if scope == "all" else set(before_packages) - protected
+        try:
+            await self._plugin_catalog.cleanup_runtime_assets(
+                targets,
+                clear_transient=scope == "all",
+            )
+        except PluginCatalogError as exc:
+            raise PluginRegistryError(exc.code, str(exc), status_code=409) from exc
+        after_packages, after_transient = await self._plugin_catalog.runtime_asset_storage()
+        result = self._runtime_asset_storage_summary(
+            after_packages,
+            after_transient,
+            protected,
+        )
+        result["freed_bytes"] = max(
+            0,
+            sum(before_packages.values())
+            + before_transient
+            - sum(after_packages.values())
+            - after_transient,
+        )
+        return result
+
+    @staticmethod
+    def _runtime_asset_storage_summary(
+        packages: dict[str, int],
+        transient_bytes: int,
+        protected: set[str],
+    ) -> dict[str, int]:
+        history = {digest: size for digest, size in packages.items() if digest not in protected}
+        return {
+            "total_bytes": sum(packages.values()) + transient_bytes,
+            "history_bytes": sum(history.values()),
+            "asset_count": len(packages),
+            "history_asset_count": len(history),
+        }
+
     async def _fixed_runtime_asset_record(
         self,
         *,

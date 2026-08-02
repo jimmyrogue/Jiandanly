@@ -71,6 +71,34 @@ class RuntimeAssetDownloadProgress:
     percent: int | None
 
 
+def _tree_size(path: Path) -> int:
+    if path.is_symlink() or path.is_file():
+        try:
+            return path.lstat().st_size
+        except FileNotFoundError:
+            return 0
+    if not path.is_dir():
+        return 0
+    total = 0
+    pending = [path]
+    while pending:
+        root = pending.pop()
+        try:
+            entries = list(os.scandir(root))
+        except FileNotFoundError:
+            continue
+        for entry in entries:
+            try:
+                info = entry.stat(follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            if stat.S_ISDIR(info.st_mode):
+                pending.append(Path(entry.path))
+            else:
+                total += info.st_size
+    return total
+
+
 def canonical_runtime_asset_digest(root: Path) -> str:
     return canonical_tree_digest(
         root,
@@ -125,6 +153,26 @@ class RuntimeAssetStore:
 
     def contains(self, digest: str) -> bool:
         return (self._root / "packages" / digest.removeprefix("sha256:")).is_dir()
+
+    def storage_usage(self) -> tuple[dict[str, int], int]:
+        packages: dict[str, int] = {}
+        packages_root = self._root / "packages"
+        if packages_root.is_dir():
+            for path in packages_root.iterdir():
+                if (
+                    path.is_dir()
+                    and len(path.name) == 64
+                    and all(char in "0123456789abcdef" for char in path.name)
+                ):
+                    packages[f"sha256:{path.name}"] = _tree_size(path)
+        transient_bytes = sum(
+            _tree_size(self._root / name) for name in ("downloads", "quarantine", "staging")
+        )
+        return packages, transient_bytes
+
+    def clear_transient(self) -> None:
+        for name in ("downloads", "quarantine", "staging"):
+            shutil.rmtree(self._root / name, ignore_errors=True)
 
     def quarantine(self, digest: str) -> None:
         key = digest.removeprefix("sha256:")
@@ -283,6 +331,12 @@ class RuntimeAssetResolver:
 
     def remove(self, digest: str) -> None:
         self._store.remove(digest)
+
+    def storage_usage(self) -> tuple[dict[str, int], int]:
+        return self._store.storage_usage()
+
+    def clear_transient(self) -> None:
+        self._store.clear_transient()
 
     def download_progress(self, digest: str) -> RuntimeAssetDownloadProgress | None:
         return self._download_progress.get(digest)

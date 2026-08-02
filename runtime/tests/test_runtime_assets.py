@@ -119,6 +119,22 @@ def test_runtime_asset_store_installs_and_resolves_exact_digest(tmp_path: Path) 
     assert (first.payload / "program.bin").read_bytes() == b"pinned engine"
 
 
+def test_runtime_asset_store_reports_package_and_transient_storage(tmp_path: Path) -> None:
+    source = _asset_tree(tmp_path / "source")
+    archive = tmp_path / "libreoffice.shejane-runtime-asset"
+    _pack(source, archive)
+    store = RuntimeAssetStore(tmp_path / "data")
+    installed = store.install(archive)
+    download = tmp_path / "data" / "plugins" / "runtime-assets" / "downloads" / "partial"
+    download.parent.mkdir(parents=True)
+    download.write_bytes(b"partial")
+
+    packages, transient_bytes = store.storage_usage()
+
+    assert packages[installed.digest] > 0
+    assert transient_bytes == len(b"partial")
+
+
 @pytest.mark.asyncio
 async def test_runtime_asset_resolver_downloads_exact_asset_once(tmp_path: Path) -> None:
     source = _asset_tree(tmp_path / "source")

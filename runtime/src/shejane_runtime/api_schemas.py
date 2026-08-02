@@ -1303,6 +1303,19 @@ class FixedRuntimeAssetStatus(BaseModel):
     download_progress: int | None = Field(default=None, ge=0, le=100)
 
 
+class RuntimeAssetStorage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    total_bytes: int = Field(ge=0)
+    history_bytes: int = Field(ge=0)
+    asset_count: int = Field(ge=0)
+    history_asset_count: int = Field(ge=0)
+
+
+class RuntimeAssetCleanupResult(RuntimeAssetStorage):
+    freed_bytes: int = Field(ge=0)
+
+
 class _PluginStateCommand(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

@@ -5,6 +5,7 @@ import type {
   AgentSettings,
   FixedRuntimeAssetPluginID,
   FixedRuntimeAssetStatus,
+  RuntimeAssetStorage,
 } from '@/runtime/client'
 import { SettingsView } from './SettingsView'
 
@@ -122,6 +123,43 @@ describe('SettingsView', () => {
 
     finishDownload?.()
     expect(await screen.findByRole('button', { name: '删除 Browser QA' })).toBeInTheDocument()
+  })
+
+  it('shows storage usage and confirms history or full cache cleanup', async () => {
+    const storage: RuntimeAssetStorage = {
+      total_bytes: 1_500_000_000,
+      history_bytes: 900_000_000,
+      asset_count: 4,
+      history_asset_count: 2,
+    }
+    const getRuntimeAssetStorage = vi.fn().mockResolvedValue(storage)
+    const cleanupRuntimeAssetStorage = vi.fn().mockResolvedValue({
+      ...storage,
+      history_bytes: 0,
+      history_asset_count: 0,
+      freed_bytes: 900_000_000,
+    })
+    render(
+      <I18nProvider>
+        <SettingsView
+          isDesktop
+          agentSettings={settings}
+          onAgentSettingsChange={vi.fn()}
+          onImportLocalData={vi.fn()}
+          getRuntimeAssetStorage={getRuntimeAssetStorage}
+          onCleanupRuntimeAssets={cleanupRuntimeAssetStorage}
+        />
+      </I18nProvider>,
+    )
+
+    expect(await screen.findByText('已占用 1.4 GB，其中历史版本 858.3 MB。')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '清理历史版本' }))
+    expect(await screen.findByRole('alertdialog')).toHaveTextContent('清理历史版本？')
+    fireEvent.click(screen.getByRole('button', { name: '确认清理' }))
+    await waitFor(() => expect(cleanupRuntimeAssetStorage).toHaveBeenCalledWith('history'))
+
+    fireEvent.click(screen.getByRole('button', { name: '清理全部缓存' }))
+    expect(await screen.findByRole('alertdialog')).toHaveTextContent('清理全部资源缓存？')
   })
 
   it('stops polling when an external runtime asset download fails', async () => {

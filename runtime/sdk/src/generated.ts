@@ -437,6 +437,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/plugins/runtime-assets/storage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Inspect Runtime Asset Storage */
+        get: operations["inspect_runtime_asset_storage_v1_plugins_runtime_assets_storage_get"];
+        put?: never;
+        post?: never;
+        /** Cleanup Runtime Asset Storage */
+        delete: operations["cleanup_runtime_asset_storage_v1_plugins_runtime_assets_storage_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/plugins/{plugin_id}": {
         parameters: {
             query?: never;
@@ -3191,6 +3209,19 @@ export interface components {
             /** Instructions */
             instructions?: string | null;
         };
+        /** RuntimeAssetCleanupResult */
+        RuntimeAssetCleanupResult: {
+            /** Asset Count */
+            asset_count: number;
+            /** Freed Bytes */
+            freed_bytes: number;
+            /** History Asset Count */
+            history_asset_count: number;
+            /** History Bytes */
+            history_bytes: number;
+            /** Total Bytes */
+            total_bytes: number;
+        };
         /** RuntimeAssetInstallCommand */
         RuntimeAssetInstallCommand: {
             /** Command Id */
@@ -3228,6 +3259,17 @@ export interface components {
             type: "plugin.runtime_asset.install";
             /** Version */
             version: string;
+        };
+        /** RuntimeAssetStorage */
+        RuntimeAssetStorage: {
+            /** Asset Count */
+            asset_count: number;
+            /** History Asset Count */
+            history_asset_count: number;
+            /** History Bytes */
+            history_bytes: number;
+            /** Total Bytes */
+            total_bytes: number;
         };
         /**
          * RuntimeInfo
@@ -4312,6 +4354,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ListPluginsResponse"];
+                };
+            };
+        };
+    };
+    inspect_runtime_asset_storage_v1_plugins_runtime_assets_storage_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeAssetStorage"];
+                };
+            };
+        };
+    };
+    cleanup_runtime_asset_storage_v1_plugins_runtime_assets_storage_delete: {
+        parameters: {
+            query: {
+                scope: "history" | "all";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeAssetCleanupResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

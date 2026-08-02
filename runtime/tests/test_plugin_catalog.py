@@ -172,6 +172,25 @@ async def test_catalog_only_removes_runtime_asset_after_lease_closes(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_catalog_bulk_cleanup_refuses_leased_runtime_assets(tmp_path: Path) -> None:
+    binding, asset_digest = _worker_binding_with_asset(tmp_path)
+    catalog = PluginCatalog(tmp_path)
+    alias = tmp_path / "browser-qa" / "runtime" / asset_digest.removeprefix("sha256:")[:32]
+    alias.mkdir(parents=True)
+    different_digest = asset_digest[:-1] + ("0" if asset_digest[-1] != "0" else "1")
+    (alias / ".shejane-runtime-digest").write_text(different_digest, encoding="utf-8")
+
+    async with catalog.acquire_snapshot([binding], execution_context=object()):
+        with pytest.raises(PluginCatalogError) as raised:
+            await catalog.cleanup_runtime_assets({asset_digest}, clear_transient=False)
+        assert raised.value.code == "plugin_runtime_asset_in_use"
+
+    await catalog.cleanup_runtime_assets({asset_digest}, clear_transient=False)
+    assert not RuntimeAssetStore(tmp_path).contains(asset_digest)
+    assert alias.is_dir()
+
+
+@pytest.mark.asyncio
 async def test_catalog_releases_runtime_assets_when_snapshot_load_is_cancelled(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

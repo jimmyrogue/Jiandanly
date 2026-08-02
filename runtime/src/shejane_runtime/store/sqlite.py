@@ -3206,6 +3206,25 @@ class LocalStore:
             for row in rows
         ]
 
+    async def referenced_runtime_asset_digests(self) -> set[str]:
+        rows = await (
+            await self._conn.execute(
+                "SELECT DISTINCT v.manifest_json FROM plugin_versions v "
+                "WHERE v.digest IN ("
+                "SELECT active_digest FROM plugin_installations WHERE retired_at IS NULL "
+                "UNION SELECT digest FROM run_plugin_bindings)"
+            )
+        ).fetchall()
+        digests: set[str] = set()
+        for row in rows:
+            manifest = json.loads(row["manifest_json"])
+            execution = manifest.get("runtime", {}).get("execution", {})
+            for reference in execution.get("runtime_assets", []):
+                digest = reference.get("digest")
+                if isinstance(digest, str):
+                    digests.add(digest)
+        return digests
+
     async def get_plugin_setup_flow(self, *, principal_id: str, plugin_id: str) -> dict[str, Any]:
         row = await (
             await self._conn.execute(
