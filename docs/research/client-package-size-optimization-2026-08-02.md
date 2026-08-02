@@ -88,6 +88,17 @@
 
 相对最初基线，frozen Runtime 累计减少 **109,736 KiB（46.9%）**，压缩代理累计减少 **47,739,912 bytes（43.5%）**。47 项 CLI、HTTP、SSE、长输出、取消和 smoke 测试通过；真实冻结进程以新配置启动并通过 `/v1/health`，成品不再包含 uvloop、httptools 或 watchfiles。
 
+## 实施进度：去除 PyInstaller 重复 Python 源文件
+
+2026-08-02 已为 LangGraph、LangChain、LangChain Core、Deep Agents 和 Wasmtime 的 `collect_all()` 关闭 raw source collection。动态子模块、数据文件、包元数据和 Wasmtime 原生库仍按原规则收集；模块字节码仍位于 PyInstaller `PYZ`，只删除 `_internal` 中同内容的 `.py` 副本。
+
+| 指标 | 修改前 | 修改后 | 变化 |
+|---|---:|---:|---:|
+| frozen Runtime 磁盘分配 | 124,372 KiB | 117,788 KiB | **-6,584 KiB，-5.3%** |
+| `tar.gz` 压缩代理 | 61,937,660 bytes | 60,777,795 bytes | **-1,159,865 bytes，-1.9%** |
+
+相对最初基线，frozen Runtime 累计减少 **116,320 KiB（49.7%）**，压缩代理累计减少 **48,899,777 bytes（44.6%）**。成品不再包含原始 `.py`；284 项 Provider、MCP、Checkpoint、Office、WASI 等定向测试通过。真实冻结进程还完成了一次 Fake LLM `/v1/runs` 与 SSE，产出 `run.completed` 和 `[DONE]`，SIGTERM 后 260 ms 退出；主程序和内部可执行文件的签名验证通过。
+
 ## 当前基线与测量方法
 
 ### 原始结果
@@ -263,7 +274,7 @@ Anthropic 官方仓库明确说明 `apply-seccomp` 是 Linux 的 seccomp 实现�
 
 **验证：** `asar list` 前后清单 diff；macOS 实际跑一次 SRT 文件/网络限制；Windows/Linux 分别构建，确认没有错误复用 macOS 排除规则；Client E2E 与更新安装。
 
-### 2. 收窄 PyInstaller collect_all
+### 2. 收窄 PyInstaller collect_all（第一轮已完成）
 
 第一轮只关闭 raw source collection；第二轮才按包把 `collect_all` 换为“明确 data + 动态 imports”。不要同时改多个包，否则 packaged-only 回归难定位。
 

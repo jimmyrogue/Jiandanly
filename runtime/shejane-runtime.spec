@@ -49,7 +49,7 @@ for pkg in (
     "langchain_core",
     "deepagents",
 ):
-    d, b, h = collect_all(pkg)
+    d, b, h = collect_all(pkg, include_py_files=False)
     datas += d
     binaries += b
     hiddenimports += h
@@ -62,7 +62,7 @@ def is_wasmtime_library(path):
 # wasmtime resolves its platform library with ctypes from an exact package-relative
 # path. PyInstaller reclassifies the file differently across platforms, so exclude
 # it from automatic collection and add it back as a binary at the required path.
-d, b, h = collect_all("wasmtime")
+d, b, h = collect_all("wasmtime", include_py_files=False)
 datas += [entry for entry in d if not is_wasmtime_library(entry[0])]
 binaries += [entry for entry in b if not is_wasmtime_library(entry[0])]
 hiddenimports += h
