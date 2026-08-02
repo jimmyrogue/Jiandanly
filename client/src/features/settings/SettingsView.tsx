@@ -144,6 +144,7 @@ function useSettingsViewModel({
   const { t, locale, setLocale } = useI18n()
   const importInputRef = useRef<HTMLInputElement>(null)
   const settingsScrollRef = useRef<HTMLDivElement>(null)
+  const runtimeAssetActiveDownloads = useRef(new Set<FixedRuntimeAssetPluginID>())
   const [activeSection, setActiveSection] = useState<SettingsSectionID>(
     isDesktop ? 'models' : 'general',
   )
@@ -241,6 +242,7 @@ function useSettingsViewModel({
             return next
           })
           if (status.downloading) {
+            runtimeAssetActiveDownloads.current.add(pluginID)
             setRuntimeAssetProgress((current) => ({
               ...current,
               [pluginID]: status.download_progress ?? null,
@@ -275,15 +277,30 @@ function useSettingsViewModel({
           const status = await getRuntimeAssetStatus(pluginID)
           if (!active) return
           if (status.downloaded) {
+            runtimeAssetActiveDownloads.current.delete(pluginID)
             setRuntimeAssetDownloads((current) => ({ ...current, [pluginID]: 'downloaded' }))
+            setRuntimeAssetProgress((current) => {
+              const next = { ...current }
+              delete next[pluginID]
+              return next
+            })
             return
           }
           if (status.downloading) {
+            runtimeAssetActiveDownloads.current.add(pluginID)
             setRuntimeAssetProgress((current) => ({
               ...current,
               [pluginID]: status.download_progress ?? null,
             }))
+            return
           }
+          if (!runtimeAssetActiveDownloads.current.delete(pluginID)) return
+          setRuntimeAssetDownloads((current) => ({ ...current, [pluginID]: 'error' }))
+          setRuntimeAssetProgress((current) => {
+            const next = { ...current }
+            delete next[pluginID]
+            return next
+          })
         } catch {
           // The PUT request owns download failure; polling is best-effort UI state.
         }
@@ -350,6 +367,7 @@ function useSettingsViewModel({
 
   const downloadRuntimeAsset = useCallback(async (pluginID: FixedRuntimeAssetPluginID) => {
     if (!onDownloadRuntimeAsset) return
+    runtimeAssetActiveDownloads.current.delete(pluginID)
     setRuntimeAssetDownloads((current) => ({ ...current, [pluginID]: 'downloading' }))
     setRuntimeAssetProgress((current) => ({ ...current, [pluginID]: null }))
     try {
@@ -358,6 +376,7 @@ function useSettingsViewModel({
     } catch {
       setRuntimeAssetDownloads((current) => ({ ...current, [pluginID]: 'error' }))
     } finally {
+      runtimeAssetActiveDownloads.current.delete(pluginID)
       setRuntimeAssetProgress((current) => {
         const next = { ...current }
         delete next[pluginID]

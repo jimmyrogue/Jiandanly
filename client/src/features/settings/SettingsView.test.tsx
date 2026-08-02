@@ -1,7 +1,11 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { I18nProvider } from '@/shared/i18n/I18nProvider'
-import type { AgentSettings } from '@/runtime/client'
+import type {
+  AgentSettings,
+  FixedRuntimeAssetPluginID,
+  FixedRuntimeAssetStatus,
+} from '@/runtime/client'
 import { SettingsView } from './SettingsView'
 
 const settings: Required<AgentSettings> = {
@@ -120,6 +124,60 @@ describe('SettingsView', () => {
     expect(await screen.findByRole('button', { name: '删除 Browser QA' })).toBeInTheDocument()
   })
 
+  it('stops polling when an external runtime asset download fails', async () => {
+    let finishExternalDownload: (() => void) | undefined
+    let browserStatusCalls = 0
+    const externalFinished = new Promise<FixedRuntimeAssetStatus>((resolve) => {
+      finishExternalDownload = () => resolve({
+        plugin_id: 'org.shejane.browser-qa',
+        downloaded: false,
+        downloading: false,
+        download_progress: null,
+      })
+    })
+    const getRuntimeAssetStatus = vi.fn((
+      pluginID: FixedRuntimeAssetPluginID,
+    ): Promise<FixedRuntimeAssetStatus> => {
+      if (pluginID === 'org.shejane.ocr') {
+        return Promise.resolve({
+          plugin_id: pluginID,
+          downloaded: false,
+          downloading: false,
+          download_progress: null,
+        } as const)
+      }
+      browserStatusCalls += 1
+      if (browserStatusCalls === 1) {
+        return Promise.resolve({
+          plugin_id: pluginID,
+          downloaded: false,
+          downloading: true,
+          download_progress: 42,
+        })
+      }
+      return externalFinished
+    })
+    render(
+      <I18nProvider>
+        <SettingsView
+          isDesktop
+          agentSettings={settings}
+          onAgentSettingsChange={vi.fn()}
+          onImportLocalData={vi.fn()}
+          getRuntimeAssetStatus={getRuntimeAssetStatus}
+          onDownloadRuntimeAsset={vi.fn().mockResolvedValue(undefined)}
+        />
+      </I18nProvider>,
+    )
+
+    expect(await screen.findByRole('progressbar', { name: 'Browser QA 下载进度' }))
+      .toHaveAttribute('value', '42')
+    finishExternalDownload?.()
+
+    expect(await screen.findByRole('button', { name: '下载 Browser QA' })).toBeEnabled()
+    expect(screen.getByText('下载失败，请检查网络后重试。')).toBeInTheDocument()
+  })
+
   it('restores downloaded asset state from Runtime when settings reopens', async () => {
     const getRuntimeAssetStatus = vi.fn(async (pluginID: string) => ({
       plugin_id: pluginID as 'org.shejane.browser-qa' | 'org.shejane.ocr',
@@ -143,6 +201,11 @@ describe('SettingsView', () => {
     fireEvent.click(await screen.findByRole('button', { name: '删除 Browser QA' }))
     expect(removeRuntimeAsset).not.toHaveBeenCalled()
     expect(await screen.findByRole('alertdialog')).toHaveTextContent('删除 Browser QA？')
+    fireEvent.click(screen.getByRole('button', { name: '取消' }))
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(removeRuntimeAsset).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: '删除 Browser QA' }))
     fireEvent.click(screen.getByRole('button', { name: '确认删除' }))
     expect(await screen.findByRole('button', { name: '下载 Browser QA' })).toBeEnabled()
     expect(removeRuntimeAsset).toHaveBeenCalledWith('org.shejane.browser-qa')
