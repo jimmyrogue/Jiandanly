@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import shutil
+import threading
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -162,6 +165,84 @@ async def test_catalog_only_removes_runtime_asset_after_lease_closes(tmp_path: P
         digest=asset_digest,
     )
     assert not store.contains(asset_digest)
+    await catalog.remove_runtime_asset(
+        asset_id="org.libreoffice.runtime",
+        digest=asset_digest,
+    )
+
+
+@pytest.mark.asyncio
+async def test_catalog_releases_runtime_assets_when_snapshot_load_is_cancelled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binding, asset_digest = _worker_binding_with_asset(tmp_path)
+    catalog = PluginCatalog(tmp_path)
+    load_started = threading.Event()
+    allow_load = threading.Event()
+    original_load = catalog._load_snapshot
+
+    def delayed_load(*args: object, **kwargs: object) -> object:
+        load_started.set()
+        assert allow_load.wait(timeout=1)
+        return original_load(*args, **kwargs)
+
+    monkeypatch.setattr(catalog, "_load_snapshot", delayed_load)
+
+    async def acquire() -> None:
+        async with catalog.acquire_snapshot([binding], execution_context=object()):
+            pass
+
+    task = asyncio.create_task(acquire())
+    assert await asyncio.to_thread(load_started.wait, 1)
+    task.cancel()
+    await asyncio.sleep(0)
+    allow_load.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.sleep(0)
+
+    await catalog.remove_runtime_asset(
+        asset_id="org.libreoffice.runtime",
+        digest=asset_digest,
+    )
+
+
+@pytest.mark.asyncio
+async def test_catalog_releases_runtime_assets_after_repeated_cancellation(
+    tmp_path: Path,
+) -> None:
+    binding, asset_digest = _worker_binding_with_asset(tmp_path)
+    catalog = PluginCatalog(tmp_path)
+    entered = asyncio.Event()
+    block_executor = threading.Event()
+    executor_blocked = threading.Event()
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+
+    async def acquire() -> None:
+        async with catalog.acquire_snapshot([binding], execution_context=object()):
+            entered.set()
+            await asyncio.Future()
+
+    task = asyncio.create_task(acquire())
+    await entered.wait()
+
+    def occupy_executor() -> None:
+        executor_blocked.set()
+        assert block_executor.wait(timeout=1)
+
+    blocker = loop.run_in_executor(None, occupy_executor)
+    assert executor_blocked.wait(timeout=1)
+    task.cancel()
+    await asyncio.sleep(0)
+    task.cancel()
+    await asyncio.sleep(0)
+    block_executor.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await blocker
+
     await catalog.remove_runtime_asset(
         asset_id="org.libreoffice.runtime",
         digest=asset_digest,

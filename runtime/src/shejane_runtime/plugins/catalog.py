@@ -163,13 +163,30 @@ class PluginCatalog:
         bindings = tuple(dict(binding) for binding in frozen_bindings)
         attempted: set[str] = set()
         while True:
-            try:
-                lease = await asyncio.to_thread(
+            load_task = asyncio.create_task(
+                asyncio.to_thread(
                     self._load_leased_snapshot,
                     bindings,
                     execution_context,
                 )
+            )
+            try:
+                lease = await asyncio.shield(load_task)
                 break
+            except asyncio.CancelledError:
+                while not load_task.done():
+                    try:
+                        await asyncio.shield(load_task)
+                    except asyncio.CancelledError:
+                        continue
+                if not load_task.cancelled():
+                    try:
+                        cancelled_lease = load_task.result()
+                    except Exception:
+                        pass
+                    else:
+                        self._release_runtime_assets(cancelled_lease)
+                raise
             except _RuntimeAssetRequired as missing:
                 if missing.digest in attempted:
                     raise PluginCatalogError(
@@ -193,8 +210,21 @@ class PluginCatalog:
         try:
             yield lease
         finally:
-            await lease.aclose()
-            await asyncio.to_thread(self._release_runtime_assets, lease)
+            release_task = asyncio.create_task(
+                asyncio.to_thread(self._release_runtime_assets, lease)
+            )
+            try:
+                await lease.aclose()
+            finally:
+                release_cancelled: asyncio.CancelledError | None = None
+                while not release_task.done():
+                    try:
+                        await asyncio.shield(release_task)
+                    except asyncio.CancelledError as exc:
+                        release_cancelled = exc
+                release_task.result()
+                if release_cancelled is not None:
+                    raise release_cancelled
 
     async def remove_runtime_asset(self, *, asset_id: str, digest: str) -> None:
         await asyncio.to_thread(self._remove_runtime_asset, asset_id, digest)
