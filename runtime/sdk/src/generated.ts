@@ -1647,8 +1647,12 @@ export interface components {
         };
         /** FixedRuntimeAssetStatus */
         FixedRuntimeAssetStatus: {
+            /** Download Progress */
+            download_progress?: number | null;
             /** Downloaded */
             downloaded: boolean;
+            /** Downloading */
+            downloading?: boolean | null;
             /**
              * Plugin Id
              * @enum {string}

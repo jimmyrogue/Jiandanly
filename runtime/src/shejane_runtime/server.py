@@ -2830,6 +2830,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get(
         "/v1/plugins/{plugin_id}/runtime-asset",
         response_model=FixedRuntimeAssetStatus,
+        response_model_exclude_defaults=True,
     )
     async def inspect_fixed_runtime_asset(request: Request, plugin_id: str) -> dict[str, Any]:
         registry: PluginRegistry = app.state.plugin_registry
@@ -2847,6 +2848,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.put(
         "/v1/plugins/{plugin_id}/runtime-asset",
         response_model=FixedRuntimeAssetStatus,
+        response_model_exclude_defaults=True,
     )
     async def prepare_fixed_runtime_asset(request: Request, plugin_id: str) -> dict[str, Any]:
         registry: PluginRegistry = app.state.plugin_registry
@@ -2864,6 +2866,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.delete(
         "/v1/plugins/{plugin_id}/runtime-asset",
         response_model=FixedRuntimeAssetStatus,
+        response_model_exclude_defaults=True,
     )
     async def remove_fixed_runtime_asset(request: Request, plugin_id: str) -> dict[str, Any]:
         registry: PluginRegistry = app.state.plugin_registry

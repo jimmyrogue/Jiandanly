@@ -1659,9 +1659,33 @@
       "FixedRuntimeAssetStatus": {
         "additionalProperties": false,
         "properties": {
+          "download_progress": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Download Progress"
+          },
           "downloaded": {
             "title": "Downloaded",
             "type": "boolean"
+          },
+          "downloading": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Downloading"
           },
           "plugin_id": {
             "enum": [

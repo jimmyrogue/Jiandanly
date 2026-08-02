@@ -8756,6 +8756,22 @@ select {
   font-variant-numeric: tabular-nums;
 }
 
+.settings-runtime-asset-progress {
+  display: grid;
+  grid-template-columns: 112px 42px;
+  align-items: center;
+  gap: 8px;
+  color: var(--sj-ink-soft, #6F6B63);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-runtime-asset-progress progress {
+  width: 112px;
+  height: 6px;
+  accent-color: var(--sj-seal, #B3532F);
+}
+
 button.settings-row-button:focus-visible,
 .settings-nav-item:focus-visible,
 .settings-primary-button:focus-visible,

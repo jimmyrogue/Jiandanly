@@ -1299,6 +1299,8 @@ class FixedRuntimeAssetStatus(BaseModel):
 
     plugin_id: Literal["org.shejane.browser-qa", "org.shejane.ocr"]
     downloaded: bool
+    downloading: bool | None = None
+    download_progress: int | None = Field(default=None, ge=0, le=100)
 
 
 class _PluginStateCommand(BaseModel):

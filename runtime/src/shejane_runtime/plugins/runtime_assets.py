@@ -35,7 +35,8 @@ _MAX_ASSET_ARCHIVE_BYTES = 768 * 1024 * 1024
 _MAX_ASSET_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 _MAX_ASSET_FILES = 50_000
 _MAX_ASSET_REDIRECTS = 5
-RuntimeAssetDownloader = Callable[[str, Path], Awaitable[None]]
+RuntimeAssetProgressCallback = Callable[[int, int | None], None]
+RuntimeAssetDownloader = Callable[[str, Path, RuntimeAssetProgressCallback], Awaitable[None]]
 
 
 class RuntimeAssetManifest(BaseModel):
@@ -63,6 +64,11 @@ class RuntimeAssetHandle:
     license: str
     source_url: str
     sbom: Path
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeAssetDownloadProgress:
+    percent: int | None
 
 
 def canonical_runtime_asset_digest(root: Path) -> str:
@@ -258,6 +264,7 @@ class RuntimeAssetResolver:
         self._downloader = downloader or _download_runtime_asset
         self._download_root = data_dir / "plugins" / "runtime-assets" / "downloads"
         self._locks: dict[str, asyncio.Lock] = {}
+        self._download_progress: dict[str, RuntimeAssetDownloadProgress] = {}
 
     def resolve(
         self,
@@ -276,6 +283,9 @@ class RuntimeAssetResolver:
 
     def remove(self, digest: str) -> None:
         self._store.remove(digest)
+
+    def download_progress(self, digest: str) -> RuntimeAssetDownloadProgress | None:
+        return self._download_progress.get(digest)
 
     async def ensure(
         self,
@@ -311,18 +321,21 @@ class RuntimeAssetResolver:
                 if self._store.contains(digest):
                     await asyncio.to_thread(self._store.quarantine, digest)
 
-            archive = await self._materialize(source)
             try:
-                handle = await asyncio.to_thread(
-                    self._store.install,
-                    archive,
-                    expected_digest=digest,
-                    target_platform=platform,
-                )
+                archive = await self._materialize(source, digest)
+                try:
+                    handle = await asyncio.to_thread(
+                        self._store.install,
+                        archive,
+                        expected_digest=digest,
+                        target_platform=platform,
+                    )
+                finally:
+                    if isinstance(source, str):
+                        with contextlib.suppress(OSError):
+                            archive.unlink(missing_ok=True)
             finally:
-                if isinstance(source, str):
-                    with contextlib.suppress(OSError):
-                        archive.unlink(missing_ok=True)
+                self._download_progress.pop(digest, None)
             if (
                 handle.asset_id != asset_id
                 or handle.version != version
@@ -333,7 +346,7 @@ class RuntimeAssetResolver:
             await asyncio.to_thread(self._store.clear_quarantine, digest)
             return handle
 
-    async def _materialize(self, source: Path | str) -> Path:
+    async def _materialize(self, source: Path | str, digest: str) -> Path:
         if isinstance(source, Path):
             if not source.is_file():
                 raise InvalidPluginPackage("approved runtime asset source is unavailable")
@@ -354,8 +367,18 @@ class RuntimeAssetResolver:
         )
         os.close(fd)
         destination = Path(raw_path)
+        self._download_progress[digest] = RuntimeAssetDownloadProgress(percent=None)
+
+        def report_progress(written: int, total: int | None) -> None:
+            percent = (
+                None
+                if not total
+                else (100 if written >= total else min(99, round(written * 100 / total)))
+            )
+            self._download_progress[digest] = RuntimeAssetDownloadProgress(percent=percent)
+
         try:
-            await self._downloader(source, destination)
+            await self._downloader(source, destination, report_progress)
         except InvalidPluginPackage:
             destination.unlink(missing_ok=True)
             raise
@@ -369,7 +392,11 @@ class RuntimeAssetResolver:
         return destination
 
 
-async def _download_runtime_asset(url: str, destination: Path) -> None:
+async def _download_runtime_asset(
+    url: str,
+    destination: Path,
+    report_progress: RuntimeAssetProgressCallback,
+) -> None:
     current_url = url
     try:
         for redirect_count in range(_MAX_ASSET_REDIRECTS + 1):
@@ -402,7 +429,8 @@ async def _download_runtime_asset(url: str, destination: Path) -> None:
                         continue
                     response.raise_for_status()
                     declared = response.headers.get("content-length")
-                    if declared is not None and int(declared) > _MAX_ASSET_ARCHIVE_BYTES:
+                    declared_bytes = int(declared) if declared is not None else None
+                    if declared_bytes is not None and declared_bytes > _MAX_ASSET_ARCHIVE_BYTES:
                         raise InvalidPluginPackage("runtime asset download exceeds the size limit")
                     written = 0
                     with destination.open("wb") as output:
@@ -413,6 +441,7 @@ async def _download_runtime_asset(url: str, destination: Path) -> None:
                                     "runtime asset download exceeds the size limit"
                                 )
                             output.write(chunk)
+                            report_progress(written, declared_bytes)
                     if written == 0:
                         raise InvalidPluginPackage("runtime asset download is empty")
                     return

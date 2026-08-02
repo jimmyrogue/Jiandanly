@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { I18nProvider } from '@/shared/i18n/I18nProvider'
 import type { AgentSettings } from '@/runtime/client'
@@ -86,6 +86,40 @@ describe('SettingsView', () => {
     ))).toBe(true)
   })
 
+  it('shows runtime asset download progress', async () => {
+    let finishDownload: (() => void) | undefined
+    let downloading = false
+    const downloadRuntimeAsset = vi.fn(() => new Promise<void>((resolve) => {
+      finishDownload = resolve
+    }))
+    const getRuntimeAssetStatus = vi.fn(async (pluginID: string) => ({
+      plugin_id: pluginID as 'org.shejane.browser-qa' | 'org.shejane.ocr',
+      downloaded: false,
+      downloading: downloading && pluginID === 'org.shejane.browser-qa',
+      download_progress: downloading && pluginID === 'org.shejane.browser-qa' ? 42 : null,
+    }))
+    render(
+      <I18nProvider>
+        <SettingsView
+          isDesktop
+          agentSettings={settings}
+          onAgentSettingsChange={vi.fn()}
+          onImportLocalData={vi.fn()}
+          getRuntimeAssetStatus={getRuntimeAssetStatus}
+          onDownloadRuntimeAsset={downloadRuntimeAsset}
+        />
+      </I18nProvider>,
+    )
+
+    downloading = true
+    fireEvent.click(screen.getByRole('button', { name: '下载 Browser QA' }))
+    const progress = await screen.findByRole('progressbar', { name: 'Browser QA 下载进度' })
+    await waitFor(() => expect(progress).toHaveAttribute('value', '42'))
+
+    finishDownload?.()
+    expect(await screen.findByRole('button', { name: '删除 Browser QA' })).toBeInTheDocument()
+  })
+
   it('restores downloaded asset state from Runtime when settings reopens', async () => {
     const getRuntimeAssetStatus = vi.fn(async (pluginID: string) => ({
       plugin_id: pluginID as 'org.shejane.browser-qa' | 'org.shejane.ocr',
@@ -107,6 +141,9 @@ describe('SettingsView', () => {
     )
 
     fireEvent.click(await screen.findByRole('button', { name: '删除 Browser QA' }))
+    expect(removeRuntimeAsset).not.toHaveBeenCalled()
+    expect(await screen.findByRole('alertdialog')).toHaveTextContent('删除 Browser QA？')
+    fireEvent.click(screen.getByRole('button', { name: '确认删除' }))
     expect(await screen.findByRole('button', { name: '下载 Browser QA' })).toBeEnabled()
     expect(removeRuntimeAsset).toHaveBeenCalledWith('org.shejane.browser-qa')
     expect(screen.getByRole('button', { name: '下载 RapidOCR' })).toBeEnabled()

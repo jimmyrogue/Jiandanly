@@ -256,7 +256,11 @@ async def test_catalog_marks_runtime_asset_download_failure_retryable(tmp_path: 
         tmp_path / "plugins" / "runtime-assets" / "packages" / asset_digest.removeprefix("sha256:")
     )
 
-    async def offline(_url: str, _destination: Path) -> None:
+    async def offline(
+        _url: str,
+        _destination: Path,
+        _report_progress: object,
+    ) -> None:
         raise OSError("offline")
 
     catalog = PluginCatalog(

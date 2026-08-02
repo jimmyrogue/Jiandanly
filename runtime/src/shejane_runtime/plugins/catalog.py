@@ -25,7 +25,12 @@ from .manifest import load_plugin_manifest
 from .ocr import is_allowed_ocr_package
 from .package import InvalidPluginPackage, canonical_package_digest
 from .platforms import current_managed_worker_execution_platform, current_managed_worker_platform
-from .runtime_assets import RuntimeAssetDownloader, RuntimeAssetHandle, RuntimeAssetResolver
+from .runtime_assets import (
+    RuntimeAssetDownloader,
+    RuntimeAssetDownloadProgress,
+    RuntimeAssetHandle,
+    RuntimeAssetResolver,
+)
 
 
 class PluginCatalogError(RuntimeError):
@@ -228,6 +233,12 @@ class PluginCatalog:
 
     async def remove_runtime_asset(self, *, asset_id: str, digest: str) -> None:
         await asyncio.to_thread(self._remove_runtime_asset, asset_id, digest)
+
+    def runtime_asset_download_progress(
+        self,
+        digest: str,
+    ) -> RuntimeAssetDownloadProgress | None:
+        return self._runtime_assets.download_progress(digest)
 
     def _load_leased_snapshot(
         self,

@@ -5,6 +5,7 @@ import json
 import shutil
 import stat
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -127,7 +128,11 @@ async def test_runtime_asset_resolver_downloads_exact_asset_once(tmp_path: Path)
     manifest = load_runtime_asset_manifest(source)
     downloads: list[str] = []
 
-    async def download(url: str, destination: Path) -> None:
+    async def download(
+        url: str,
+        destination: Path,
+        _report_progress: Callable[[int, int | None], None],
+    ) -> None:
         downloads.append(url)
         shutil.copyfile(archive, destination)
 
@@ -157,13 +162,63 @@ async def test_runtime_asset_resolver_downloads_exact_asset_once(tmp_path: Path)
 
 
 @pytest.mark.asyncio
+async def test_runtime_asset_resolver_reports_download_progress(tmp_path: Path) -> None:
+    source = _asset_tree(tmp_path / "source")
+    archive = tmp_path / "libreoffice.shejane-runtime-asset"
+    _pack(source, archive)
+    digest = canonical_runtime_asset_digest(source)
+    manifest = load_runtime_asset_manifest(source)
+    halfway = asyncio.Event()
+    continue_download = asyncio.Event()
+
+    async def download(
+        _url: str,
+        destination: Path,
+        report_progress: Callable[[int, int | None], None],
+    ) -> None:
+        payload = archive.read_bytes()
+        midpoint = len(payload) // 2
+        destination.write_bytes(payload[:midpoint])
+        report_progress(midpoint, len(payload))
+        halfway.set()
+        await continue_download.wait()
+        with destination.open("ab") as output:
+            output.write(payload[midpoint:])
+        report_progress(len(payload), len(payload))
+
+    resolver = RuntimeAssetResolver(
+        tmp_path / "data",
+        sources={manifest.id: "https://downloads.example.test/libreoffice.shejane-runtime-asset"},
+        downloader=download,
+    )
+    task = asyncio.create_task(
+        resolver.ensure(
+            asset_id=manifest.id,
+            version=manifest.version,
+            platform=manifest.platform,
+            digest=digest,
+        )
+    )
+
+    await asyncio.wait_for(halfway.wait(), timeout=1)
+    assert resolver.download_progress(digest).percent == 50
+    continue_download.set()
+    await task
+    assert resolver.download_progress(digest) is None
+
+
+@pytest.mark.asyncio
 async def test_runtime_asset_resolver_rejects_download_with_wrong_digest(tmp_path: Path) -> None:
     source = _asset_tree(tmp_path / "source")
     archive = tmp_path / "libreoffice.shejane-runtime-asset"
     _pack(source, archive)
     manifest = load_runtime_asset_manifest(source)
 
-    async def download(_url: str, destination: Path) -> None:
+    async def download(
+        _url: str,
+        destination: Path,
+        _report_progress: Callable[[int, int | None], None],
+    ) -> None:
         shutil.copyfile(archive, destination)
 
     resolver = RuntimeAssetResolver(
@@ -193,7 +248,11 @@ async def test_runtime_asset_resolver_retries_after_offline_failure(tmp_path: Pa
     manifest = load_runtime_asset_manifest(source)
     attempts = 0
 
-    async def download(_url: str, destination: Path) -> None:
+    async def download(
+        _url: str,
+        destination: Path,
+        _report_progress: Callable[[int, int | None], None],
+    ) -> None:
         nonlocal attempts
         attempts += 1
         if attempts == 1:

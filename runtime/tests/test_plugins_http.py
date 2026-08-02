@@ -6,6 +6,7 @@ import hashlib
 import json
 import shutil
 import sqlite3
+import threading
 import zipfile
 from functools import partial
 from pathlib import Path
@@ -304,6 +305,87 @@ def test_fixed_runtime_asset_release_sources_match_current_platform(
             "rapidocr-runtime-3.9.1-darwin-arm64.shejane-runtime-asset"
         ),
     }
+
+
+def test_fixed_runtime_asset_status_reports_active_download_progress(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    asset = tmp_path / "browser-qa.shejane-runtime-asset"
+    _pack_runtime_asset(
+        asset,
+        asset_id="org.shejane.browser-qa.runtime",
+        version="1.61.1+chromium1228.2",
+        platform="darwin/arm64",
+    )
+    digest = (
+        RuntimeAssetStore(tmp_path / "browser-asset-store")
+        .install(asset, target_platform="darwin/arm64")
+        .digest
+    )
+    package = tmp_path / "browser-qa.shejane-plugin"
+    _pack_browser_qa_builtin(package, digest)
+    halfway = threading.Event()
+    continue_download = threading.Event()
+
+    async def download(_url: str, destination: Path, report_progress: object) -> None:
+        payload = asset.read_bytes()
+        midpoint = len(payload) // 2
+        destination.write_bytes(payload[:midpoint])
+        assert callable(report_progress)
+        report_progress(midpoint, len(payload))
+        halfway.set()
+        await asyncio.to_thread(continue_download.wait)
+        with destination.open("ab") as output:
+            output.write(payload[midpoint:])
+        report_progress(len(payload), len(payload))
+
+    for target in (
+        "shejane_runtime.server.current_managed_worker_platform",
+        "shejane_runtime.plugins.registry.current_managed_worker_platform",
+        "shejane_runtime.plugins.catalog.current_managed_worker_platform",
+    ):
+        monkeypatch.setattr(target, lambda: "darwin/arm64")
+    monkeypatch.setattr(
+        "shejane_runtime.plugins.runtime_assets._download_runtime_asset",
+        download,
+    )
+    settings = reset_settings_for_tests(
+        SHEJANE_RUNTIME_TOKEN="tok",
+        data_dir=tmp_path / "runtime",
+        computer_use_package=None,
+        browser_qa_package=package,
+        fixed_runtime_asset_base_url="https://downloads.example.test/client-v0.1.27",
+    )
+
+    with TestClient(create_app(settings)) as builtin_client:
+        responses: list[object] = []
+        worker = threading.Thread(
+            target=lambda: responses.append(
+                builtin_client.put(
+                    "/v1/plugins/org.shejane.browser-qa/runtime-asset",
+                    headers=AUTH,
+                )
+            )
+        )
+        worker.start()
+        try:
+            assert halfway.wait(timeout=1)
+            status = builtin_client.get(
+                "/v1/plugins/org.shejane.browser-qa/runtime-asset",
+                headers=AUTH,
+            )
+            assert status.json() == {
+                "plugin_id": "org.shejane.browser-qa",
+                "downloaded": False,
+                "downloading": True,
+                "download_progress": 50,
+            }
+        finally:
+            continue_download.set()
+            worker.join(timeout=2)
+        assert not worker.is_alive()
+        assert responses[0].status_code == 200
 
 
 def test_computer_use_is_runtime_managed_and_cannot_be_installed_or_removed(

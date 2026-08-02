@@ -148,10 +148,14 @@ function useSettingsViewModel({
     isDesktop ? 'models' : 'general',
   )
   const [clearMemoryConfirmOpen, setClearMemoryConfirmOpen] = useState(false)
+  const [runtimeAssetDeleteConfirm, setRuntimeAssetDeleteConfirm] = useState<FixedRuntimeAssetPluginID | null>(null)
   const [clearingMemory, setClearingMemory] = useState(false)
   const [clientUpdate, setClientUpdate] = useState<ClientUpdateState | null>(null)
   const [runtimeAssetDownloads, setRuntimeAssetDownloads] = useState<Partial<
     Record<FixedRuntimeAssetPluginID, 'downloading' | 'downloaded' | 'deleting' | 'error' | 'delete_error'>
+  >>({})
+  const [runtimeAssetProgress, setRuntimeAssetProgress] = useState<Partial<
+    Record<FixedRuntimeAssetPluginID, number | null>
   >>({})
 
   const memoryEnabled = (agentSettings.memory ?? 'on') === 'on'
@@ -232,9 +236,16 @@ function useSettingsViewModel({
             if (current[pluginID] === 'downloading' || current[pluginID] === 'deleting') return current
             const next = { ...current }
             if (status.downloaded) next[pluginID] = 'downloaded'
+            else if (status.downloading) next[pluginID] = 'downloading'
             else delete next[pluginID]
             return next
           })
+          if (status.downloading) {
+            setRuntimeAssetProgress((current) => ({
+              ...current,
+              [pluginID]: status.download_progress ?? null,
+            }))
+          }
         })
         .catch(() => {
           if (!active) return
@@ -249,6 +260,42 @@ function useSettingsViewModel({
       active = false
     }
   }, [getRuntimeAssetStatus, isDesktop])
+
+  useEffect(() => {
+    if (!getRuntimeAssetStatus) return
+    const pluginIDs = FIXED_RUNTIME_ASSETS
+      .map(({ pluginID }) => pluginID)
+      .filter((pluginID) => runtimeAssetDownloads[pluginID] === 'downloading')
+    if (pluginIDs.length === 0) return
+    let active = true
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const poll = async () => {
+      await Promise.all(pluginIDs.map(async (pluginID) => {
+        try {
+          const status = await getRuntimeAssetStatus(pluginID)
+          if (!active) return
+          if (status.downloaded) {
+            setRuntimeAssetDownloads((current) => ({ ...current, [pluginID]: 'downloaded' }))
+            return
+          }
+          if (status.downloading) {
+            setRuntimeAssetProgress((current) => ({
+              ...current,
+              [pluginID]: status.download_progress ?? null,
+            }))
+          }
+        } catch {
+          // The PUT request owns download failure; polling is best-effort UI state.
+        }
+      }))
+      if (active) timer = setTimeout(() => void poll(), 250)
+    }
+    void poll()
+    return () => {
+      active = false
+      if (timer) clearTimeout(timer)
+    }
+  }, [getRuntimeAssetStatus, runtimeAssetDownloads])
 
   const updateStatus = clientUpdate?.status ?? 'unavailable'
   const updateVersion = clientUpdate?.availableVersion ?? clientUpdate?.currentVersion ?? '—'
@@ -304,11 +351,18 @@ function useSettingsViewModel({
   const downloadRuntimeAsset = useCallback(async (pluginID: FixedRuntimeAssetPluginID) => {
     if (!onDownloadRuntimeAsset) return
     setRuntimeAssetDownloads((current) => ({ ...current, [pluginID]: 'downloading' }))
+    setRuntimeAssetProgress((current) => ({ ...current, [pluginID]: null }))
     try {
       await onDownloadRuntimeAsset(pluginID)
       setRuntimeAssetDownloads((current) => ({ ...current, [pluginID]: 'downloaded' }))
     } catch {
       setRuntimeAssetDownloads((current) => ({ ...current, [pluginID]: 'error' }))
+    } finally {
+      setRuntimeAssetProgress((current) => {
+        const next = { ...current }
+        delete next[pluginID]
+        return next
+      })
     }
   }, [onDownloadRuntimeAsset])
 
@@ -327,7 +381,7 @@ function useSettingsViewModel({
     }
   }, [onRemoveRuntimeAsset])
 
-  return { activeSection, adv, advancedSettingsReady, agentSettings, clearMemoryConfirmOpen, clearingMemory, downloadRuntimeAsset, importInputRef, isDesktop, locale, memoryEnabled, navItems, onAgentSettingsChange, onClearMemory, onDownloadRuntimeAsset, onExportLocalData, onImportLocalData, onModelServiceAddOpened, onModelServicesChange, onRemoveRuntimeAsset, openModelServiceAdd, removeRuntimeAsset, runtimeAssetDownloads, runtimeConnection, selectSection, setAdv, setClearMemoryConfirmOpen, setClearingMemory, setClientUpdate, setLocale, settingsScrollRef, t, updateAction, updateActiveSectionFromScroll, updateHint, updateStatus }
+  return { activeSection, adv, advancedSettingsReady, agentSettings, clearMemoryConfirmOpen, clearingMemory, downloadRuntimeAsset, importInputRef, isDesktop, locale, memoryEnabled, navItems, onAgentSettingsChange, onClearMemory, onDownloadRuntimeAsset, onExportLocalData, onImportLocalData, onModelServiceAddOpened, onModelServicesChange, onRemoveRuntimeAsset, openModelServiceAdd, removeRuntimeAsset, runtimeAssetDeleteConfirm, runtimeAssetDownloads, runtimeAssetProgress, runtimeConnection, selectSection, setAdv, setClearMemoryConfirmOpen, setClearingMemory, setClientUpdate, setLocale, setRuntimeAssetDeleteConfirm, settingsScrollRef, t, updateAction, updateActiveSectionFromScroll, updateHint, updateStatus }
 }
 
 export function SettingsView(props: Parameters<typeof useSettingsViewModel>[0]) {
@@ -335,7 +389,10 @@ export function SettingsView(props: Parameters<typeof useSettingsViewModel>[0]) 
 }
 
 function SettingsViewContent({ view }: { view: ReturnType<typeof useSettingsViewModel> }) {
-  const { activeSection, adv, advancedSettingsReady, agentSettings, clearMemoryConfirmOpen, clearingMemory, downloadRuntimeAsset, importInputRef, isDesktop, locale, memoryEnabled, navItems, onAgentSettingsChange, onClearMemory, onDownloadRuntimeAsset, onExportLocalData, onImportLocalData, onModelServiceAddOpened, onModelServicesChange, onRemoveRuntimeAsset, openModelServiceAdd, removeRuntimeAsset, runtimeAssetDownloads, runtimeConnection, selectSection, setAdv, setClearMemoryConfirmOpen, setClearingMemory, setClientUpdate, setLocale, settingsScrollRef, t, updateAction, updateActiveSectionFromScroll, updateHint, updateStatus } = view
+  const { activeSection, adv, advancedSettingsReady, agentSettings, clearMemoryConfirmOpen, clearingMemory, downloadRuntimeAsset, importInputRef, isDesktop, locale, memoryEnabled, navItems, onAgentSettingsChange, onClearMemory, onDownloadRuntimeAsset, onExportLocalData, onImportLocalData, onModelServiceAddOpened, onModelServicesChange, onRemoveRuntimeAsset, openModelServiceAdd, removeRuntimeAsset, runtimeAssetDeleteConfirm, runtimeAssetDownloads, runtimeAssetProgress, runtimeConnection, selectSection, setAdv, setClearMemoryConfirmOpen, setClearingMemory, setClientUpdate, setLocale, setRuntimeAssetDeleteConfirm, settingsScrollRef, t, updateAction, updateActiveSectionFromScroll, updateHint, updateStatus } = view
+  const runtimeAssetDeleteName = FIXED_RUNTIME_ASSETS.find(
+    ({ pluginID }) => pluginID === runtimeAssetDeleteConfirm,
+  )?.name
   return (
     <section className="workspace">
       <header className="topbar topbar-page">
@@ -447,6 +504,7 @@ function SettingsViewContent({ view }: { view: ReturnType<typeof useSettingsView
                 ) : null}
                 {isDesktop ? FIXED_RUNTIME_ASSETS.map(({ pluginID, name }) => {
                   const status = runtimeAssetDownloads[pluginID]
+                  const progress = runtimeAssetProgress[pluginID]
                   const downloaded = status === 'downloaded' || status === 'deleting' || status === 'delete_error'
                   const action = status === 'downloading'
                     ? t('settings.runtimeAsset.downloading')
@@ -482,18 +540,29 @@ function SettingsViewContent({ view }: { view: ReturnType<typeof useSettingsView
                       {downloaded && status !== 'deleting' ? (
                         <span className="settings-row-value">{t('settings.runtimeAsset.downloaded')}</span>
                       ) : null}
-                      <SettingsRowButton
-                        ariaLabel={ariaLabel}
-                        danger={downloaded}
-                        disabled={status === 'downloading' || status === 'deleting' || (
-                          downloaded ? !onRemoveRuntimeAsset : !onDownloadRuntimeAsset
-                        )}
-                        onClick={() => void (downloaded
-                          ? removeRuntimeAsset(pluginID)
-                          : downloadRuntimeAsset(pluginID))}
-                      >
-                        {action}
-                      </SettingsRowButton>
+                      {status === 'downloading' ? (
+                        <div className="settings-runtime-asset-progress">
+                          <progress
+                            aria-label={t('settings.runtimeAsset.progressAria', { name })}
+                            max={100}
+                            value={typeof progress === 'number' ? progress : undefined}
+                          />
+                          <span>{typeof progress === 'number' ? `${progress}%` : action}</span>
+                        </div>
+                      ) : (
+                        <SettingsRowButton
+                          ariaLabel={ariaLabel}
+                          danger={downloaded}
+                          disabled={status === 'deleting' || (
+                            downloaded ? !onRemoveRuntimeAsset : !onDownloadRuntimeAsset
+                          )}
+                          onClick={() => void (downloaded
+                            ? setRuntimeAssetDeleteConfirm(pluginID)
+                            : downloadRuntimeAsset(pluginID))}
+                        >
+                          {action}
+                        </SettingsRowButton>
+                      )}
                       <span className="sr-only" role="status" aria-live="polite">
                         {liveStatus}
                       </span>
@@ -583,6 +652,45 @@ function SettingsViewContent({ view }: { view: ReturnType<typeof useSettingsView
             >
               <span className="conversation-delete-button-label">
                 {t('sidebar.agentSettings.memory.clearConfirmAction')}
+              </span>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={runtimeAssetDeleteConfirm !== null}
+        onOpenChange={(open) => {
+          if (!open) setRuntimeAssetDeleteConfirm(null)
+        }}
+      >
+        <AlertDialogContent className="conversation-delete-dialog">
+          <AlertDialogHeader className="conversation-delete-header">
+            <AlertDialogMedia className="conversation-delete-media">
+              <IconTrash aria-hidden="true" />
+            </AlertDialogMedia>
+            <AlertDialogTitle>
+              {t('settings.runtimeAsset.deleteConfirmTitle', { name: runtimeAssetDeleteName ?? '' })}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('settings.runtimeAsset.deleteConfirmBody', { name: runtimeAssetDeleteName ?? '' })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="conversation-delete-footer">
+            <AlertDialogCancel variant="outline" autoFocus>
+              <span className="conversation-delete-button-label">{t('sidebar.dialog.cancel')}</span>
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (!runtimeAssetDeleteConfirm) return
+                const pluginID = runtimeAssetDeleteConfirm
+                setRuntimeAssetDeleteConfirm(null)
+                void removeRuntimeAsset(pluginID)
+              }}
+            >
+              <span className="conversation-delete-button-label">
+                {t('settings.runtimeAsset.deleteConfirmAction')}
               </span>
             </AlertDialogAction>
           </AlertDialogFooter>

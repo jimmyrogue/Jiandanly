@@ -166,10 +166,15 @@ class PluginRegistry:
                 pass
             else:
                 downloaded = True
-        return {
+        status: dict[str, Any] = {
             "plugin_id": plugin_id,
             "downloaded": downloaded,
         }
+        progress = self._plugin_catalog.runtime_asset_download_progress(str(reference["digest"]))
+        if progress is not None:
+            status["downloading"] = True
+            status["download_progress"] = progress.percent
+        return status
 
     async def prepare_fixed_runtime_asset(
         self,
