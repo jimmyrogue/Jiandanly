@@ -18,7 +18,7 @@ New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $browsersRoot = Join-Path $workRoot "ms-playwright"
 $firstAsset = Join-Path $workRoot "browser-qa-runtime-windows-amd64-a.shejane-runtime-asset"
 $secondAsset = Join-Path $workRoot "browser-qa-runtime-windows-amd64-b.shejane-runtime-asset"
-$plugin = Join-Path $workRoot "browser-qa-0.1.2-windows-amd64.shejane-plugin"
+$plugin = Join-Path $workRoot "browser-qa-0.1.3-windows-amd64.shejane-plugin"
 
 Push-Location $repoRoot
 try {
@@ -56,6 +56,8 @@ try {
         python runtime/plugins/browser-qa/build_runtime_asset.py `
             --platform windows/amd64 `
             --browser $browser `
+            --playwright $playwrightRoot `
+            --playwright-core $playwrightCoreRoot `
             --output $asset
     }
     $firstHash = (Get-FileHash -Algorithm SHA256 $firstAsset).Hash
@@ -77,8 +79,6 @@ try {
 
     python runtime/plugins/browser-qa/build_package.py `
         --platform windows/amd64 `
-        --playwright $playwrightRoot `
-        --playwright-core $playwrightCoreRoot `
         --runtime-asset-digest $digest `
         --output $plugin
 
@@ -98,7 +98,7 @@ try {
             "browser-qa-runtime-1.61.1-windows-amd64.shejane-runtime-asset"
     )
     Copy-Item $plugin (
-        Join-Path $OutputDirectory "browser-qa-0.1.2-windows-amd64.shejane-plugin"
+        Join-Path $OutputDirectory "browser-qa-0.1.3-windows-amd64.shejane-plugin"
     )
 }
 finally {

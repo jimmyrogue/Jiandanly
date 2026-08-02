@@ -2,31 +2,14 @@
 from __future__ import annotations
 
 import argparse
-import json
-import os
 import re
 import shutil
 import stat
-import subprocess
 import tempfile
 import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-REPO_ROOT = ROOT.parents[2]
-PLAYWRIGHT_VERSION = "1.61.1"
-
-
-def esbuild_command(*, platform_name: str = os.name) -> list[str]:
-    executable = (REPO_ROOT / "node_modules" / "esbuild" / "bin" / "esbuild").resolve(
-        strict=True
-    )
-    if platform_name != "nt":
-        return [str(executable)]
-    node = shutil.which("node")
-    if node is None:
-        raise RuntimeError("Node.js is required to build Browser QA on Windows")
-    return [node, str(executable)]
 
 
 def main() -> None:
@@ -37,9 +20,7 @@ def main() -> None:
         required=True,
     )
     parser.add_argument("--runtime-asset-digest", required=True)
-    parser.add_argument("--playwright", type=Path, required=True)
-    parser.add_argument("--playwright-core", type=Path, required=True)
-    parser.add_argument("--version", default="0.1.2")
+    parser.add_argument("--version", default="0.1.3")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", args.version):
@@ -48,44 +29,12 @@ def main() -> None:
         parser.error("--runtime-asset-digest must be a canonical SHA-256 digest")
     if args.output.suffix != ".shejane-plugin":
         parser.error("--output must end in .shejane-plugin")
-    sources = {
-        "playwright": args.playwright.resolve(strict=True),
-        "playwright-core": args.playwright_core.resolve(strict=True),
-    }
-    for name, source in sources.items():
-        package = json.loads((source / "package.json").read_text(encoding="utf-8"))
-        if package.get("name") != name or package.get("version") != PLAYWRIGHT_VERSION:
-            parser.error(f"{name} must be exactly {PLAYWRIGHT_VERSION}")
-
     with tempfile.TemporaryDirectory(prefix="browser-qa-package-") as temporary:
         stage = Path(temporary)
         (stage / ".shejane-plugin").mkdir()
         shutil.copytree(ROOT / "actions", stage / "actions")
         shutil.copytree(ROOT / "commands", stage / "commands")
-        payload = stage / "payload"
-        payload.mkdir()
-        modules = payload / "node_modules"
-        modules.mkdir()
-        for name, source in sources.items():
-            shutil.copytree(source, modules / name, symlinks=True)
-        subprocess.run(
-            [
-                *esbuild_command(),
-                str(ROOT / "bridge" / "bridge-server.ts"),
-                "--bundle",
-                "--platform=node",
-                "--format=esm",
-                "--target=node20",
-                "--external:playwright",
-                "--legal-comments=none",
-                f"--outfile={payload / 'bridge-server.mjs'}",
-            ],
-            cwd=REPO_ROOT,
-            check=True,
-        )
-        manifest = (ROOT / ".shejane-plugin" / "plugin.template.json").read_text(
-            encoding="utf-8"
-        )
+        manifest = (ROOT / ".shejane-plugin" / "plugin.template.json").read_text(encoding="utf-8")
         manifest = (
             manifest.replace("__PLUGIN_VERSION__", args.version)
             .replace("__PLATFORM__", args.platform)

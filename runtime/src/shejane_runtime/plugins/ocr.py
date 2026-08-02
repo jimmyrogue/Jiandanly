@@ -10,7 +10,7 @@ from .platforms import prepare_managed_worker_entrypoint
 from .runtime_assets import RuntimeAssetHandle
 
 OCR_PLUGIN_ID = "org.shejane.ocr"
-OCR_PLUGIN_VERSION = "0.1.2"
+OCR_PLUGIN_VERSION = "0.1.3"
 
 
 def is_allowed_ocr_package(*, plugin_id: str, version: str, handler: str) -> bool:
@@ -21,12 +21,16 @@ class OCRActionExecutor:
     """Execute SheJane's trusted OCR Worker against one pinned native asset."""
 
     def __init__(self, package_root: Path, runtime_asset: RuntimeAssetHandle) -> None:
+        del package_root
         relative_entrypoint = (
-            "payload/ocr-worker.exe"
+            "worker/ocr-worker.exe"
             if runtime_asset.platform.startswith("windows/")
-            else "payload/ocr-worker"
+            else "worker/ocr-worker"
         )
-        entrypoint = prepare_managed_worker_entrypoint(package_root, relative_entrypoint)
+        entrypoint = prepare_managed_worker_entrypoint(
+            runtime_asset.payload,
+            relative_entrypoint,
+        )
         self._executor = ManagedWorkerActionExecutor(
             (str(entrypoint),),
             runtime_assets=(runtime_asset,),

@@ -6,11 +6,25 @@ import json
 import os
 import shutil
 import stat
+import subprocess
 import tempfile
 import zipfile
 from pathlib import Path
 
-ASSET_VERSION = "1.61.1+chromium1228.2"
+ROOT = Path(__file__).resolve().parent
+REPO_ROOT = ROOT.parents[2]
+ASSET_VERSION = "1.61.1+chromium1228.3"
+PLAYWRIGHT_VERSION = "1.61.1"
+
+
+def esbuild_command(*, platform_name: str = os.name) -> list[str]:
+    executable = (REPO_ROOT / "node_modules" / "esbuild" / "bin" / "esbuild").resolve(strict=True)
+    if platform_name != "nt":
+        return [str(executable)]
+    node = shutil.which("node")
+    if node is None:
+        raise RuntimeError("Node.js is required to build Browser QA on Windows")
+    return [node, str(executable)]
 
 
 def main() -> None:
@@ -21,6 +35,8 @@ def main() -> None:
         required=True,
     )
     parser.add_argument("--browser", type=Path, required=True)
+    parser.add_argument("--playwright", type=Path, required=True)
+    parser.add_argument("--playwright-core", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.output.suffix != ".shejane-runtime-asset":
@@ -28,10 +44,37 @@ def main() -> None:
     browser = args.browser.resolve(strict=True)
     if not browser.is_dir() or browser.name != "chromium-1228":
         parser.error("--browser must be the Playwright 1.61.1 chromium-1228 directory")
+    modules = {
+        "playwright": args.playwright.resolve(strict=True),
+        "playwright-core": args.playwright_core.resolve(strict=True),
+    }
+    for name, source in modules.items():
+        package = json.loads((source / "package.json").read_text(encoding="utf-8"))
+        if package.get("name") != name or package.get("version") != PLAYWRIGHT_VERSION:
+            parser.error(f"{name} must be exactly {PLAYWRIGHT_VERSION}")
     with tempfile.TemporaryDirectory(prefix="browser-qa-runtime-asset-") as temporary:
         stage = Path(temporary)
         payload = stage / "payload"
         shutil.copytree(browser, payload / "browsers" / browser.name, symlinks=True)
+        node_modules = payload / "node_modules"
+        node_modules.mkdir()
+        for name, source in modules.items():
+            shutil.copytree(source, node_modules / name, symlinks=True)
+        subprocess.run(
+            [
+                *esbuild_command(),
+                str(ROOT / "bridge" / "bridge-server.ts"),
+                "--bundle",
+                "--platform=node",
+                "--format=esm",
+                "--target=node20",
+                "--external:playwright",
+                "--legal-comments=none",
+                f"--outfile={payload / 'bridge-server.mjs'}",
+            ],
+            cwd=REPO_ROOT,
+            check=True,
+        )
         metadata = stage / ".shejane-runtime-asset"
         metadata.mkdir()
         executables = sorted(

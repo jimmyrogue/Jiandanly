@@ -103,7 +103,7 @@ def _pack_ocr_builtin(
     digest: str,
     *,
     version: str = OCR_PLUGIN_VERSION,
-    asset_version: str = "3.9.1+ppocrv6-small.1",
+    asset_version: str = "3.9.1+ppocrv6-small.2",
 ) -> None:
     manifest = {
         "schema_version": 1,
@@ -199,7 +199,7 @@ def _pack_browser_qa_builtin(
     digest: str,
     *,
     version: str = BROWSER_QA_PLUGIN_VERSION,
-    asset_version: str = "1.61.1+chromium1228.2",
+    asset_version: str = "1.61.1+chromium1228.3",
     bridge_source: str = "process.exit(0)\n",
 ) -> None:
     manifest = {
@@ -315,7 +315,7 @@ def test_fixed_runtime_asset_status_reports_active_download_progress(
     _pack_runtime_asset(
         asset,
         asset_id="org.shejane.browser-qa.runtime",
-        version="1.61.1+chromium1228.2",
+        version="1.61.1+chromium1228.3",
         platform="darwin/arm64",
     )
     digest = (
@@ -396,7 +396,7 @@ def test_runtime_asset_storage_cleans_history_separately_from_current_assets(
     _pack_runtime_asset(
         current_asset,
         asset_id="org.shejane.browser-qa.runtime",
-        version="1.61.1+chromium1228.2",
+        version="1.61.1+chromium1228.3",
         platform="darwin/arm64",
     )
     current_digest = (
@@ -521,7 +521,7 @@ def test_browser_qa_is_runtime_managed_and_cannot_be_removed(
     _pack_runtime_asset(
         asset,
         asset_id="org.shejane.browser-qa.runtime",
-        version="1.61.1+chromium1228.2",
+        version="1.61.1+chromium1228.3",
         platform="darwin/arm64",
     )
     digest = (
@@ -561,7 +561,7 @@ def test_browser_qa_is_runtime_managed_and_cannot_be_removed(
         with pytest.raises(InvalidPluginPackage, match="not installed"):
             RuntimeAssetStore(settings.data_dir).resolve(
                 asset_id="org.shejane.browser-qa.runtime",
-                version="1.61.1+chromium1228.2",
+                version="1.61.1+chromium1228.3",
                 platform="darwin/arm64",
                 digest=digest,
             )
@@ -682,41 +682,49 @@ def test_rebuilt_fixed_package_upgrades_existing_runtime_data(
     _pack_computer_use_builtin(new_computer_use)
 
     asset_store = RuntimeAssetStore(tmp_path / "asset-store")
-    old_browser_asset = tmp_path / "browser-qa-0.1.1.shejane-runtime-asset"
-    new_browser_asset = tmp_path / "browser-qa-0.1.2.shejane-runtime-asset"
-    old_ocr_asset = tmp_path / "ocr-0.1.1.shejane-runtime-asset"
-    new_ocr_asset = tmp_path / "ocr-0.1.2.shejane-runtime-asset"
+    old_browser_asset = tmp_path / "browser-qa-0.1.2.shejane-runtime-asset"
+    new_browser_asset = tmp_path / "browser-qa-0.1.3.shejane-runtime-asset"
+    old_ocr_asset = tmp_path / "ocr-0.1.2.shejane-runtime-asset"
+    new_ocr_asset = tmp_path / "ocr-0.1.3.shejane-runtime-asset"
     for asset, asset_id, version in (
-        (old_browser_asset, "org.shejane.browser-qa.runtime", "1.61.1+chromium1228.1"),
-        (new_browser_asset, "org.shejane.browser-qa.runtime", "1.61.1+chromium1228.2"),
-        (old_ocr_asset, "org.rapidocr.runtime", "3.9.1+ppocrv6-medium.1"),
-        (new_ocr_asset, "org.rapidocr.runtime", "3.9.1+ppocrv6-small.1"),
+        (old_browser_asset, "org.shejane.browser-qa.runtime", "1.61.1+chromium1228.2"),
+        (new_browser_asset, "org.shejane.browser-qa.runtime", "1.61.1+chromium1228.3"),
+        (old_ocr_asset, "org.rapidocr.runtime", "3.9.1+ppocrv6-small.1"),
+        (new_ocr_asset, "org.rapidocr.runtime", "3.9.1+ppocrv6-small.2"),
     ):
         _pack_runtime_asset(asset, asset_id=asset_id, version=version, platform="darwin/arm64")
 
-    old_browser = tmp_path / "browser-qa-0.1.1.shejane-plugin"
+    old_browser = tmp_path / "browser-qa-0.1.2.shejane-plugin"
     new_browser = tmp_path / f"browser-qa-{BROWSER_QA_PLUGIN_VERSION}.shejane-plugin"
-    old_ocr = tmp_path / "ocr-0.1.1.shejane-plugin"
+    old_ocr = tmp_path / "ocr-0.1.2.shejane-plugin"
     new_ocr = tmp_path / f"ocr-{OCR_PLUGIN_VERSION}.shejane-plugin"
+    old_browser_digest = asset_store.install(
+        old_browser_asset, target_platform="darwin/arm64"
+    ).digest
+    new_browser_digest = asset_store.install(
+        new_browser_asset, target_platform="darwin/arm64"
+    ).digest
+    old_ocr_digest = asset_store.install(old_ocr_asset, target_platform="darwin/arm64").digest
+    new_ocr_digest = asset_store.install(new_ocr_asset, target_platform="darwin/arm64").digest
     _pack_browser_qa_builtin(
         old_browser,
-        asset_store.install(old_browser_asset, target_platform="darwin/arm64").digest,
-        version="0.1.1",
-        asset_version="1.61.1+chromium1228.1",
+        old_browser_digest,
+        version="0.1.2",
+        asset_version="1.61.1+chromium1228.2",
     )
     _pack_browser_qa_builtin(
         new_browser,
-        asset_store.install(new_browser_asset, target_platform="darwin/arm64").digest,
+        new_browser_digest,
     )
     _pack_ocr_builtin(
         old_ocr,
-        asset_store.install(old_ocr_asset, target_platform="darwin/arm64").digest,
-        version="0.1.1",
-        asset_version="3.9.1+ppocrv6-medium.1",
+        old_ocr_digest,
+        version="0.1.2",
+        asset_version="3.9.1+ppocrv6-small.1",
     )
     _pack_ocr_builtin(
         new_ocr,
-        asset_store.install(new_ocr_asset, target_platform="darwin/arm64").digest,
+        new_ocr_digest,
     )
 
     monkeypatch.setattr(
@@ -724,8 +732,8 @@ def test_rebuilt_fixed_package_upgrades_existing_runtime_data(
         lambda: "darwin/arm64",
     )
     monkeypatch.setattr(computer_use_module, "COMPUTER_USE_PLUGIN_VERSION", "0.2.0")
-    monkeypatch.setattr(browser_qa_module, "BROWSER_QA_PLUGIN_VERSION", "0.1.1")
-    monkeypatch.setattr(ocr_module, "OCR_PLUGIN_VERSION", "0.1.1")
+    monkeypatch.setattr(browser_qa_module, "BROWSER_QA_PLUGIN_VERSION", "0.1.2")
+    monkeypatch.setattr(ocr_module, "OCR_PLUGIN_VERSION", "0.1.2")
     data_dir = tmp_path / "runtime"
     old_settings = reset_settings_for_tests(
         SHEJANE_RUNTIME_TOKEN="tok",
@@ -755,6 +763,21 @@ def test_rebuilt_fixed_package_upgrades_existing_runtime_data(
     )
     with TestClient(create_app(new_settings)) as upgraded_client:
         assert upgraded_client.get("/v1/health", headers=AUTH).status_code == 200
+        plugins = {
+            item["id"]: item
+            for item in upgraded_client.get("/v1/plugins", headers=AUTH).json()["plugins"]
+        }
+        for plugin_id, version, expected_asset_digest in (
+            ("org.shejane.browser-qa", BROWSER_QA_PLUGIN_VERSION, new_browser_digest),
+            ("org.shejane.ocr", OCR_PLUGIN_VERSION, new_ocr_digest),
+        ):
+            plugin = plugins[plugin_id]
+            assert plugin["version"] == version
+            package_root = (
+                data_dir / "plugins" / "packages" / plugin["digest"].removeprefix("sha256:")
+            )
+            manifest = load_plugin_manifest(package_root)
+            assert manifest.runtime.execution.runtime_assets[0].digest == expected_asset_digest
 
     with sqlite3.connect(data_dir / "runtime.db") as conn:
         versions = conn.execute(
@@ -767,11 +790,11 @@ def test_rebuilt_fixed_package_upgrades_existing_runtime_data(
             ),
         ).fetchall()
     assert versions == [
-        ("org.shejane.browser-qa", "0.1.1"),
+        ("org.shejane.browser-qa", "0.1.2"),
         ("org.shejane.browser-qa", BROWSER_QA_PLUGIN_VERSION),
         ("org.shejane.computer-use", "0.2.0"),
         ("org.shejane.computer-use", COMPUTER_USE_PLUGIN_VERSION),
-        ("org.shejane.ocr", "0.1.1"),
+        ("org.shejane.ocr", "0.1.2"),
         ("org.shejane.ocr", OCR_PLUGIN_VERSION),
     ]
 
@@ -783,7 +806,7 @@ def test_plugin_list_reads_registry_without_activating_fixed_package(
     _pack_runtime_asset(
         asset,
         asset_id="org.shejane.browser-qa.runtime",
-        version="1.61.1+chromium1228.2",
+        version="1.61.1+chromium1228.3",
         platform="darwin/arm64",
     )
     digest = (
@@ -831,7 +854,7 @@ def test_ocr_asset_and_plugin_are_runtime_managed_and_cannot_be_removed(
     _pack_runtime_asset(
         asset,
         asset_id="org.rapidocr.runtime",
-        version="3.9.1+ppocrv6-small.1",
+        version="3.9.1+ppocrv6-small.2",
         platform="darwin/arm64",
     )
     digest = (
@@ -865,7 +888,7 @@ def test_ocr_asset_and_plugin_are_runtime_managed_and_cannot_be_removed(
         with pytest.raises(InvalidPluginPackage, match="not installed"):
             RuntimeAssetStore(settings.data_dir).resolve(
                 asset_id="org.rapidocr.runtime",
-                version="3.9.1+ppocrv6-small.1",
+                version="3.9.1+ppocrv6-small.2",
                 platform="darwin/arm64",
                 digest=digest,
             )

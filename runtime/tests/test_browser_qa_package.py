@@ -24,7 +24,7 @@ WINDOWS_BUILDER = REPO_ROOT / "scripts" / "build-browser-qa-windows-amd64.ps1"
 def test_browser_qa_package_uses_node_for_esbuild_on_windows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    builder = runpy.run_path(str(BUILDER))
+    builder = runpy.run_path(str(ASSET_BUILDER))
     with monkeypatch.context() as patch:
         patch.setattr(builder["shutil"], "which", lambda name: "C:\\Node\\node.exe")
         command = builder["esbuild_command"](platform_name="nt")
@@ -69,17 +69,6 @@ def test_browser_qa_manifest_exposes_only_bounded_actions() -> None:
 
 @pytest.mark.parametrize("target_platform", ["darwin/arm64", "windows/amd64"])
 def test_browser_qa_package_is_deterministic(tmp_path: Path, target_platform: str) -> None:
-    playwright = tmp_path / "playwright"
-    playwright_core = tmp_path / "playwright-core"
-    for root, name in (
-        (playwright, "playwright"),
-        (playwright_core, "playwright-core"),
-    ):
-        root.mkdir()
-        (root / "package.json").write_text(
-            json.dumps({"name": name, "version": "1.61.1"}), encoding="utf-8"
-        )
-        (root / "index.js").write_text("module.exports = {};\n", encoding="utf-8")
     outputs = [tmp_path / "first.shejane-plugin", tmp_path / "second.shejane-plugin"]
     for output in outputs:
         subprocess.run(
@@ -88,10 +77,6 @@ def test_browser_qa_package_is_deterministic(tmp_path: Path, target_platform: st
                 str(BUILDER),
                 "--platform",
                 target_platform,
-                "--playwright",
-                str(playwright),
-                "--playwright-core",
-                str(playwright_core),
                 "--runtime-asset-digest",
                 "sha256:" + "a" * 64,
                 "--output",
@@ -103,10 +88,7 @@ def test_browser_qa_package_is_deterministic(tmp_path: Path, target_platform: st
     assert outputs[0].read_bytes() == outputs[1].read_bytes()
     extracted = tmp_path / "extracted"
     extract_plugin_archive(outputs[0], extracted)
-    assert (extracted / "payload/bridge-server.mjs").is_file()
-    assert (extracted / "payload/node_modules/playwright/package.json").is_file()
-    assert (extracted / "payload/node_modules/playwright-core/package.json").is_file()
-    assert not (extracted / "payload/browsers").exists()
+    assert not (extracted / "payload").exists()
 
 
 @pytest.mark.parametrize(
@@ -125,6 +107,17 @@ def test_browser_qa_runtime_asset_is_deterministic_and_content_addressed(
     executable.write_bytes(b"browser")
     if target_platform == "darwin/arm64":
         executable.chmod(0o500)
+    playwright = tmp_path / "playwright"
+    playwright_core = tmp_path / "playwright-core"
+    for root, name in (
+        (playwright, "playwright"),
+        (playwright_core, "playwright-core"),
+    ):
+        root.mkdir()
+        (root / "package.json").write_text(
+            json.dumps({"name": name, "version": "1.61.1"}), encoding="utf-8"
+        )
+        (root / "index.js").write_text("module.exports = {};\n", encoding="utf-8")
     outputs = [
         tmp_path / "first.shejane-runtime-asset",
         tmp_path / "second.shejane-runtime-asset",
@@ -138,6 +131,10 @@ def test_browser_qa_runtime_asset_is_deterministic_and_content_addressed(
                 target_platform,
                 "--browser",
                 str(browser),
+                "--playwright",
+                str(playwright),
+                "--playwright-core",
+                str(playwright_core),
                 "--output",
                 str(output),
             ],
@@ -149,6 +146,9 @@ def test_browser_qa_runtime_asset_is_deterministic_and_content_addressed(
         outputs[0], target_platform=target_platform
     )
     assert installed.asset_id == "org.shejane.browser-qa.runtime"
-    assert installed.version == "1.61.1+chromium1228.2"
+    assert installed.version == "1.61.1+chromium1228.3"
     assert (installed.payload / "browsers" / "chromium-1228" / executable_name).is_file()
+    assert (installed.payload / "bridge-server.mjs").is_file()
+    assert (installed.payload / "node_modules/playwright/package.json").is_file()
+    assert (installed.payload / "node_modules/playwright-core/package.json").is_file()
     assert not (installed.payload / "browsers" / "chromium_headless_shell-1228").exists()

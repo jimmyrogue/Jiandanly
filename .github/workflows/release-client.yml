@@ -592,9 +592,9 @@ jobs:
           output="${RUNNER_TEMP}/shejane-fixed-capabilities"
           mkdir -p "${output}"
           cp runtime/plugins/computer-use/dist/computer-use-0.2.1-darwin-arm64.shejane-plugin "${output}/"
-          cp runtime/plugins/browser-qa/dist/browser-qa-0.1.2-darwin-arm64.shejane-plugin "${output}/"
+          cp runtime/plugins/browser-qa/dist/browser-qa-0.1.3-darwin-arm64.shejane-plugin "${output}/"
           cp runtime/plugins/browser-qa/dist/browser-qa-runtime-1.61.1-darwin-arm64.shejane-runtime-asset "${output}/"
-          cp runtime/plugins/ocr/dist/ocr-0.1.2-darwin-arm64.shejane-plugin "${output}/"
+          cp runtime/plugins/ocr/dist/ocr-0.1.3-darwin-arm64.shejane-plugin "${output}/"
           cp runtime/plugins/ocr/dist/rapidocr-runtime-3.9.1-darwin-arm64.shejane-runtime-asset "${output}/"
       - name: Verify macOS fixed capability cache
         working-directory: runtime
@@ -604,8 +604,8 @@ jobs:
           output="${RUNNER_TEMP}/shejane-fixed-capabilities"
           packages=(
             computer-use-0.2.1-darwin-arm64.shejane-plugin
-            browser-qa-0.1.2-darwin-arm64.shejane-plugin
-            ocr-0.1.2-darwin-arm64.shejane-plugin
+            browser-qa-0.1.3-darwin-arm64.shejane-plugin
+            ocr-0.1.3-darwin-arm64.shejane-plugin
           )
           for filename in "${packages[@]}"; do
             package="${output}/${filename}"
@@ -623,11 +623,11 @@ jobs:
           expected = {
               "browser-qa-runtime-1.61.1-darwin-arm64.shejane-runtime-asset": (
                   "org.shejane.browser-qa.runtime",
-                  "1.61.1+chromium1228.2",
+                  "1.61.1+chromium1228.3",
               ),
               "rapidocr-runtime-3.9.1-darwin-arm64.shejane-runtime-asset": (
                   "org.rapidocr.runtime",
-                  "3.9.1+ppocrv6-small.1",
+                  "3.9.1+ppocrv6-small.2",
               ),
           }
           with tempfile.TemporaryDirectory(prefix="shejane-fixed-cache-") as temporary:
@@ -694,8 +694,8 @@ jobs:
         run: |
           $output = Join-Path $env:RUNNER_TEMP "shejane-fixed-capabilities"
           @(
-            "browser-qa-0.1.2-windows-amd64.shejane-plugin",
-            "ocr-0.1.2-windows-amd64.shejane-plugin"
+            "browser-qa-0.1.3-windows-amd64.shejane-plugin",
+            "ocr-0.1.3-windows-amd64.shejane-plugin"
           ) | ForEach-Object {
             $package = Join-Path $output $_
             if (-not (Test-Path $package -PathType Leaf)) {
@@ -714,11 +714,11 @@ jobs:
           expected = {
               "browser-qa-runtime-1.61.1-windows-amd64.shejane-runtime-asset": (
                   "org.shejane.browser-qa.runtime",
-                  "1.61.1+chromium1228.2",
+                  "1.61.1+chromium1228.3",
               ),
               "rapidocr-runtime-3.9.1-windows-amd64.shejane-runtime-asset": (
                   "org.rapidocr.runtime",
-                  "3.9.1+ppocrv6-small.1",
+                  "3.9.1+ppocrv6-small.2",
               ),
           }
           with tempfile.TemporaryDirectory(prefix="shejane-fixed-cache-") as temporary:
@@ -1368,16 +1368,16 @@ jobs:
             mkdir -p runtime/plugins/computer-use/dist runtime/plugins/browser-qa/dist runtime/plugins/ocr/dist
             cp "${RUNNER_TEMP}/shejane-fixed-plugins-darwin/computer-use-0.2.1-darwin-arm64.shejane-plugin" \
               runtime/plugins/computer-use/dist/
-            cp "${RUNNER_TEMP}/shejane-fixed-plugins-darwin/browser-qa-0.1.2-darwin-arm64.shejane-plugin" \
+            cp "${RUNNER_TEMP}/shejane-fixed-plugins-darwin/browser-qa-0.1.3-darwin-arm64.shejane-plugin" \
               runtime/plugins/browser-qa/dist/
-            cp "${RUNNER_TEMP}/shejane-fixed-plugins-darwin/ocr-0.1.2-darwin-arm64.shejane-plugin" \
+            cp "${RUNNER_TEMP}/shejane-fixed-plugins-darwin/ocr-0.1.3-darwin-arm64.shejane-plugin" \
               runtime/plugins/ocr/dist/
           elif [[ "${{ matrix.platform }}" == "windows" && "${{ matrix.arch }}" == "x64" ]]; then
             mkdir -p runtime/plugins/ocr/dist
-            cp "${RUNNER_TEMP}/shejane-fixed-plugins-windows/ocr-0.1.2-windows-amd64.shejane-plugin" \
+            cp "${RUNNER_TEMP}/shejane-fixed-plugins-windows/ocr-0.1.3-windows-amd64.shejane-plugin" \
               runtime/plugins/ocr/dist/
             mkdir -p runtime/plugins/browser-qa/dist
-            cp "${RUNNER_TEMP}/shejane-fixed-plugins-windows/browser-qa-0.1.2-windows-amd64.shejane-plugin" \
+            cp "${RUNNER_TEMP}/shejane-fixed-plugins-windows/browser-qa-0.1.3-windows-amd64.shejane-plugin" \
               runtime/plugins/browser-qa/dist/
           fi
           cd runtime

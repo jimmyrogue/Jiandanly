@@ -19,7 +19,7 @@ from shejane_runtime.plugins.runtime_assets import RuntimeAssetHandle
 def runtime_asset(payload: Path) -> RuntimeAssetHandle:
     return RuntimeAssetHandle(
         asset_id="org.shejane.browser-qa.runtime",
-        version="1.61.1+chromium1228.2",
+        version="1.61.1+chromium1228.3",
         platform="darwin/arm64",
         digest="sha256:" + "a" * 64,
         root=payload.parent,
@@ -130,7 +130,8 @@ async def test_browser_qa_service_uses_isolated_profile_and_closes_process(
     if node is None:
         pytest.skip("Node.js is unavailable")
     package = tmp_path / "package"
-    payload = package / "payload"
+    package.mkdir()
+    payload = tmp_path / "asset" / "payload"
     payload.mkdir(parents=True)
     bridge = payload / "bridge-server.mjs"
     bridge.write_text(

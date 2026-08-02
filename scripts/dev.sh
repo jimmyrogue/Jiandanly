@@ -62,9 +62,9 @@ prepare_fixed_capability_args() {
     [[ -f "$path" ]] && RUNTIME_FIXED_CAPABILITY_ARGS+=("$flag" "$path")
   done <<EOF
 --computer-use-package|${ROOT_DIR}/runtime/plugins/computer-use/dist/computer-use-0.2.1-darwin-arm64.shejane-plugin
---browser-qa-package|${ROOT_DIR}/runtime/plugins/browser-qa/dist/browser-qa-0.1.2-darwin-arm64.shejane-plugin
+--browser-qa-package|${ROOT_DIR}/runtime/plugins/browser-qa/dist/browser-qa-0.1.3-darwin-arm64.shejane-plugin
 --browser-qa-runtime-asset|${ROOT_DIR}/runtime/plugins/browser-qa/dist/browser-qa-runtime-1.61.1-darwin-arm64.shejane-runtime-asset
---ocr-package|${ROOT_DIR}/runtime/plugins/ocr/dist/ocr-0.1.2-darwin-arm64.shejane-plugin
+--ocr-package|${ROOT_DIR}/runtime/plugins/ocr/dist/ocr-0.1.3-darwin-arm64.shejane-plugin
 --ocr-runtime-asset|${ROOT_DIR}/runtime/plugins/ocr/dist/rapidocr-runtime-3.9.1-darwin-arm64.shejane-runtime-asset
 EOF
 }

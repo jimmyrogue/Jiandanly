@@ -20,8 +20,9 @@ $wheelhouse = Join-Path $workRoot "wheelhouse"
 $models = Join-Path $workRoot "models"
 $firstAsset = Join-Path $workRoot "rapidocr-runtime-windows-amd64-a.shejane-runtime-asset"
 $secondAsset = Join-Path $workRoot "rapidocr-runtime-windows-amd64-b.shejane-runtime-asset"
+$finalAsset = Join-Path $workRoot "rapidocr-runtime-windows-amd64-final.shejane-runtime-asset"
 $worker = Join-Path $workRoot "ocr-worker"
-$plugin = Join-Path $workRoot "ocr-0.1.2-windows-amd64.shejane-plugin"
+$plugin = Join-Path $workRoot "ocr-0.1.3-windows-amd64.shejane-plugin"
 
 Push-Location $repoRoot
 try {
@@ -47,9 +48,15 @@ try {
         --wheelhouse $wheelhouse `
         --output $worker
 
+    uv run --project runtime python runtime/plugins/ocr/build_runtime_asset.py `
+        --platform windows/amd64 `
+        --base-asset $firstAsset `
+        --worker $worker `
+        --output $finalAsset
+
     $digestOutput = & uv run --project runtime python -c `
         "import sys; from pathlib import Path; from shejane_runtime.plugins.runtime_assets import RuntimeAssetStore; print(RuntimeAssetStore(Path(sys.argv[2])).install(Path(sys.argv[1]), target_platform='windows/amd64').digest)" `
-        $firstAsset (Join-Path $workRoot "asset-store")
+        $finalAsset (Join-Path $workRoot "asset-store")
     if ($LASTEXITCODE -ne 0) {
         throw "Windows RapidOCR Runtime Asset validation failed"
     }
@@ -61,10 +68,9 @@ try {
     python runtime/plugins/ocr/build_package.py `
         --platform windows/amd64 `
         --runtime-asset-digest $digest `
-        --worker $worker `
         --output $plugin
 
-    $env:SHEJANE_RAPIDOCR_RUNTIME_ASSET = $firstAsset
+    $env:SHEJANE_RAPIDOCR_RUNTIME_ASSET = $finalAsset
     $env:SHEJANE_TEST_OCR_WORKER = Join-Path $worker "ocr-worker.exe"
     $testRoot = Join-Path $env:RUNNER_TEMP "sj-ocr-test"
     if (Test-Path $testRoot) {
@@ -74,11 +80,11 @@ try {
         --basetemp $testRoot `
         runtime/tests/test_ocr_runtime_asset.py
 
-    Copy-Item $firstAsset (
+    Copy-Item $finalAsset (
         Join-Path $OutputDirectory "rapidocr-runtime-3.9.1-windows-amd64.shejane-runtime-asset"
     )
     Copy-Item $plugin (
-        Join-Path $OutputDirectory "ocr-0.1.2-windows-amd64.shejane-plugin"
+        Join-Path $OutputDirectory "ocr-0.1.3-windows-amd64.shejane-plugin"
     )
 }
 finally {

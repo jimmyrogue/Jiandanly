@@ -49,6 +49,21 @@
 
 正式实现采用 PyInstaller 在 macOS 上默认的保守 `strip -S`，因此收益小于此前手工副本使用 `strip -S -x` 的上限实验，但避免额外维护一条符号裁剪和签名链。冻结主程序与全部可执行原生依赖通过 `codesign --verify --strict`，并通过 `--help`、完整启动和 `/v1/health`。Developer ID 深签名与公证仍需等最终 Client 导出产物统一验证。
 
+## 实施进度：Browser QA 与 OCR 运行 payload 按需
+
+2026-08-02 已保留用于工具发现的 manifest/schema 外壳，把 Browser QA bridge + Playwright 代码和冻结 OCR Worker 分别迁入现有的 Browser QA、RapidOCR Runtime Asset。下载、进度、删除、租约和 digest 校验继续走同一条已有链路，不新增第二套插件包下载器。固定插件均升到 `0.1.3`；Browser QA Runtime Asset 升到 `1.61.1+chromium1228.3`，RapidOCR composite Runtime Asset 升到 `3.9.1+ppocrv6-small.2`。
+
+| 指标 | 修改前 | 修改后 | 变化 |
+|---|---:|---:|---:|
+| Browser QA `.shejane-plugin` | 3,831,096 bytes | 3,377 bytes | **-3,827,719 bytes** |
+| OCR `.shejane-plugin` | 9,201,564 bytes | 2,464 bytes | **-9,199,100 bytes** |
+| frozen Runtime 磁盘分配 | 146,724 KiB | 134,004 KiB | **-12,720 KiB，-8.7%** |
+| `tar.gz` 压缩代理 | 79,277,885 bytes | 66,322,606 bytes | **-12,955,279 bytes，-16.3%** |
+
+相对最初 234,108 KiB / 109,677,572 bytes 基线，当前 frozen Runtime 累计减少 **100,104 KiB（42.8%）**，压缩代理累计减少 **43,354,966 bytes（39.5%）**。这些 payload 并未消失，而是进入用户明确下载的独立 Release 资产；因此它减少安装器和干净安装体积，不减少用户下载并启用两项能力后的总占用。
+
+真实 macOS arm64 最终资产已通过 Browser QA headed/headless E2E、RapidOCR 冻结 Worker 原生质量/hostile-input 门禁；无大型资产的 frozen Runtime 仍能在 P1 安装 `0.1.3` 元数据外壳、到达 `/v1/health`，并为两项能力报告 `downloaded:false`。
+
 ## 当前基线与测量方法
 
 ### 原始结果
@@ -278,7 +293,7 @@ Microsoft MarkItDown 官方 README 明确把 PDF、DOCX、XLSX 等格式能力�
 
 如果还要优化用户数据占用，正确顺序是：用户明确删除对应历史任务 → 计算不再被 active installation 或 run binding 引用的 package digest → 删除内容寻址目录 → 保留必要的 immutable 版本元数据 → 对数据库做受控 checkpoint/VACUUM。它解决的是长期使用后的磁盘增长，不影响 DMG 或干净安装大小。
 
-### 4. Browser QA 与 OCR 的插件包也按需
+### 4. Browser QA 与 OCR 的运行 payload 按需（已完成）
 
 当前大型 Browser QA 和 RapidOCR Runtime Asset 已经在安装器外，发布流程也把它们单独 stage（[`release-client.yml`](../../.github/workflows/release-client.yml#L1413-L1425)）。但 PyInstaller 仍把 Browser QA 与 OCR 的 `.shejane-plugin` 放进 `builtin-plugins`（[`runtime/shejane-runtime.spec`](../../runtime/shejane-runtime.spec#L101-L132)）。本地产物：
 
@@ -288,13 +303,13 @@ Microsoft MarkItDown 官方 README 明确把 PDF、DOCX、XLSX 等格式能力�
 
 它们自身已经是压缩 ZIP，外层 DMG 再压缩的收益很小，所以移出后安装包与安装后体积都接近减少 13 MB。
 
-最小可行形态不是删除插件元数据，而是核心保留很小的锁定 bootstrap manifest；下载按钮获取“插件包 + Runtime Asset”，两者都完成 digest/signature 验证后再原子激活。
+实际实现没有新增“插件包 + Runtime Asset”双下载协议，而是保留几 KB 的锁定插件元数据，把 Browser QA bridge/Playwright 与 OCR Worker 直接并入原本就按需下载、由插件 manifest 精确 digest 绑定的 Runtime Asset。这样未下载时仍可发现工具，首次使用或手动按钮只需获取一个原子、内容寻址的资产。
 
-**预计效果：** 约 13 MB 安装后、12 到 13 MB 安装包。
+**实测效果：** frozen Runtime 减少 12,720 KiB，压缩代理减少 12,955,279 bytes。
 
-**风险：** 未下载时插件发现、历史任务绑定旧版本、离线安装、包与资产版本错配。
+**风险：** 未下载时插件发现、历史任务绑定旧版本、离线安装、包与资产版本错配。固定插件和 Asset 已同步升版，旧版本行继续保留，当前版本不复用旧 digest。
 
-**验证：** 干净数据目录、旧版本数据、重复下载、下载中断、digest 错误、插件包到位但资产缺失、资产到位但插件包缺失、删除/重装、正在运行时拒绝清理。
+**验证：** 定向包/资产/HTTP/分发测试、旧版本升级测试、Browser headed/headless、原生 OCR 质量/hostile input、冻结构建、干净数据目录启动和缺资产状态均已通过；Windows 原生最终构建与签名仍由 release matrix 门禁执行。
 
 ### 5. 精简 Uvicorn standard extras
 

@@ -93,26 +93,26 @@ if sys.platform == "darwin" and platform.machine().lower() in {"arm64", "aarch64
         raise SystemExit("Computer Use fixed capability package must be built before PyInstaller")
     datas.append((str(computer_use_package), "builtin-plugins"))
     browser_qa_package = Path(
-        "plugins/browser-qa/dist/browser-qa-0.1.2-darwin-arm64.shejane-plugin"
+        "plugins/browser-qa/dist/browser-qa-0.1.3-darwin-arm64.shejane-plugin"
     )
     if not browser_qa_package.is_file():
         raise SystemExit("Browser QA fixed capability package must be built before PyInstaller")
     datas.append((str(browser_qa_package), "builtin-plugins"))
     ocr_package = Path(
-        "plugins/ocr/dist/ocr-0.1.2-darwin-arm64.shejane-plugin"
+        "plugins/ocr/dist/ocr-0.1.3-darwin-arm64.shejane-plugin"
     )
     if not ocr_package.is_file():
         raise SystemExit("OCR fixed capability package must be built before PyInstaller")
     datas.append((str(ocr_package), "builtin-plugins"))
 elif sys.platform == "win32" and platform.machine().lower() in {"amd64", "x86_64"}:
     browser_qa_package = Path(
-        "plugins/browser-qa/dist/browser-qa-0.1.2-windows-amd64.shejane-plugin"
+        "plugins/browser-qa/dist/browser-qa-0.1.3-windows-amd64.shejane-plugin"
     )
     if not browser_qa_package.is_file():
         raise SystemExit("Windows Browser QA fixed capability package must be built before PyInstaller")
     datas.append((str(browser_qa_package), "builtin-plugins"))
     ocr_package = Path(
-        "plugins/ocr/dist/ocr-0.1.2-windows-amd64.shejane-plugin"
+        "plugins/ocr/dist/ocr-0.1.3-windows-amd64.shejane-plugin"
     )
     if not ocr_package.is_file():
         raise SystemExit("Windows OCR fixed capability package must be built before PyInstaller")

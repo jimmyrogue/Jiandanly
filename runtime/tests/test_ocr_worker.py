@@ -81,11 +81,18 @@ response = {
 pathlib.Path(sys.argv[2]).write_text(json.dumps(response), encoding="utf-8")
 """,
     )
+    worker = payload / "worker" / "ocr-worker"
+    worker.parent.mkdir()
+    worker.write_text(
+        f"#!/bin/sh\nexec {sys.executable!s} {WORKER!s}\n",
+        encoding="utf-8",
+    )
+    worker.chmod(0o500)
     sbom = root / "sbom.json"
     sbom.write_text("{}", encoding="utf-8")
     return RuntimeAssetHandle(
         asset_id="org.rapidocr.runtime",
-        version="3.9.1+ppocrv6-small.1",
+        version="3.9.1+ppocrv6-small.2",
         platform="darwin/arm64",
         digest="sha256:" + "a" * 64,
         root=root,
@@ -98,17 +105,18 @@ pathlib.Path(sys.argv[2]).write_text(json.dumps(response), encoding="utf-8")
 
 def test_windows_ocr_executor_selects_native_worker_entrypoint(tmp_path: Path) -> None:
     package_root = tmp_path / "package"
-    entrypoint = package_root / "payload" / "ocr-worker.exe"
-    entrypoint.parent.mkdir(parents=True)
-    entrypoint.write_bytes(b"MZ")
+    package_root.mkdir()
     asset_root = tmp_path / "asset"
     payload = asset_root / "payload"
     payload.mkdir(parents=True)
+    entrypoint = payload / "worker" / "ocr-worker.exe"
+    entrypoint.parent.mkdir()
+    entrypoint.write_bytes(b"MZ")
     sbom = asset_root / "sbom.json"
     sbom.write_text("{}", encoding="utf-8")
     asset = RuntimeAssetHandle(
         asset_id="org.rapidocr.runtime",
-        version="3.9.1+ppocrv6-small.1",
+        version="3.9.1+ppocrv6-small.2",
         platform="windows/amd64",
         digest="sha256:" + "a" * 64,
         root=asset_root,
@@ -145,7 +153,7 @@ def invocation(
         "operation_id": "run_01:ocr.recognize_images:001",
         "action": {
             "plugin_id": "org.shejane.ocr",
-            "plugin_version": "0.1.2",
+            "plugin_version": "0.1.3",
             "plugin_digest": "sha256:" + "b" * 64,
             "action_id": "ocr.recognize_images",
         },
@@ -190,17 +198,10 @@ def action_descriptor(tmp_path: Path, asset: RuntimeAssetHandle) -> PluginAction
     )
     action = template["contributions"]["actions"][0]
     package_root = tmp_path / "plugins" / "packages" / ("b" * 64)
-    payload = package_root / "payload"
-    payload.mkdir(parents=True)
-    worker = payload / "ocr-worker"
-    worker.write_text(
-        f"#!/bin/sh\nexec {sys.executable!s} {WORKER!s}\n",
-        encoding="utf-8",
-    )
-    worker.chmod(0o600)
+    package_root.mkdir(parents=True)
     return PluginActionDescriptor(
         plugin_id="org.shejane.ocr",
-        plugin_version="0.1.2",
+        plugin_version="0.1.3",
         plugin_digest="sha256:" + "b" * 64,
         action_id=action["id"],
         tool_name="plugin.org.shejane.ocr.ocr.recognize_images",
@@ -290,7 +291,7 @@ async def test_ocr_runtime_tool_e2e_persists_text_and_json_artifacts(tmp_path: P
     assert result["provenance"]["runtime_assets"] == [
         {
             "id": "org.rapidocr.runtime",
-            "version": "3.9.1+ppocrv6-small.1",
+            "version": "3.9.1+ppocrv6-small.2",
             "digest": "sha256:" + "a" * 64,
             "platform": "darwin/arm64",
         }

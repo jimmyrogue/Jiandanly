@@ -17,7 +17,7 @@ from .executor import ActionExecutor
 from .runtime_assets import RuntimeAssetHandle
 
 BROWSER_QA_PLUGIN_ID = "org.shejane.browser-qa"
-BROWSER_QA_PLUGIN_VERSION = "0.1.2"
+BROWSER_QA_PLUGIN_VERSION = "0.1.3"
 MAX_PROXY_HEADER_BYTES = 64 * 1024
 RUNTIME_ALIAS_DIGEST_CHARS = 32
 
@@ -279,6 +279,9 @@ class BrowserQAService(ComputerUseService):
             )
         await self._proxy.start()
         return await super()._ensure_process()
+
+    def _bridge_path(self) -> Path:
+        return self._runtime_asset.payload / "bridge-server.mjs"
 
     def _extra_environment(self) -> dict[str, str]:
         assert self._browsers_root is not None

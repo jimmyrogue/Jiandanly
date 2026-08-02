@@ -4,7 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]] || exit 0
 output_dir="${repo_root}/runtime/plugins/ocr/dist"
-plugin_output="${output_dir}/ocr-0.1.2-darwin-arm64.shejane-plugin"
+plugin_output="${output_dir}/ocr-0.1.3-darwin-arm64.shejane-plugin"
 asset_output="${output_dir}/rapidocr-runtime-3.9.1-darwin-arm64.shejane-runtime-asset"
 
 : "${SHEJANE_RAPIDOCR_RUNTIME_ASSET:?Set SHEJANE_RAPIDOCR_RUNTIME_ASSET to the verified RapidOCR Runtime Asset}"
@@ -29,9 +29,18 @@ rm -rf "${worker_build}"
 )
 worker="${worker_build}/ocr-worker"
 
+(
+  cd "${repo_root}/runtime"
+  uv run python plugins/ocr/build_runtime_asset.py \
+    --platform darwin/arm64 \
+    --base-asset "${asset}" \
+    --worker "${worker}" \
+    --output "${asset_output}"
+)
+
 digest="$({
   cd "${repo_root}/runtime"
-  uv run python - "${asset}" <<'PY'
+  uv run python - "${asset_output}" <<'PY'
 from pathlib import Path
 import sys
 import tempfile
@@ -44,7 +53,7 @@ with tempfile.TemporaryDirectory(prefix="shejane-ocr-stage-") as temporary:
     )
     if (
         installed.asset_id != "org.rapidocr.runtime"
-        or installed.version != "3.9.1+ppocrv6-small.1"
+        or installed.version != "3.9.1+ppocrv6-small.2"
         or installed.platform != "darwin/arm64"
     ):
         raise SystemExit("RapidOCR Runtime Asset identity is incompatible")
@@ -57,9 +66,7 @@ PY
   uv run python plugins/ocr/build_package.py \
     --platform darwin/arm64 \
     --runtime-asset-digest "${digest}" \
-    --worker "${worker}" \
     --output "${plugin_output}"
 )
-cp "${asset}" "${asset_output}"
 
 echo "OCR fixed capability staged: ${plugin_output}"

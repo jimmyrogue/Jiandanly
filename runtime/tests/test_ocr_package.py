@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -11,16 +13,18 @@ from jsonschema import Draft202012Validator
 from shejane_runtime.plugins.manifest import PluginManifest, load_plugin_manifest
 from shejane_runtime.plugins.ocr import is_allowed_ocr_package
 from shejane_runtime.plugins.package import extract_plugin_archive
+from shejane_runtime.plugins.runtime_assets import RuntimeAssetStore
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ROOT = REPO_ROOT / "runtime" / "plugins" / "ocr"
 BUILDER = ROOT / "build_package.py"
+ASSET_BUILDER = ROOT / "build_runtime_asset.py"
 
 
 def test_runtime_accepts_only_the_current_ocr_package_version() -> None:
     assert is_allowed_ocr_package(
         plugin_id="org.shejane.ocr",
-        version="0.1.2",
+        version="0.1.3",
         handler="ocr",
     )
     assert not is_allowed_ocr_package(
@@ -49,24 +53,10 @@ def test_ocr_manifest_and_action_schemas_are_strict() -> None:
             assert schema["additionalProperties"] is False
 
 
-@pytest.mark.parametrize(
-    ("target_platform", "entrypoint", "library"),
-    [
-        ("darwin/arm64", "ocr-worker", "libpython.so"),
-        ("windows/amd64", "ocr-worker.exe", "python312.dll"),
-    ],
-)
-def test_ocr_package_is_deterministic_and_preserves_onedir_worker(
-    tmp_path: Path,
-    target_platform: str,
-    entrypoint: str,
-    library: str,
+@pytest.mark.parametrize("target_platform", ["darwin/arm64", "windows/amd64"])
+def test_ocr_package_is_deterministic_and_metadata_only(
+    tmp_path: Path, target_platform: str
 ) -> None:
-    worker = tmp_path / "ocr-worker"
-    worker.mkdir()
-    (worker / entrypoint).write_bytes(b"worker")
-    (worker / "_internal").mkdir()
-    (worker / "_internal" / library).write_bytes(b"library")
     outputs = [tmp_path / "first.shejane-plugin", tmp_path / "second.shejane-plugin"]
     for output in outputs:
         subprocess.run(
@@ -77,8 +67,6 @@ def test_ocr_package_is_deterministic_and_preserves_onedir_worker(
                 target_platform,
                 "--runtime-asset-digest",
                 "sha256:" + "a" * 64,
-                "--worker",
-                str(worker),
                 "--output",
                 str(output),
             ],
@@ -89,17 +77,12 @@ def test_ocr_package_is_deterministic_and_preserves_onedir_worker(
     extracted = tmp_path / "extracted"
     extract_plugin_archive(outputs[0], extracted)
     manifest = load_plugin_manifest(extracted)
-    assert manifest.version == "0.1.2"
+    assert manifest.version == "0.1.3"
     assert manifest.runtime.execution.platforms == [target_platform]
-    assert (extracted / "payload" / entrypoint).read_bytes() == b"worker"
-    assert (extracted / "payload/_internal" / library).read_bytes() == b"library"
+    assert not (extracted / "payload").exists()
 
 
 def test_ocr_package_rejects_managed_worker_platforms(tmp_path: Path) -> None:
-    worker = tmp_path / "ocr-worker"
-    worker.mkdir()
-    (worker / "ocr-worker").write_bytes(b"worker")
-
     completed = subprocess.run(
         [
             sys.executable,
@@ -108,8 +91,6 @@ def test_ocr_package_rejects_managed_worker_platforms(tmp_path: Path) -> None:
             "linux/arm64",
             "--runtime-asset-digest",
             "sha256:" + "a" * 64,
-            "--worker",
-            str(worker),
             "--output",
             str(tmp_path / "ocr.shejane-plugin"),
         ],
@@ -122,65 +103,141 @@ def test_ocr_package_rejects_managed_worker_platforms(tmp_path: Path) -> None:
     assert "invalid choice: 'linux/arm64'" in completed.stderr
 
 
-def test_ocr_package_materializes_safe_macos_framework_links(tmp_path: Path) -> None:
-    worker = tmp_path / "ocr-worker"
-    worker.mkdir()
-    (worker / "ocr-worker").write_bytes(b"worker")
-    framework = worker / "_internal" / "Python.framework"
-    version = framework / "Versions" / "3.12"
-    version.mkdir(parents=True)
-    (version / "Python").write_bytes(b"python-runtime")
-    (framework / "Versions" / "Current").symlink_to("3.12", target_is_directory=True)
-    (framework / "Python").symlink_to("Versions/Current/Python")
-    output = tmp_path / "ocr.shejane-plugin"
+@pytest.mark.parametrize(
+    ("target_platform", "engine", "worker"),
+    [
+        ("darwin/arm64", "ocr-engine", "ocr-worker"),
+        ("windows/amd64", "ocr-engine.exe", "ocr-worker.exe"),
+    ],
+)
+def test_ocr_runtime_asset_owns_worker_payload(
+    tmp_path: Path, target_platform: str, engine: str, worker: str
+) -> None:
+    base_asset = tmp_path / "base.shejane-runtime-asset"
+    manifest = {
+        "schema_version": 1,
+        "id": "org.rapidocr.runtime",
+        "version": "3.9.1+ppocrv6-small.1",
+        "platform": target_platform,
+        "license": "Apache-2.0",
+        "source_url": "https://github.com/RapidAI/RapidOCR",
+        "payload": "payload",
+        "sbom": ".shejane-runtime-asset/sbom.spdx.json",
+        "executables": [f"payload/bin/{engine}"],
+    }
+    with zipfile.ZipFile(base_asset, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            ".shejane-runtime-asset/asset.json",
+            json.dumps(manifest, sort_keys=True, separators=(",", ":")),
+        )
+        archive.writestr(
+            ".shejane-runtime-asset/sbom.spdx.json",
+            json.dumps(
+                {
+                    "spdxVersion": "SPDX-2.3",
+                    "SPDXID": "SPDXRef-DOCUMENT",
+                    "name": "rapidocr-base",
+                    "documentNamespace": "https://shejane.org/spdx/test/rapidocr-base",
+                    "creationInfo": {"creators": ["Organization: SheJane"]},
+                    "packages": [],
+                    "relationships": [],
+                }
+            ),
+        )
+        archive.writestr(f"payload/bin/{engine}", b"engine")
+    worker_root = tmp_path / "worker"
+    worker_root.mkdir()
+    (worker_root / worker).write_bytes(b"worker")
+    (worker_root / "_internal").mkdir()
+    (worker_root / "_internal/runtime").write_bytes(b"python")
+    outputs = [
+        tmp_path / "first.shejane-runtime-asset",
+        tmp_path / "second.shejane-runtime-asset",
+    ]
+    for output in outputs:
+        subprocess.run(
+            [
+                sys.executable,
+                str(ASSET_BUILDER),
+                "--platform",
+                target_platform,
+                "--base-asset",
+                str(base_asset),
+                "--worker",
+                str(worker_root),
+                "--output",
+                str(output),
+            ],
+            check=True,
+        )
 
-    subprocess.run(
-        [
-            sys.executable,
-            str(BUILDER),
-            "--platform",
-            "darwin/arm64",
-            "--runtime-asset-digest",
-            "sha256:" + "a" * 64,
-            "--worker",
-            str(worker),
-            "--output",
-            str(output),
-        ],
-        check=True,
+    assert outputs[0].read_bytes() == outputs[1].read_bytes()
+    installed = RuntimeAssetStore(tmp_path / "asset-store").install(
+        outputs[0], target_platform=target_platform
     )
+    assert installed.version == "3.9.1+ppocrv6-small.2"
+    assert installed.license == "Apache-2.0 AND AGPL-3.0-only"
+    assert (installed.payload / "bin" / engine).read_bytes() == b"engine"
+    assert (installed.payload / "worker" / worker).read_bytes() == b"worker"
+    metadata = installed.root / ".shejane-runtime-asset"
+    sbom = json.loads((metadata / "sbom.spdx.json").read_text(encoding="utf-8"))
+    worker_package = next(item for item in sbom["packages"] if item["name"] == "SheJane OCR Worker")
+    assert worker_package["versionInfo"] == "0.1.3"
+    assert worker_package["licenseDeclared"] == "AGPL-3.0-only"
+    assert (installed.root / "licenses" / "LICENSE.shejane-ocr-worker").is_file()
 
-    extracted = tmp_path / "extracted"
-    extract_plugin_archive(output, extracted)
-    copied_framework = extracted / "payload" / "_internal" / "Python.framework"
-    assert not any(path.is_symlink() for path in copied_framework.rglob("*"))
-    assert (copied_framework / "Python").read_bytes() == b"python-runtime"
-    assert (copied_framework / "Versions" / "Current" / "Python").read_bytes() == (
-        b"python-runtime"
-    )
 
-
-def test_ocr_package_rejects_directory_link_outside_worker(tmp_path: Path) -> None:
-    worker = tmp_path / "ocr-worker"
+@pytest.mark.parametrize("unsafe_kind", ["entrypoint_symlink", "external_symlink", "fifo"])
+def test_ocr_runtime_asset_rejects_unsafe_worker_entries(tmp_path: Path, unsafe_kind: str) -> None:
+    if not hasattr(Path, "symlink_to") or (unsafe_kind == "fifo" and not hasattr(os, "mkfifo")):
+        pytest.skip("filesystem entry type is unavailable")
+    base_asset = tmp_path / "base.shejane-runtime-asset"
+    manifest = {
+        "schema_version": 1,
+        "id": "org.rapidocr.runtime",
+        "version": "3.9.1+ppocrv6-small.1",
+        "platform": "darwin/arm64",
+        "license": "Apache-2.0",
+        "source_url": "https://github.com/RapidAI/RapidOCR",
+        "payload": "payload",
+        "sbom": ".shejane-runtime-asset/sbom.spdx.json",
+        "executables": ["payload/bin/ocr-engine"],
+    }
+    with zipfile.ZipFile(base_asset, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(".shejane-runtime-asset/asset.json", json.dumps(manifest))
+        archive.writestr(
+            ".shejane-runtime-asset/sbom.spdx.json",
+            json.dumps({"packages": [], "relationships": []}),
+        )
+        archive.writestr("payload/bin/ocr-engine", b"engine")
+    worker = tmp_path / "worker"
     worker.mkdir()
-    (worker / "ocr-worker").write_bytes(b"worker")
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    (outside / "secret").write_bytes(b"secret")
-    (worker / "_internal").symlink_to(outside, target_is_directory=True)
+    entrypoint = worker / "ocr-worker"
+    if unsafe_kind == "entrypoint_symlink":
+        target = worker / "target"
+        target.write_bytes(b"worker")
+        entrypoint.symlink_to(target.name)
+    else:
+        entrypoint.write_bytes(b"worker")
+        if unsafe_kind == "external_symlink":
+            outside = tmp_path / "outside"
+            outside.write_bytes(b"outside")
+            (worker / "escape").symlink_to(outside)
+        else:
+            os.mkfifo(worker / "pipe")
 
     completed = subprocess.run(
         [
             sys.executable,
-            str(BUILDER),
+            str(ASSET_BUILDER),
             "--platform",
             "darwin/arm64",
-            "--runtime-asset-digest",
-            "sha256:" + "a" * 64,
+            "--base-asset",
+            str(base_asset),
             "--worker",
             str(worker),
             "--output",
-            str(tmp_path / "ocr.shejane-plugin"),
+            str(tmp_path / "output.shejane-runtime-asset"),
         ],
         check=False,
         capture_output=True,
@@ -188,7 +245,7 @@ def test_ocr_package_rejects_directory_link_outside_worker(tmp_path: Path) -> No
     )
 
     assert completed.returncode == 2
-    assert "--worker contains an unsafe entry" in completed.stderr
+    assert "unsafe entry" in completed.stderr or "entrypoint is unavailable" in completed.stderr
 
 
 def test_release_does_not_package_builtin_ocr_as_a_linux_worker() -> None:
@@ -197,7 +254,7 @@ def test_release_does_not_package_builtin_ocr_as_a_linux_worker() -> None:
     )
 
     assert "ocr-0.1.0-" not in workflow
-    assert "ocr-0.1.2-linux-arm64.shejane-plugin" not in workflow
+    assert "ocr-0.1.3-linux-arm64.shejane-plugin" not in workflow
 
 
 def test_release_publishes_browser_and_ocr_assets_outside_installers() -> None:

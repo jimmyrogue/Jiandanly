@@ -265,10 +265,13 @@ class ComputerUseService:
             "SHEJANE_COMPUTER_USE_WORKSPACE": str(self._workspace_root),
         }
 
+    def _bridge_path(self) -> Path:
+        return self._package_root / "payload" / "bridge-server.mjs"
+
     async def _ensure_process(self) -> asyncio.subprocess.Process:
         if self._process is not None and self._process.returncode is None:
             return self._process
-        bridge = self._package_root / "payload" / "bridge-server.mjs"
+        bridge = self._bridge_path()
         if not bridge.is_file():
             raise self._error("bridge is missing from the plugin package")
         configured_node = os.environ.get("SHEJANE_RUNTIME_NODE_PATH", "").strip()

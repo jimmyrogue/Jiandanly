@@ -119,7 +119,11 @@ def install_test_artifacts(
     return package, runtime_asset
 
 
-def action_descriptor(package: Path, action_id: str) -> PluginActionDescriptor:
+def action_descriptor(
+    package: Path,
+    runtime_asset: RuntimeAssetHandle,
+    action_id: str,
+) -> PluginActionDescriptor:
     template = json.loads(
         (PLUGIN_ROOT / ".shejane-plugin" / "plugin.template.json").read_text(encoding="utf-8")
     )
@@ -144,7 +148,7 @@ def action_descriptor(package: Path, action_id: str) -> PluginActionDescriptor:
         capabilities=tuple(action["capabilities"]),
         limits=action["limits"],
         package_root=package,
-        entrypoint=package / "payload" / "bridge-server.mjs",
+        entrypoint=runtime_asset.payload / "bridge-server.mjs",
         entrypoint_digest="sha256:" + "d" * 64,
         execution_kind="builtin",
         execution_handler="browser_qa",
@@ -175,7 +179,7 @@ async def test_browser_qa_real_chromium_open_act_observe_and_screenshot(
         build_test_package(package)
         runtime_asset = RuntimeAssetHandle(
             asset_id="org.shejane.browser-qa.runtime",
-            version="1.61.1+chromium1228.2",
+            version="1.61.1+chromium1228.3",
             platform=host_platform,
             digest="sha256:" + "a" * 64,
             root=package,
@@ -217,7 +221,7 @@ async def test_browser_qa_real_chromium_open_act_observe_and_screenshot(
 
     async def invoke(action_id: str, arguments: dict[str, object]) -> object:
         return await adapter.invoke(
-            action_descriptor(package, action_id),
+            action_descriptor(package, runtime_asset, action_id),
             arguments,
             RuntimeToolExecution(
                 context=context,
