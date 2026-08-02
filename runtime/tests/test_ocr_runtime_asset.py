@@ -13,6 +13,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from shejane_runtime.plugins.executor import ManagedWorkerActionExecutor
 from shejane_runtime.plugins.macos_vm import load_macos_vm_resources
+from shejane_runtime.plugins.ocr import OCRActionExecutor
 from shejane_runtime.plugins.platforms import current_managed_worker_platform
 from shejane_runtime.plugins.runtime_assets import RuntimeAssetHandle, RuntimeAssetStore
 
@@ -127,6 +128,30 @@ def write_text_image(path: Path) -> None:
     )
     ImageDraw.Draw(image).text((30, 70), "SheJane OCR 2026", font=text_font, fill="black")
     image.save(path, format="PNG", optimize=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(not os.environ.get(ASSET_ENV), reason=f"{ASSET_ENV} is not set")
+async def test_real_composite_asset_executes_its_bundled_worker(tmp_path: Path) -> None:
+    archive = Path(os.environ[ASSET_ENV]).resolve(strict=True)
+    asset = install_asset(tmp_path / "data", archive)
+    executor = OCRActionExecutor(tmp_path, asset)
+    input_root = tmp_path / "input"
+    source = input_root / "source" / "text.png"
+    source.parent.mkdir(parents=True)
+    write_text_image(source)
+    output_root = tmp_path / "output"
+    output_root.mkdir()
+
+    result = await executor.invoke(
+        invocation(source),
+        input_root=input_root,
+        output_root=output_root,
+    )
+
+    assert result["status"] == "succeeded", result.get("error", result)
+    recognized = "".join(result["output"]["images"][0]["full_text"].split()).casefold()
+    assert "shejaneocr2026" in recognized
 
 
 def multi_invocation(sources: list[Path]) -> dict[str, object]:

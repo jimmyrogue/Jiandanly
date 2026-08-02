@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -147,6 +148,26 @@ def test_pdf_attachment_is_exposed_as_model_readable_text(tmp_path: Path) -> Non
     assert selected.file_data is not None
     assert selected.file_data["encoding"] == "utf-8"
     assert "Rental receipt" in selected.file_data["content"]
+
+
+def test_pdf_text_extraction_does_not_require_the_image_rendering_backend(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setitem(sys.modules, "pypdfium2", None)
+    monkeypatch.setitem(sys.modules, "pypdfium2_raw", None)
+    from shejane_runtime.document_markdown import document_to_markdown
+
+    rendered, truncated = document_to_markdown(_minimal_pdf("Text only"), ".pdf")
+
+    assert "Text only" in rendered
+    assert truncated is False
+    spec = (Path(__file__).resolve().parents[1] / "shejane-runtime.spec").read_text(
+        encoding="utf-8"
+    )
+    assert '"pdfplumber.display"' in spec
+    assert '"pypdfium2"' in spec
+    assert '"pypdfium2_raw"' in spec
 
 
 def test_docx_attachment_snapshot_is_exposed_as_model_readable_text(tmp_path: Path) -> None:

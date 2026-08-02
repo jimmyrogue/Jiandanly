@@ -64,6 +64,19 @@
 
 真实 macOS arm64 最终资产已通过 Browser QA headed/headless E2E、RapidOCR 冻结 Worker 原生质量/hostile-input 门禁；无大型资产的 frozen Runtime 仍能在 P1 安装 `0.1.3` 元数据外壳、到达 `/v1/health`，并为两项能力报告 `downloaded:false`。
 
+## 实施进度：移除未使用的 PDF 图像渲染后端
+
+2026-08-02 进一步核对了完整 Office/PDF 按需化。现有 Documents/Spreadsheets/Presentations Worker 只提供四个粗粒度 Action，不能等价替换核心 `office.*` 的细粒度读写、copy-on-first-write 和附件读取语义；同时 macOS 走 Linux VM、Windows 走本机 Worker，直接切换会新增跨平台发布面和首次下载依赖。因此本轮不复制第二套 Office 工具，也不把不可信文档解析退回系统 Python。
+
+当前 PDF 文本与表格转换只调用 pdfminer/pdfplumber 的文本路径，不调用 `Page.to_image()`。PyInstaller 现在明确排除仅供该方法使用的 `pdfplumber.display`、pypdfium2 Python 包和 PDFium 原生库；源环境仍保留上游依赖，测试和开发行为不变。
+
+| 指标 | 修改前 | 修改后 | 变化 |
+|---|---:|---:|---:|
+| frozen Runtime 磁盘分配 | 134,004 KiB | 127,312 KiB | **-6,692 KiB，-5.0%** |
+| `tar.gz` 压缩代理 | 66,322,606 bytes | 62,985,107 bytes | **-3,337,499 bytes，-5.0%** |
+
+相对最初基线，frozen Runtime 累计减少 **106,796 KiB（45.6%）**，压缩代理累计减少 **46,692,465 bytes（42.6%）**。PDF 附件文本测试在主动屏蔽 pypdfium2 后仍通过；冻结分析中该导入被标记为 delayed/conditional，成品不再包含 `pypdfium2*`。完整 Office Worker 迁移只有在产品接受首次下载，并先统一四个平台的工具语义、历史任务回放和离线错误协议后才值得实施。
+
 ## 当前基线与测量方法
 
 ### 原始结果
