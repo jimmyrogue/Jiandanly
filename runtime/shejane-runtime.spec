@@ -18,8 +18,6 @@ from shutil import copy2
 
 from PyInstaller.utils.hooks import (
     collect_all,
-    collect_data_files,
-    collect_dynamic_libs,
     collect_submodules,
 )
 
@@ -46,22 +44,11 @@ if sys.platform.startswith("linux"):
 
 # Packages PyInstaller's static analysis under-collects because they rely on
 # dynamic imports, entry-point discovery, or ship data files / native libs.
-# markitdown builds a module-level MarkItDown() which loads magika's ONNX model
-# via onnxruntime at import time. Keep the inference runtime, but not ONNX's
-# quantization/conversion toolchain.
-datas += collect_data_files(
-    "onnxruntime",
-    includes=["LICENSE", "ThirdPartyNotices.txt"],
-)
-binaries += collect_dynamic_libs("onnxruntime")
-hiddenimports += collect_submodules("onnxruntime.capi")
 for pkg in (
-    "magika",
     "langgraph",
     "langchain",
     "langchain_core",
     "deepagents",
-    "markitdown",
 ):
     d, b, h = collect_all(pkg)
     datas += d
@@ -147,11 +134,11 @@ a = Analysis(
         "_pytest",
         "browser_use",
         "coverage",
+        "magika",
+        "markitdown",
         "mypy",
-        "onnxruntime.backend",
-        "onnxruntime.quantization",
-        "onnxruntime.tools",
-        "onnxruntime.transformers",
+        "onnxruntime",
+        "pandas",
         "playwright",
         "pytest",
         "ruff",

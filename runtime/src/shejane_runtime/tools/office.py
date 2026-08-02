@@ -45,7 +45,6 @@ from docx.document import Document as DocxDocumentType
 from docx.text.paragraph import Paragraph as DocxParagraph
 from langchain_core.runnables.config import ensure_config
 from langchain_core.tools import tool
-from markitdown import MarkItDown
 from openpyxl import load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import column_index_from_string, get_column_letter
@@ -53,11 +52,8 @@ from openpyxl.utils.cell import range_boundaries
 from pptx import Presentation as PptxPresentation
 from pptx.util import Inches
 
+from ..document_markdown import document_to_markdown
 from .runtime import current_runtime_tool_execution
-
-# Module-level converter — MarkItDown is cheap to construct but creating it
-# once is even cheaper, and it's thread-safe for the read API we use.
-_md = MarkItDown()
 
 # Hard cap on returned markdown size. A 50-page docx is typically ~30 KB
 # of text; a 100-sheet xlsx ingested as markdown tables can blow past
@@ -284,10 +280,10 @@ def _write_error(
 
 @tool("office.read")
 def office_read(path: str) -> dict[str, Any]:
-    """Read a Word (.docx) or Excel (.xlsx) file as LLM-ready markdown.
+    """Read a Word (.docx), Excel (.xlsx), or PowerPoint (.pptx) file as markdown.
 
-    This tool runs `markitdown` which converts headings, paragraphs, tables,
-    and cells into clean markdown the LLM can reason about directly.
+    Converts headings, paragraphs, tables, and cells into compact markdown
+    the LLM can reason about directly.
 
     Does NOT open the right-side document preview panel. If you want the
     user to see the file rendered, mention the filename in your reply
@@ -302,7 +298,7 @@ def office_read(path: str) -> dict[str, Any]:
         dict with keys:
           ok ("true" / "false")
           path (echoed back, absolute)
-          kind ("word" or "excel")
+          kind ("word", "excel", or "powerpoint")
           markdown (the converted markdown content, possibly truncated)
           truncated ("true" / "false") — set when content exceeded the cap
           error (only present when ok="false")
@@ -313,13 +309,10 @@ def office_read(path: str) -> dict[str, Any]:
     assert source is not None and kind is not None  # for type checker
     reported_path = path if isinstance(source, bytes) else source
     try:
-        result = (
-            _md.convert_stream(
-                io.BytesIO(source),
-                file_extension=Path(path).suffix.lower(),
-            )
-            if isinstance(source, bytes)
-            else _md.convert(source)
+        text, truncated = document_to_markdown(
+            source,
+            Path(path).suffix.lower(),
+            char_limit=_MARKDOWN_CHAR_CAP,
         )
     except Exception as exc:
         return {
@@ -328,15 +321,8 @@ def office_read(path: str) -> dict[str, Any]:
             "kind": kind,
             "error": f"failed to convert {kind}: {exc.__class__.__name__}: {exc}",
         }
-    text = result.text_content or ""
-    truncated = len(text) > _MARKDOWN_CHAR_CAP
     if truncated:
-        text = (
-            text[:_MARKDOWN_CHAR_CAP]
-            + "\n\n…(truncated, full size = "
-            + str(len(result.text_content))
-            + " chars)"
-        )
+        text = text[:_MARKDOWN_CHAR_CAP] + "\n\n…(truncated)"
     return {
         "ok": "true",
         "path": reported_path,
@@ -1838,7 +1824,7 @@ def office_read_slides(path: str) -> dict[str, Any]:
 
     Use this instead of `office.read` when you want LLM-friendly slide
     semantics (one entry per slide with title + bullets list) rather
-    than the markitdown markdown dump. The frontend preview panel
+    than the compact markdown dump. The frontend preview panel
     also calls this through a small HTTP endpoint to render the
     outline view.
 

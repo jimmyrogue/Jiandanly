@@ -4,7 +4,7 @@
 
 ## Outcome
 
-PDF becomes a deterministic Managed Worker plugin backed by a standalone, exact `org.mupdf.runtime` asset. It does not call the current core `MarkItDown` shortcut, a host PDF program, or a chat model's implicit PDF support.
+PDF becomes a deterministic Managed Worker plugin backed by a standalone, exact `org.mupdf.runtime` asset. It does not call the current core `pdfplumber`/`pdfminer-six` compatibility parser, a host PDF program, or a chat model's implicit PDF support.
 
 The first package exposes narrow Actions:
 
@@ -75,4 +75,4 @@ The `linux/arm64` asset and frozen onedir Worker currently pass items 1-4 in the
 
 ## Migration boundary
 
-The current `ReadOnlyFileBackend._read_pdf` / `MarkItDown` path remains a legacy core capability while the plugin is unavailable. It is removed only after the PDF plugin is installed by default, explicitly selected through the same plugin reference flow, has passed a release cycle, and old Runs remain readable. There is no silent fallback between the plugin and the legacy parser.
+The current `ReadOnlyFileBackend` / `pdfplumber` path remains a legacy core capability while the plugin is unavailable. It is removed only after the PDF plugin is installed by default, explicitly selected through the same plugin reference flow, has passed a release cycle, and old Runs remain readable. There is no silent fallback between the plugin and the legacy parser.

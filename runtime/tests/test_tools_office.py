@@ -4,18 +4,23 @@ The fixtures here are built on-the-fly with python-docx / openpyxl so we
 don't have to check binary files into the repo. Each test owns its own
 tmp_path-scoped file.
 
-Office tools don't proxy through any external service (markitdown +
-python-docx + openpyxl all run in-process), so these are vanilla unit
+Office tools don't proxy through any external service (python-docx +
+openpyxl + python-pptx all run in-process), so these are vanilla unit
 tests — no MockTransport, no settings override needed.
 """
 
 from __future__ import annotations
 
+import subprocess
+import sys
+import zipfile
+from io import BytesIO
 from pathlib import Path
 
 import pytest
 from docx import Document
 from openpyxl import Workbook
+from PIL import Image
 
 from shejane_runtime.agent.context_builder import RuntimeContext
 from shejane_runtime.tools.office import (
@@ -117,8 +122,7 @@ def test_office_read_docx_returns_markdown(tmp_path: Path) -> None:
     assert result["ok"] == "true"
     assert result["kind"] == "word"
     md = result["markdown"]
-    # Heading text should survive in the markdown output. markitdown's
-    # exact heading-level mapping varies; assert the text is there.
+    # Heading text should survive in the markdown output.
     assert "Executive Summary" in md
     assert "Methodology" in md
     # Table contents should also surface.
@@ -134,11 +138,40 @@ def test_office_read_xlsx_returns_markdown(tmp_path: Path) -> None:
     assert result["ok"] == "true"
     assert result["kind"] == "excel"
     md = result["markdown"]
-    # Both sheet names should appear (markitdown sections by sheet).
+    # Both sheet names should appear (one markdown section per sheet).
     assert "Sales" in md
     assert "Costs" in md
     # Cell contents should surface.
     assert "Q1" in md and "100" in md
+
+
+def test_office_read_pptx_returns_markdown(tmp_path: Path) -> None:
+    path = tmp_path / "deck.pptx"
+    assert office_create_pptx.func(path=str(path), title="Quarterly plan")["ok"] == "true"
+
+    result = office_read.func(path=str(path))
+
+    assert result["ok"] == "true"
+    assert result["kind"] == "powerpoint"
+    assert "Quarterly plan" in result["markdown"]
+
+
+def test_office_read_docx_preserves_run_formatting_and_image_marker(tmp_path: Path) -> None:
+    path = tmp_path / "rich.docx"
+    document = Document()
+    run = document.add_paragraph().add_run("Important")
+    run.bold = True
+    image = BytesIO()
+    Image.new("RGB", (2, 2), "white").save(image, format="PNG")
+    image.seek(0)
+    document.add_paragraph().add_run().add_picture(image)
+    document.save(path)
+
+    result = office_read.func(path=str(path))
+
+    assert result["ok"] == "true"
+    assert "**Important**" in result["markdown"]
+    assert "[Image:" in result["markdown"]
 
 
 def test_office_read_uses_runtime_owned_attachment_without_a_workspace(tmp_path: Path) -> None:
@@ -264,6 +297,70 @@ def test_office_read_empty_path_returns_error() -> None:
     assert result["error"] == "path required"
 
 
+def test_office_read_rejects_spoofed_ooxml_package(tmp_path: Path) -> None:
+    path = tmp_path / "spoofed.docx"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types />")
+
+    result = office_read.func(path=str(path))
+
+    assert result["ok"] == "false"
+    assert "invalid .docx package" in result["error"]
+
+
+def test_office_read_rejects_unsafe_ooxml_compression_ratio(tmp_path: Path) -> None:
+    path = tmp_path / "compressed.docx"
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", "<Types />")
+        archive.writestr("word/document.xml", b"0" * (2 * 1024 * 1024))
+
+    result = office_read.func(path=str(path))
+
+    assert result["ok"] == "false"
+    assert "compression ratio is unsafe" in result["error"]
+
+
+def test_office_read_rejects_oversized_document_source(tmp_path: Path) -> None:
+    path = tmp_path / "oversized.docx"
+    with path.open("wb") as stream:
+        stream.truncate(200 * 1024 * 1024 + 1)
+
+    result = office_read.func(path=str(path))
+
+    assert result["ok"] == "false"
+    assert "document exceeds the 200 MB parsing limit" in result["error"]
+
+
+def test_office_read_rejects_ooxml_with_too_many_entries(tmp_path: Path) -> None:
+    path = tmp_path / "crowded.docx"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types />")
+        archive.writestr("word/document.xml", "<document />")
+        for index in range(10_000):
+            archive.writestr(f"extra/{index}", "")
+
+    result = office_read.func(path=str(path))
+
+    assert result["ok"] == "false"
+    assert "package has too many entries" in result["error"]
+
+
+def test_office_read_bounds_inflated_xlsx_dimensions(tmp_path: Path) -> None:
+    path = tmp_path / "inflated.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A1"] = "start"
+    sheet.cell(row=1001, column=100, value="outside bounded range")
+    workbook.save(path)
+
+    result = office_read.func(path=str(path))
+
+    assert result["ok"] == "true"
+    assert result["truncated"] == "true"
+    assert "start" in result["markdown"]
+    assert "outside bounded range" not in result["markdown"]
+
+
 def test_office_read_rejects_paths_outside_run_workspace(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     outside = tmp_path / "outside"
@@ -341,6 +438,25 @@ def test_office_tools_registered_under_canonical_names() -> None:
         "office.read_range",
         "office.read_slides",
     ]
+
+
+def test_office_tool_import_does_not_load_content_detection_runtime() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; import shejane_runtime.tools.office; "
+                "blocked = {'markitdown', 'magika', 'onnxruntime'} & set(sys.modules); "
+                "sys.exit(','.join(sorted(blocked))) if blocked else None"
+            ),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_office_read_truncates_large_output(tmp_path: Path) -> None:

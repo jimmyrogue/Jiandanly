@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import logging
 import os
 import re
@@ -31,8 +30,8 @@ from deepagents.backends.protocol import (
     WriteResult,
 )
 from langgraph.runtime import get_runtime
-from markitdown import MarkItDown
 
+from ..document_markdown import DOCUMENT_MARKDOWN_CHAR_CAP, document_to_markdown
 from ..plugins.sandbox_runtime import prepare_agent_shell_command, read_process_start
 from ..processes import kill_process_tree
 
@@ -573,15 +572,19 @@ class ReadOnlyFileBackend(ReadOnlyBackend):
                 return ReadResult(error="Attachment has no readable content")
             extension = Path(self._display_name).suffix.lower()
             try:
-                converted = MarkItDown().convert_stream(
-                    io.BytesIO(response.content),
-                    file_extension=extension,
+                self._converted_text, truncated = document_to_markdown(
+                    response.content,
+                    extension,
                 )
-            except Exception as exc:  # MarkItDown wraps parser failures by format.
+            except Exception as exc:
                 return ReadResult(
                     error=f"Error reading {extension} attachment: {type(exc).__name__}"
                 )
-            self._converted_text = converted.text_content
+            if truncated:
+                self._converted_text = (
+                    self._converted_text[:DOCUMENT_MARKDOWN_CHAR_CAP]
+                    + "\n\n…(truncated at 4,000,000 characters)"
+                )
 
         if not self._converted_text.strip():
             return ReadResult(error="Attachment contains no extractable text")

@@ -256,7 +256,7 @@ make package-runtime
 ```
 
 构建结果位于 `runtime/dist/shejane-runtime/`。其中包含平台相关的原生依赖，不能用于其他操作系统或 CPU 架构。
-主 Runtime 的 PyInstaller 冻结使用隔离的 `package` 依赖组；测试、lint、类型检查依赖不能进入分析环境。ONNX Runtime 只收集 Magika 启动所需的推理 C API、原生库和许可证，不收集 backend、quantization、tools、transformers 或 SymPy。
+主 Runtime 的 PyInstaller 冻结使用隔离的 `package` 依赖组；测试、lint、类型检查依赖不能进入分析环境。核心文档读取按已知后缀和 OOXML/PDF 魔数校验后，直接使用 `python-docx`、`openpyxl`、`python-pptx` 与 `pdfplumber`/`pdfminer-six`；不再打包 MarkItDown、Magika、ONNX Runtime、pandas 或 NumPy。OCR 自带的 ONNX Runtime 只存在于独立的按需 Runtime Asset，不进入主 Runtime。解析器对单文件、OOXML 成员数量、单成员/总展开大小和异常压缩比设硬上限；XLSX 最多读取 100,000 个单元格，`office.read` 最多返回 60,000 个字符，附件分页读取最多转换 4,000,000 个字符。
 
 ## 集中诊断
 
