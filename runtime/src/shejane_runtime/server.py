@@ -36,12 +36,10 @@ from langchain_core.messages import HumanMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 from langgraph.graph import add_messages
 from sse_starlette.sse import EventSourceResponse
-from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from . import __version__
 from .agent.builder import _build_byok_chat_model, open_checkpointer, open_store
 from .api_schemas import (
-    MAX_LOCAL_REQUEST_BODY_BYTES,
     AddModelServiceModelRequest,
     AnswerQuestionCommand,
     AnswerQuestionCommandReceipt,
@@ -63,15 +61,19 @@ from .api_schemas import (
     ImportModelServiceRequest,
     InjectRunInstructionRequest,
     InjectRunInstructionResponse,
+    ListAgentMessagesResponse,
+    ListChildRunsResponse,
     ListModelCapabilityBindingsResponse,
     ListModelServiceConnectionsResponse,
     ListPluginsResponse,
+    ListRunEventsResponse,
     ListRunsResponse,
     ListScheduledRunsResponse,
     ListThreadChangesResponse,
     ListThreadsResponse,
     ListWorkspacesResponse,
     LocalArtifact,
+    LocalCollaborationSnapshot,
     LocalRun,
     LocalRunDiagnostics,
     LocalRuntimeModelCatalog,
@@ -147,6 +149,7 @@ from .central_diagnostics import (
 from .config import Settings, get_settings
 from .diagnostics_trace import build_run_trace
 from .failure_policy import classify_failure_payload
+from .http_body_limit import RequestBodyLimitMiddleware
 from .llm.ledger import _provider_tools, _rewrite_tool_names
 from .middleware.tool_execution import serialize_tool_result
 from .model_credentials import (
@@ -1134,56 +1137,6 @@ async def _complete_shejane_authorization(
     return (await _model_service_response(row, credential_configured=True)).model_dump()
 
 
-class _RequestBodyTooLarge(Exception):
-    pass
-
-
-class RequestBodyLimitMiddleware:
-    """Reject oversized HTTP bodies before FastAPI parses JSON."""
-
-    def __init__(self, app: ASGIApp, max_bytes: int = MAX_LOCAL_REQUEST_BODY_BYTES) -> None:
-        self.app = app
-        self.max_bytes = max_bytes
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http":
-            await self.app(scope, receive, send)
-            return
-
-        content_length = dict(scope.get("headers", [])).get(b"content-length")
-        if content_length is not None:
-            try:
-                if int(content_length) > self.max_bytes:
-                    await self._reject(scope, receive, send)
-                    return
-            except ValueError:
-                pass
-
-        received = 0
-
-        async def limited_receive() -> Message:
-            nonlocal received
-            message = await receive()
-            if message["type"] == "http.request":
-                received += len(message.get("body", b""))
-                if received > self.max_bytes:
-                    raise _RequestBodyTooLarge
-            return message
-
-        try:
-            await self.app(scope, limited_receive, send)
-        except _RequestBodyTooLarge:
-            await self._reject(scope, receive, send)
-
-    @staticmethod
-    async def _reject(scope: Scope, receive: Receive, send: Send) -> None:
-        response = JSONResponse(
-            {"detail": "request body exceeds the 1 MiB limit"},
-            status_code=413,
-        )
-        await response(scope, receive, send)
-
-
 def _list_skill_files() -> list[dict[str, str]]:
     """Lightweight skill catalog for the HTTP layer — independent of any
     running agent. Walks every roots `_resolve_skills_dirs` returns and
@@ -1332,10 +1285,22 @@ async def _run_with_inputs(store: LocalStore, run: dict[str, Any]) -> dict[str, 
 
 
 async def _runs_with_inputs(store: LocalStore, runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    rows = await store.list_run_inputs_for_runs([str(run["id"]) for run in runs])
+    run_ids = [str(run["id"]) for run in runs]
+    missing_subagent_ids = [str(run["id"]) for run in runs if "subagent_invocations" not in run]
+    rows, subagent_rows, child_rows = await asyncio.gather(
+        store.list_run_inputs_for_runs(run_ids),
+        store.list_subagent_invocations_for_runs(missing_subagent_ids),
+        store.list_child_runs_for_runs(run_ids),
+    )
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         grouped.setdefault(str(row["run_id"]), []).append(row)
+    grouped_subagents: dict[str, list[dict[str, Any]]] = {}
+    for row in subagent_rows:
+        grouped_subagents.setdefault(str(row["parent_run_id"]), []).append(row)
+    grouped_children: dict[str, list[dict[str, Any]]] = {}
+    for row in child_rows:
+        grouped_children.setdefault(str(row["parent_run_id"]), []).append(row)
     return [
         {
             **run,
@@ -1356,6 +1321,14 @@ async def _runs_with_inputs(store: LocalStore, runs: list[dict[str, Any]]) -> li
                 }
                 for index, item in enumerate(grouped.get(str(run["id"]), []))
             ],
+            "subagent_invocations": run.get(
+                "subagent_invocations",
+                grouped_subagents.get(str(run["id"]), []),
+            ),
+            "child_runs": run.get(
+                "child_runs",
+                grouped_children.get(str(run["id"]), []),
+            ),
         }
         for run in runs
     ]
@@ -3525,6 +3498,75 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         return await _run_with_inputs(store, run)
 
+    @app.get("/v1/runs/{run_id}/children", response_model=ListChildRunsResponse)
+    async def list_child_runs(request: Request, run_id: str) -> dict[str, Any]:
+        store: LocalStore = app.state.store
+        await _owned_run(
+            store,
+            principal_id=request.state.principal_id,
+            run_id=run_id,
+        )
+        return {"children": await store.list_child_runs_for_run(run_id)}
+
+    @app.get(
+        "/v1/runs/{run_id}/collaboration",
+        response_model=LocalCollaborationSnapshot,
+    )
+    async def get_collaboration_snapshot(request: Request, run_id: str) -> dict[str, Any]:
+        await _owned_run(
+            app.state.store,
+            principal_id=request.state.principal_id,
+            run_id=run_id,
+        )
+        try:
+            return await app.state.coordinator.collaboration_snapshot(run_id)
+        except RunAdmissionError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
+
+    @app.get("/v1/runs/{run_id}/mailbox", response_model=ListAgentMessagesResponse)
+    async def list_agent_messages(
+        request: Request,
+        run_id: str,
+        box: Literal["inbox", "outbox"] = Query(default="inbox"),
+    ) -> dict[str, Any]:
+        store: LocalStore = app.state.store
+        await _owned_run(
+            store,
+            principal_id=request.state.principal_id,
+            run_id=run_id,
+        )
+        messages = (
+            await store.list_agent_inbox(run_id)
+            if box == "inbox"
+            else await store.list_agent_outbox(run_id)
+        )
+        return {"messages": messages}
+
+    @app.get("/v1/runs/{run_id}/events", response_model=ListRunEventsResponse)
+    async def list_run_events(
+        request: Request,
+        run_id: str,
+        after: int = Query(default=0, ge=0),
+        limit: int = Query(default=1000, ge=1, le=5000),
+    ) -> dict[str, Any]:
+        store: LocalStore = app.state.store
+        await _owned_run(
+            store,
+            principal_id=request.state.principal_id,
+            run_id=run_id,
+        )
+        raw_events = await store.events_since(run_id, after_seq=after, limit=limit + 1)
+        has_more = len(raw_events) > limit
+        page = raw_events[:limit]
+        return {
+            "events": [{**event, "payload": _event_payload(event)} for event in page],
+            "has_more": has_more,
+            "next_after": int(page[-1]["seq"]) if page else after,
+        }
+
     @app.get("/v1/runs/{run_id}/stream")
     async def stream_run(
         request: Request,
@@ -3600,15 +3642,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not content:
             raise HTTPException(status_code=400, detail="content required")
         store: LocalStore = app.state.store
-        run = await _owned_run(
-            store,
-            principal_id=request.state.principal_id,
-            run_id=run_id,
-        )
-        if run.get("status") in _TERMINAL_RUN_STATUSES:
-            raise HTTPException(status_code=409, detail="run is not active")
-        record = await store.create_steering_instruction(run_id=run_id, content=content)
-        return {"run_id": run_id, "instruction_id": record["id"], "queued": True}
+        try:
+            receipt, _created = await store.request_run_inject_command(
+                principal_id=request.state.principal_id,
+                command_id=body.command_id,
+                run_id=run_id,
+                content=content,
+            )
+            return receipt
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="run not found") from exc
+        except (CommandConflictError, RunAdmissionError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     # ---- compatibility shims the client expects (pre-existing Node API) ----
     #

@@ -46,6 +46,7 @@ def _write_skill(root: Path, name: str, *, title: str = "", description: str = "
     body_lines = []
     if title or description:
         body_lines.append("---")
+        body_lines.append(f"name: {name}")
         if title:
             body_lines.append(f"title: {title}")
         if description:
@@ -384,14 +385,15 @@ def test_http_skill_create_adds_required_frontmatter(tmp_path: Path, monkeypatch
 def test_build_agent_passes_skills_dirs_to_deepagents_when_enabled(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """When `skills_enabled=True`, every resolved skill root should be
-    forwarded to deepagents' `create_deep_agent(skills=...)`.
+    """When `skills_enabled=True`, every resolved root reaches SkillsMiddleware.
 
     The workspace backend stays in virtual mode for path containment, while
     absolute skill roots are exposed through explicit virtual routes.
     """
     from deepagents.backends import CompositeBackend, FilesystemBackend
     from deepagents.backends.protocol import BackendProtocol
+    from deepagents.middleware import SkillsMiddleware
+    from deepagents.middleware.skills import _alist_skills
 
     import shejane_runtime.agent.builder as builder_mod
     from shejane_runtime.agent.builder import build_agent, open_checkpointer
@@ -407,6 +409,7 @@ def test_build_agent_passes_skills_dirs_to_deepagents_when_enabled(
 
     def fake_create_deep_agent(**kwargs):
         captured["skills"] = kwargs.get("skills")
+        captured["middleware"] = kwargs.get("middleware")
         captured["backend"] = kwargs.get("backend")
         return object()
 
@@ -434,9 +437,12 @@ def test_build_agent_passes_skills_dirs_to_deepagents_when_enabled(
             await stack.aclose()
 
     asyncio.run(run())
-    skills = captured["skills"]
-    assert isinstance(skills, list) and len(skills) >= 1
-    assert any(str(shejane) in s for s in skills)
+    assert captured["skills"] is None
+    skills_middleware = [
+        item for item in captured["middleware"] if isinstance(item, SkillsMiddleware)
+    ]
+    assert len(skills_middleware) == 1
+    assert any(str(shejane) in source for source in skills_middleware[0].sources)
     assert isinstance(captured["backend"], BackendProtocol)
     backend = runtime_context.backend
     assert isinstance(backend, CompositeBackend)
@@ -449,6 +455,8 @@ def test_build_agent_passes_skills_dirs_to_deepagents_when_enabled(
     read_result = backend.read(str((shejane / "test-skill" / "SKILL.md").resolve()))
     assert read_result.file_data is not None
     assert "test-skill" in read_result.file_data["content"]
+    listed_skills = asyncio.run(_alist_skills(backend, str(shejane)))
+    assert [skill["name"] for skill in listed_skills] == ["test-skill"]
     assert backend.write(f"{skill_route}injected/SKILL.md", "unsafe").error == (
         "read-only source: writes are not allowed"
     )
@@ -471,8 +479,9 @@ def test_build_agent_passes_skills_dirs_to_deepagents_when_enabled(
 
 
 def test_build_agent_passes_none_when_skills_disabled(tmp_path: Path, monkeypatch) -> None:
-    """`skills_enabled=False` ⇒ deepagents gets `skills=None`, so the
-    SkillsMiddleware doesn't load anything into the prompt."""
+    """`skills_enabled=False` omits SkillsMiddleware entirely."""
+    from deepagents.middleware import SkillsMiddleware
+
     import shejane_runtime.agent.builder as builder_mod
     from shejane_runtime.agent.builder import build_agent, open_checkpointer
 
@@ -487,6 +496,7 @@ def test_build_agent_passes_none_when_skills_disabled(tmp_path: Path, monkeypatc
 
     def fake_create_deep_agent(**kwargs):
         captured["skills"] = kwargs.get("skills")
+        captured["middleware"] = kwargs.get("middleware")
         return object()
 
     monkeypatch.setattr(builder_mod, "create_deep_agent", fake_create_deep_agent)
@@ -512,6 +522,7 @@ def test_build_agent_passes_none_when_skills_disabled(tmp_path: Path, monkeypatc
 
     asyncio.run(run())
     assert captured["skills"] is None
+    assert not any(isinstance(item, SkillsMiddleware) for item in captured["middleware"])
 
 
 def test_build_agent_gives_no_workspace_attempts_isolated_temporary_scratch(

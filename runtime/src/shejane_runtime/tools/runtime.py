@@ -52,6 +52,11 @@ def current_runtime_tool_execution() -> RuntimeToolExecution:
     return execution
 
 
+def current_runtime_tool_execution_or_none() -> RuntimeToolExecution | None:
+    """Return the enclosing durable tool operation, if this call has one."""
+    return _CURRENT_TOOL_EXECUTION.get()
+
+
 class RuntimeToolProxy(BaseTool):
     """Schema-only tool definition that delegates to this execution's tool."""
 

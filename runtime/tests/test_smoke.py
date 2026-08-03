@@ -281,6 +281,27 @@ def test_web_fetch_fake_ip_exception_does_not_allow_private_networks(monkeypatch
     assert address is None
 
 
+def test_pinned_transport_can_disable_https_fake_ip_exception(monkeypatch: Any) -> None:
+    from shejane_runtime.tools import web as web_module
+
+    calls: list[bool] = []
+
+    def resolve(_hostname: str, *, allow_fake_ip: bool) -> tuple[bool, str, None]:
+        calls.append(allow_fake_ip)
+        return False, "blocked for test", None
+
+    monkeypatch.setattr(web_module, "_resolve_pinned", resolve)
+
+    assert web_module._pinned_transport(
+        "https://files.example.test/input", allow_fake_ip=False
+    ) == (None, "blocked for test")
+    assert web_module._pinned_transport("https://public.example/page") == (
+        None,
+        "blocked for test",
+    )
+    assert calls == [False, True]
+
+
 def test_web_fetch_rejects_redirect_to_loopback(monkeypatch: Any) -> None:
     import asyncio
 

@@ -158,10 +158,53 @@ def test_subagents_have_code_enforced_model_and_research_limits() -> None:
 
 def test_writer_has_no_tools() -> None:
     from shejane_runtime.agent.subagents import build_subagents
+    from shejane_runtime.middleware.tool_visibility import ToolVisibilityMiddleware
 
     subs = build_subagents(main_tools=[], main_model="x", agent_roots=[])
     writer = next(s for s in subs if s["name"] == "writer")
     assert writer["tools"] == []
+    visibility = next(
+        item for item in writer["middleware"] if isinstance(item, ToolVisibilityMiddleware)
+    )
+    assert visibility.blocked_tool_names >= {
+        "write_todos",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "execute",
+    }
+
+
+def test_durable_child_definitions_freeze_role_and_effective_tool_surface() -> None:
+    from langchain_core.tools import tool
+
+    from shejane_runtime.agent.subagents import (
+        build_durable_child_definitions,
+        build_subagents,
+    )
+
+    @tool("web.search")
+    def web_search(query: str) -> str:
+        """Search the web."""
+        return query
+
+    @tool("execute")
+    def execute(command: str) -> str:
+        """Execute a command."""
+        return command
+
+    definitions = build_durable_child_definitions(
+        build_subagents(main_tools=[web_search, execute], main_model="x", agent_roots=[])
+    )
+    researcher = definitions["subagent:researcher"]
+    writer = definitions["subagent:writer"]
+
+    assert str(researcher["version"]).startswith("sha256:")
+    assert "web.search" in researcher["allowed_tools"]
+    assert "read_file" in researcher["allowed_tools"]
+    assert "execute" not in researcher["allowed_tools"]
+    assert writer["allowed_tools"] == []
+    assert not str(researcher["system_prompt"]).startswith("<identity>")
 
 
 def test_subagents_never_receive_top_level_memory_write_capability(tmp_path: Path) -> None:
@@ -354,6 +397,7 @@ def test_compiled_agent_exposes_task_tool_when_subagents_enabled(
 
     names = asyncio.run(run())
     assert "task" in names, f"expected task tool in {sorted(names)}"
+    assert "team.run" in names, f"expected Team Graph tool in {sorted(names)}"
 
 
 def test_disabling_subagents_drops_custom_specialists(tmp_path: Path, monkeypatch) -> None:
@@ -397,12 +441,13 @@ def test_disabling_subagents_drops_custom_specialists(tmp_path: Path, monkeypatc
     # custom specialists, which is exercised via build_subagents in the
     # `test_build_subagents_returns_*` cases above.
     assert "task" in names
+    assert "team.run" not in names
 
 
-# --- event translation for subagent lifecycle ---
+# --- stream translation stays separate from durable subagent lifecycle ---
 
 
-def test_translator_recognizes_task_tool_call_as_subagent_spawned() -> None:
+def test_translator_does_not_treat_partial_task_args_as_a_spawn() -> None:
     from langchain_core.messages import AIMessageChunk
 
     chunk = AIMessageChunk(
@@ -419,9 +464,10 @@ def test_translator_recognizes_task_tool_call_as_subagent_spawned() -> None:
     events = translate("messages", (chunk, {}))
     assert events == [
         {
-            "event": "subagent.spawned",
+            "event": "llm.tool_call_chunk",
             "data": {
                 "id": "call_task_1",
+                "name": "task",
                 "args_delta": '{"subagent_name": "researcher", "task_description": "find X"}',
                 "index": 0,
             },
@@ -429,7 +475,7 @@ def test_translator_recognizes_task_tool_call_as_subagent_spawned() -> None:
     ]
 
 
-def test_translator_recognizes_task_tool_result_as_subagent_completed() -> None:
+def test_translator_keeps_task_tool_result_as_generic_tool_completion() -> None:
     from langchain_core.messages import ToolMessage
 
     tm = ToolMessage(
@@ -438,14 +484,28 @@ def test_translator_recognizes_task_tool_result_as_subagent_completed() -> None:
         name="task",
     )
     events = translate("messages", (tm, {}))
-    # Event payload now also carries `tool` (alias of `name`) and
-    # `status` per Block 3 — needed by chatStore.ts so the renderer can
-    # show "completed time.now" headlines without re-keying. Assert on
-    # the keys we care about rather than full equality.
-    assert events[0]["event"] == "subagent.completed"
+    # The authoritative subagent terminal event comes from the durable
+    # Tool Receipt transition. This generic event remains for old clients.
+    assert events[0]["event"] == "tool.completed"
     assert events[0]["data"]["tool_call_id"] == "call_task_1"
     assert events[0]["data"]["name"] == "task"
     assert events[0]["data"]["content"] == "Research finished: see notes"
+
+
+def test_translator_keeps_failed_task_result_as_generic_tool_failure() -> None:
+    from langchain_core.messages import ToolMessage
+
+    tm = ToolMessage(
+        content="Subagent failed",
+        tool_call_id="call_task_1",
+        name="task",
+        status="error",
+    )
+
+    events = translate("messages", (tm, {}))
+
+    assert events[0]["event"] == "tool.failed"
+    assert events[0]["data"]["status"] == "error"
 
 
 def test_translator_keeps_regular_tools_as_tool_completed() -> None:

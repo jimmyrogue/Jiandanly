@@ -24,6 +24,9 @@ Tables in this file:
 - `plugin_installations` — principal-scoped active version and enabled state
 - `local_model_calls` — durable model-call reservations and usage receipts
 - `local_assistant_drafts` — latest complete top-level assistant model round
+- `local_agent_messages` — durable same-root Agent mailbox envelopes
+- `local_child_coordination` — immutable child completion/dependency policy
+- `local_collaboration_resource_claims` — one writer owner per root resource
 """
 
 from __future__ import annotations
@@ -34,6 +37,7 @@ import json
 import os
 import time
 import uuid
+from collections.abc import Sequence
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -152,6 +156,13 @@ CREATE TABLE IF NOT EXISTS local_mcp_catalog (
 CREATE TABLE IF NOT EXISTS local_runs (
     id TEXT PRIMARY KEY,
     principal_id TEXT NOT NULL DEFAULT 'local:owner',
+    run_kind TEXT NOT NULL DEFAULT 'turn' CHECK (run_kind IN ('turn', 'fork', 'child')),
+    root_run_id TEXT,
+    agent_definition_id TEXT NOT NULL DEFAULT 'shejane.default',
+    agent_definition_version TEXT NOT NULL DEFAULT '1',
+    collaboration_depth INTEGER NOT NULL DEFAULT 0 CHECK (collaboration_depth >= 0),
+    collaboration_policy_json TEXT NOT NULL DEFAULT '{}',
+    spawn_operation_id TEXT,
     graph_thread_id TEXT NOT NULL,
     graph_checkpoint_id TEXT,
     graph_definition_id TEXT,
@@ -344,6 +355,7 @@ CREATE TABLE IF NOT EXISTS local_model_calls (
     call_index INTEGER NOT NULL,
     model TEXT NOT NULL,
     purpose TEXT NOT NULL DEFAULT 'agent',
+    parent_tool_operation_id TEXT,
     status TEXT NOT NULL CHECK (
         status IN (
             'reserved', 'streaming', 'completed', 'completed_unmetered',
@@ -359,6 +371,7 @@ CREATE TABLE IF NOT EXISTS local_model_calls (
     first_output_at TEXT,
     completed_at TEXT,
     FOREIGN KEY (run_id) REFERENCES local_runs(id),
+    FOREIGN KEY (parent_tool_operation_id) REFERENCES local_tool_receipts(operation_id),
     UNIQUE (run_id, execution_attempt_id, call_index)
 );
 
@@ -367,6 +380,7 @@ CREATE TABLE IF NOT EXISTS local_tool_receipts (
     run_id TEXT NOT NULL,
     execution_attempt_id TEXT NOT NULL,
     execution_namespace TEXT NOT NULL,
+    parent_operation_id TEXT,
     tool_call_id TEXT NOT NULL,
     tool_name TEXT NOT NULL,
     tool_version TEXT NOT NULL,
@@ -388,12 +402,91 @@ CREATE TABLE IF NOT EXISTS local_tool_receipts (
     completed_at TEXT,
     updated_at TEXT NOT NULL,
     FOREIGN KEY (run_id) REFERENCES local_runs(id),
+    FOREIGN KEY (parent_operation_id) REFERENCES local_tool_receipts(operation_id),
     UNIQUE (run_id, execution_namespace, tool_call_id)
 );
 CREATE INDEX IF NOT EXISTS idx_local_tool_receipts_run_status
     ON local_tool_receipts(run_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_local_model_calls_run
     ON local_model_calls(run_id, call_index);
+
+CREATE TABLE IF NOT EXISTS local_agent_messages (
+    id TEXT PRIMARY KEY,
+    root_run_id TEXT NOT NULL,
+    sender_run_id TEXT NOT NULL,
+    recipient_run_id TEXT NOT NULL,
+    sender_operation_id TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL CHECK (kind IN ('request', 'question', 'update', 'result', 'cancel')),
+    text TEXT NOT NULL,
+    data_json TEXT NOT NULL DEFAULT '{}',
+    artifact_refs_json TEXT NOT NULL DEFAULT '[]',
+    correlation_id TEXT NOT NULL,
+    in_reply_to TEXT,
+    sequence INTEGER NOT NULL CHECK (sequence >= 1),
+    hop_count INTEGER NOT NULL CHECK (hop_count >= 0),
+    status TEXT NOT NULL CHECK (status IN ('queued', 'delivered', 'acknowledged', 'expired')),
+    ttl_seconds INTEGER NOT NULL CHECK (ttl_seconds >= 60),
+    deadline_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    delivered_at TEXT,
+    acknowledged_at TEXT,
+    FOREIGN KEY (root_run_id) REFERENCES local_runs(id),
+    FOREIGN KEY (sender_run_id) REFERENCES local_runs(id),
+    FOREIGN KEY (recipient_run_id) REFERENCES local_runs(id),
+    FOREIGN KEY (sender_operation_id) REFERENCES local_tool_receipts(operation_id),
+    FOREIGN KEY (in_reply_to) REFERENCES local_agent_messages(id)
+);
+CREATE INDEX IF NOT EXISTS idx_local_agent_messages_inbox
+    ON local_agent_messages(recipient_run_id, status, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_local_agent_messages_outbox
+    ON local_agent_messages(sender_run_id, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_local_agent_messages_correlation
+    ON local_agent_messages(correlation_id, sequence, id);
+
+CREATE TABLE IF NOT EXISTS local_child_coordination (
+    child_run_id TEXT PRIMARY KEY,
+    root_run_id TEXT NOT NULL,
+    parent_run_id TEXT NOT NULL,
+    completion_mode TEXT NOT NULL
+        CHECK (completion_mode IN ('required', 'best_effort', 'quorum')),
+    quorum_group TEXT,
+    quorum_required INTEGER CHECK (quorum_required IS NULL OR quorum_required >= 1),
+    created_at TEXT NOT NULL,
+    CHECK (
+        (completion_mode = 'quorum' AND quorum_group IS NOT NULL AND quorum_required IS NOT NULL)
+        OR
+        (completion_mode != 'quorum' AND quorum_group IS NULL AND quorum_required IS NULL)
+    ),
+    FOREIGN KEY (child_run_id) REFERENCES local_runs(id),
+    FOREIGN KEY (root_run_id) REFERENCES local_runs(id),
+    FOREIGN KEY (parent_run_id) REFERENCES local_runs(id)
+);
+CREATE INDEX IF NOT EXISTS idx_local_child_coordination_parent
+    ON local_child_coordination(parent_run_id, completion_mode, quorum_group, child_run_id);
+
+CREATE TABLE IF NOT EXISTS local_child_dependencies (
+    child_run_id TEXT NOT NULL,
+    dependency_run_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (child_run_id, dependency_run_id),
+    CHECK (child_run_id != dependency_run_id),
+    FOREIGN KEY (child_run_id) REFERENCES local_runs(id),
+    FOREIGN KEY (dependency_run_id) REFERENCES local_runs(id)
+);
+CREATE INDEX IF NOT EXISTS idx_local_child_dependencies_dependency
+    ON local_child_dependencies(dependency_run_id, child_run_id);
+
+CREATE TABLE IF NOT EXISTS local_collaboration_resource_claims (
+    root_run_id TEXT NOT NULL,
+    resource_key TEXT NOT NULL,
+    owner_run_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (root_run_id, resource_key),
+    FOREIGN KEY (root_run_id) REFERENCES local_runs(id),
+    FOREIGN KEY (owner_run_id) REFERENCES local_runs(id)
+);
+CREATE INDEX IF NOT EXISTS idx_local_collaboration_resource_owner
+    ON local_collaboration_resource_claims(owner_run_id, resource_key);
 
 -- Sandbox launchers this Runtime spawned but cannot clean up if it is killed
 -- outright. The in-process paths (timeout, cancellation, failure) reap their
@@ -766,10 +859,40 @@ TRANSIENT_RUN_EVENT_TYPES = frozenset(
         "llm.reasoning",
         "llm.usage",
         "llm.tool_call_chunk",
-        "subagent.spawned",
         "tool.progress",
     }
 )
+
+_SUBAGENT_EVENT_BY_RECEIPT_STATUS = {
+    "prepared": ("subagent.spawned", "queued"),
+    "running": ("subagent.started", "running"),
+    "paused": ("subagent.waiting", "waiting"),
+    "completed": ("subagent.completed", "completed"),
+    "failed": ("subagent.failed", "failed"),
+    "rejected": ("subagent.failed", "failed"),
+    "canceled": ("subagent.canceled", "canceled"),
+    "outcome_unknown": ("subagent.outcome_unknown", "unknown"),
+}
+
+MAX_DURABLE_CHILD_DEPTH = 1
+MAX_DURABLE_CHILDREN_PER_RUN = 8
+MAX_DURABLE_CHILD_DEPENDENCIES = MAX_DURABLE_CHILDREN_PER_RUN - 1
+MAX_DURABLE_CHILD_RESOURCE_CLAIMS = 16
+MAX_AGENT_MAILBOX_PENDING = 32
+MAX_AGENT_MAILBOX_MESSAGES_PER_ROOT = 512
+MAX_AGENT_MAILBOX_HOPS = 8
+MAX_AGENT_MAILBOX_ARTIFACT_REFS = 16
+MAX_AGENT_MAILBOX_TEXT_BYTES = 32 * 1024
+MAX_AGENT_MAILBOX_DATA_BYTES = 16 * 1024
+_CHILD_EVENT_BY_RUN_EVENT = {
+    "run.started": ("child.started", "running"),
+    "run.resumed": ("child.started", "running"),
+    "run.waiting": ("child.waiting", None),
+    "run.completed": ("child.completed", "completed"),
+    "run.failed": ("child.failed", "failed"),
+    "run.canceled": ("child.canceled", "canceled"),
+    "run.cleanup_required": ("child.cleanup_required", "cleanup_required"),
+}
 
 
 def _encode_payload(payload: dict[str, Any]) -> str:
@@ -798,6 +921,207 @@ def _json_payload(raw: Any) -> dict[str, Any]:
     except (json.JSONDecodeError, TypeError):
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def _normalize_workspace_resource_key(workspace_path: str | None, requested_path: str) -> str:
+    if not workspace_path:
+        raise RunAdmissionError(
+            "child_resource_workspace_required",
+            "resource ownership requires an authorized workspace",
+        )
+    raw = str(requested_path).strip()
+    if not raw or "\x00" in raw:
+        raise ValueError("collaboration resource path is invalid")
+    workspace = Path(workspace_path).resolve(strict=False)
+    candidate = Path(raw)
+    if candidate.is_absolute():
+        absolute = candidate.resolve(strict=False)
+        resolved = (
+            absolute
+            if absolute.is_relative_to(workspace)
+            else (workspace / raw.lstrip("/\\")).resolve(strict=False)
+        )
+    else:
+        resolved = (workspace / candidate).resolve(strict=False)
+    try:
+        relative = resolved.relative_to(workspace)
+    except ValueError as exc:
+        raise RunAdmissionError(
+            "child_resource_outside_workspace",
+            "collaboration resource path must stay inside the authorized workspace",
+        ) from exc
+    key = PurePosixPath(relative.as_posix()).as_posix()
+    if key in {"", "."}:
+        raise ValueError("collaboration resource must identify a file inside the workspace")
+    if len(key.encode("utf-8")) > 4096:
+        raise ValueError("collaboration resource path is too long")
+    return key
+
+
+def _normalize_child_coordination(
+    coordination: dict[str, Any] | None,
+    *,
+    workspace_path: str | None,
+) -> dict[str, Any]:
+    raw = dict(coordination or {})
+    unknown = set(raw) - {
+        "completion_mode",
+        "depends_on",
+        "resource_claims",
+        "quorum_group",
+        "quorum_required",
+    }
+    if unknown:
+        raise ValueError(f"unknown child coordination fields: {', '.join(sorted(unknown))}")
+
+    completion_mode = str(raw.get("completion_mode") or "required").strip()
+    if completion_mode not in {"required", "best_effort", "quorum"}:
+        raise ValueError("child completion_mode is invalid")
+
+    depends_raw = raw.get("depends_on") or []
+    if isinstance(depends_raw, (str, bytes)) or not isinstance(depends_raw, Sequence):
+        raise ValueError("child depends_on must be a list")
+    depends_on = [str(run_id).strip() for run_id in depends_raw]
+    if (
+        len(depends_on) > MAX_DURABLE_CHILD_DEPENDENCIES
+        or len(depends_on) != len(set(depends_on))
+        or any(not run_id or len(run_id) > 128 for run_id in depends_on)
+    ):
+        raise ValueError("child depends_on is invalid")
+
+    claims_raw = raw.get("resource_claims") or []
+    if isinstance(claims_raw, (str, bytes)) or not isinstance(claims_raw, Sequence):
+        raise ValueError("child resource_claims must be a list")
+    resource_claims = [
+        _normalize_workspace_resource_key(workspace_path, str(path)) for path in claims_raw
+    ]
+    if len(resource_claims) > MAX_DURABLE_CHILD_RESOURCE_CLAIMS or len(resource_claims) != len(
+        set(resource_claims)
+    ):
+        raise ValueError("child resource_claims is invalid")
+
+    quorum_group_raw = raw.get("quorum_group")
+    quorum_required_raw = raw.get("quorum_required")
+    if completion_mode == "quorum":
+        quorum_group = str(quorum_group_raw or "").strip()
+        if not quorum_group or len(quorum_group) > 128:
+            raise ValueError("quorum children require a quorum_group")
+        if isinstance(quorum_required_raw, bool) or not isinstance(quorum_required_raw, int):
+            raise ValueError("quorum children require quorum_required")
+        if not 1 <= quorum_required_raw <= MAX_DURABLE_CHILDREN_PER_RUN:
+            raise ValueError("child quorum_required is invalid")
+        quorum_required: int | None = quorum_required_raw
+    else:
+        if quorum_group_raw is not None or quorum_required_raw is not None:
+            raise ValueError("quorum fields are only valid for quorum children")
+        quorum_group = None
+        quorum_required = None
+
+    return {
+        "completion_mode": completion_mode,
+        "depends_on": depends_on,
+        "resource_claims": resource_claims,
+        "quorum_group": quorum_group,
+        "quorum_required": quorum_required,
+    }
+
+
+def _agent_message_projection(row: dict[str, Any]) -> dict[str, Any]:
+    projected = dict(row)
+    projected["data"] = _json_payload(projected.pop("data_json", None))
+    try:
+        artifact_refs = json.loads(str(projected.pop("artifact_refs_json", "[]")))
+    except (json.JSONDecodeError, TypeError):
+        artifact_refs = []
+    projected["artifact_refs"] = artifact_refs if isinstance(artifact_refs, list) else []
+    projected["sequence"] = int(projected["sequence"])
+    projected["hop_count"] = int(projected["hop_count"])
+    projected["ttl_seconds"] = int(projected["ttl_seconds"])
+    return projected
+
+
+def _normalize_agent_message_content(
+    *,
+    kind: str,
+    text: str,
+    data: dict[str, Any],
+    artifact_refs: Sequence[str],
+    ttl_seconds: int,
+) -> tuple[str, str, str, str, int]:
+    normalized_kind = str(kind).strip().lower()
+    if normalized_kind not in {"request", "question", "update", "result", "cancel"}:
+        raise ValueError("Agent message kind is invalid")
+    normalized_text = str(text).strip()
+    if len(normalized_text.encode("utf-8")) > MAX_AGENT_MAILBOX_TEXT_BYTES:
+        raise ValueError("Agent message text is too large")
+    if not isinstance(data, dict):
+        raise ValueError("Agent message data must be an object")
+    try:
+        data_json = json.dumps(
+            data,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Agent message data must be JSON-compatible") from exc
+    if len(data_json.encode("utf-8")) > MAX_AGENT_MAILBOX_DATA_BYTES:
+        raise ValueError("Agent message data is too large")
+    if isinstance(artifact_refs, (str, bytes)):
+        raise ValueError("Agent message artifact_refs must be a list")
+    normalized_refs = list(dict.fromkeys(str(ref).strip() for ref in artifact_refs))
+    if len(normalized_refs) > MAX_AGENT_MAILBOX_ARTIFACT_REFS or any(
+        not ref or len(ref) > 512 for ref in normalized_refs
+    ):
+        raise ValueError("Agent message artifact_refs are invalid")
+    if not normalized_text and not data and not normalized_refs:
+        raise ValueError("Agent message content is empty")
+    if isinstance(ttl_seconds, bool) or not 60 <= int(ttl_seconds) <= 24 * 60 * 60:
+        raise ValueError("Agent message ttl_seconds must be between 60 and 86400")
+    return (
+        normalized_kind,
+        normalized_text,
+        data_json,
+        _encode_payload(normalized_refs),
+        int(ttl_seconds),
+    )
+
+
+def _normalize_child_agent_definition(value: dict[str, Any]) -> dict[str, Any]:
+    allowed_keys = {
+        "id",
+        "version",
+        "name",
+        "description",
+        "system_prompt",
+        "allowed_tools",
+    }
+    if set(value) != allowed_keys:
+        raise ValueError("child Agent definition has invalid fields")
+    normalized: dict[str, Any] = {}
+    for key, maximum in (
+        ("id", 128),
+        ("version", 128),
+        ("name", 64),
+        ("description", 4096),
+        ("system_prompt", 32 * 1024),
+    ):
+        raw = value.get(key)
+        if not isinstance(raw, str) or not raw.strip() or len(raw) > maximum:
+            raise ValueError(f"child Agent definition {key} is invalid")
+        normalized[key] = raw.strip()
+    raw_tools = value.get("allowed_tools")
+    if (
+        not isinstance(raw_tools, list)
+        or len(raw_tools) > 128
+        or any(not isinstance(name, str) or not name or len(name) > 128 for name in raw_tools)
+    ):
+        raise ValueError("child Agent definition allowed_tools is invalid")
+    normalized["allowed_tools"] = sorted(set(raw_tools))
+    if len(_encode_payload(normalized).encode("utf-8")) > 64 * 1024:
+        raise ValueError("child Agent definition is too large")
+    return normalized
 
 
 def _decode_mcp_catalog_row(row: Any) -> dict[str, Any] | None:
@@ -939,6 +1263,56 @@ class LocalStore:
             await conn.execute(
                 "ALTER TABLE local_runs ADD COLUMN principal_id TEXT NOT NULL DEFAULT 'local:owner'"
             )
+        if "run_kind" not in columns:
+            await conn.execute(
+                "ALTER TABLE local_runs ADD COLUMN run_kind TEXT NOT NULL DEFAULT 'turn' "
+                "CHECK (run_kind IN ('turn', 'fork', 'child'))"
+            )
+        if "root_run_id" not in columns:
+            await conn.execute("ALTER TABLE local_runs ADD COLUMN root_run_id TEXT")
+            await conn.execute("UPDATE local_runs SET root_run_id = id WHERE root_run_id IS NULL")
+        if "agent_definition_id" not in columns:
+            await conn.execute(
+                "ALTER TABLE local_runs ADD COLUMN agent_definition_id TEXT NOT NULL "
+                "DEFAULT 'shejane.default'"
+            )
+        if "agent_definition_version" not in columns:
+            await conn.execute(
+                "ALTER TABLE local_runs ADD COLUMN agent_definition_version TEXT NOT NULL "
+                "DEFAULT '1'"
+            )
+        if "collaboration_depth" not in columns:
+            await conn.execute(
+                "ALTER TABLE local_runs ADD COLUMN collaboration_depth INTEGER NOT NULL "
+                "DEFAULT 0 CHECK (collaboration_depth >= 0)"
+            )
+        if "collaboration_policy_json" not in columns:
+            await conn.execute(
+                "ALTER TABLE local_runs ADD COLUMN collaboration_policy_json TEXT NOT NULL "
+                "DEFAULT '{}'"
+            )
+        if "spawn_operation_id" not in columns:
+            await conn.execute("ALTER TABLE local_runs ADD COLUMN spawn_operation_id TEXT")
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_local_runs_parent_kind "
+            "ON local_runs(parent_run_id, run_kind, created_at, id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_local_runs_root "
+            "ON local_runs(root_run_id, created_at, id)"
+        )
+        await conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_local_runs_spawn_operation "
+            "ON local_runs(spawn_operation_id) WHERE spawn_operation_id IS NOT NULL"
+        )
+        await conn.execute(
+            "INSERT OR IGNORE INTO local_child_coordination "
+            "(child_run_id, root_run_id, parent_run_id, completion_mode, quorum_group, "
+            "quorum_required, created_at) "
+            "SELECT id, COALESCE(root_run_id, parent_run_id), parent_run_id, 'required', "
+            "NULL, NULL, created_at FROM local_runs "
+            "WHERE run_kind = 'child' AND parent_run_id IS NOT NULL"
+        )
         if "graph_thread_id" not in columns:
             await conn.execute("ALTER TABLE local_runs ADD COLUMN graph_thread_id TEXT")
             await conn.execute(
@@ -952,6 +1326,10 @@ class LocalStore:
             await conn.execute(
                 "ALTER TABLE local_runs ADD COLUMN graph_input_kind TEXT NOT NULL DEFAULT 'new'"
             )
+        await conn.execute(
+            "UPDATE local_runs SET run_kind = 'fork' "
+            "WHERE graph_input_kind = 'fork' AND run_kind = 'turn'"
+        )
         if "thread_id" not in columns:
             await conn.execute("ALTER TABLE local_runs ADD COLUMN thread_id TEXT")
         if "assistant_item_id" not in columns:
@@ -1039,13 +1417,24 @@ class LocalStore:
         await LocalStore._ensure_tool_receipt_namespace(conn)
         await LocalStore._ensure_tool_receipt_version_column(conn)
         await LocalStore._ensure_tool_receipt_review_columns(conn)
+        await LocalStore._ensure_tool_receipt_parent_column(conn)
         await LocalStore._ensure_model_call_purpose_column(conn)
+        await LocalStore._ensure_model_call_parent_operation_column(conn)
         await LocalStore._ensure_wait_candidates(conn)
         await LocalStore._ensure_artifact_storage_columns(conn)
         transient_placeholders = ",".join("?" for _ in TRANSIENT_RUN_EVENT_TYPES)
         await conn.execute(
             f"DELETE FROM local_events WHERE event_type IN ({transient_placeholders})",
             tuple(sorted(TRANSIENT_RUN_EVENT_TYPES)),
+        )
+        # Before receipt-backed lifecycle events existed, `subagent.spawned`
+        # was a best-effort projection of a partial model stream chunk. Those
+        # rows have no stable operation identity and must not survive a reopen.
+        # Receipt-backed spawn events carry `operation_id` and are authoritative.
+        await conn.execute(
+            "DELETE FROM local_events WHERE event_type = 'subagent.spawned' "
+            "AND (json_valid(payload_json) = 0 "
+            "OR COALESCE(json_extract(payload_json, '$.operation_id'), '') = '')"
         )
         # Lark integration was removed; delete its local-only cache and todo data.
         for table in (
@@ -1283,6 +1672,19 @@ class LocalStore:
                 await conn.execute(f"ALTER TABLE local_tool_receipts ADD COLUMN {column} TEXT")
 
     @staticmethod
+    async def _ensure_tool_receipt_parent_column(conn: aiosqlite.Connection) -> None:
+        cursor = await conn.execute("PRAGMA table_info(local_tool_receipts)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "parent_operation_id" not in columns:
+            await conn.execute(
+                "ALTER TABLE local_tool_receipts ADD COLUMN parent_operation_id TEXT"
+            )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_local_tool_receipts_parent "
+            "ON local_tool_receipts(parent_operation_id, created_at)"
+        )
+
+    @staticmethod
     async def _ensure_model_call_purpose_column(conn: aiosqlite.Connection) -> None:
         cursor = await conn.execute("PRAGMA table_info(local_model_calls)")
         columns = {row[1] for row in await cursor.fetchall()}
@@ -1290,6 +1692,19 @@ class LocalStore:
             await conn.execute(
                 "ALTER TABLE local_model_calls ADD COLUMN purpose TEXT NOT NULL DEFAULT 'agent'"
             )
+
+    @staticmethod
+    async def _ensure_model_call_parent_operation_column(conn: aiosqlite.Connection) -> None:
+        cursor = await conn.execute("PRAGMA table_info(local_model_calls)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "parent_tool_operation_id" not in columns:
+            await conn.execute(
+                "ALTER TABLE local_model_calls ADD COLUMN parent_tool_operation_id TEXT"
+            )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_local_model_calls_parent_tool "
+            "ON local_model_calls(parent_tool_operation_id, call_index)"
+        )
 
     @staticmethod
     async def _ensure_tool_receipt_namespace(conn: aiosqlite.Connection) -> None:
@@ -1573,6 +1988,26 @@ class LocalStore:
     def current_execution_lease() -> ExecutionLease | None:
         return _CURRENT_EXECUTION_LEASE.get()
 
+    @staticmethod
+    async def _require_tool_receipt_in_run_uncommitted(
+        conn: aiosqlite.Connection,
+        *,
+        operation_id: str,
+        run_id: str,
+    ) -> None:
+        receipt = await (
+            await conn.execute(
+                "SELECT run_id FROM local_tool_receipts WHERE operation_id = ?",
+                (operation_id,),
+            )
+        ).fetchone()
+        if receipt is None:
+            raise ToolReceiptStateError(f"parent tool receipt {operation_id} does not exist")
+        if str(receipt["run_id"]) != run_id:
+            raise ToolReceiptStateError(
+                f"parent tool receipt {operation_id} must belong to the same run"
+            )
+
     @asynccontextmanager
     async def run_write_transaction(
         self,
@@ -1625,6 +2060,7 @@ class LocalStore:
         model: str,
         max_calls: int,
         purpose: str = "agent",
+        parent_tool_operation_id: str | None = None,
     ) -> dict[str, Any]:
         """Atomically reserve one durable model-call slot for a run."""
         if purpose not in {
@@ -1636,6 +2072,12 @@ class LocalStore:
         }:
             raise ValueError("model call purpose is invalid")
         async with self.run_write_transaction(run_id) as conn:
+            if parent_tool_operation_id is not None:
+                await self._require_tool_receipt_in_run_uncommitted(
+                    conn,
+                    operation_id=parent_tool_operation_id,
+                    run_id=run_id,
+                )
             row = await (
                 await conn.execute(
                     "SELECT COUNT(*) AS total_count, "
@@ -1657,14 +2099,16 @@ class LocalStore:
                 "call_index": call_index,
                 "model": model,
                 "purpose": purpose,
+                "parent_tool_operation_id": parent_tool_operation_id,
                 "status": "reserved",
                 "created_at": _now(),
             }
             await conn.execute(
                 "INSERT INTO local_model_calls "
-                "(id, run_id, execution_attempt_id, call_index, model, purpose, status, created_at) "
-                "VALUES (:id, :run_id, :execution_attempt_id, :call_index, :model, :purpose, :status, "
-                ":created_at)",
+                "(id, run_id, execution_attempt_id, call_index, model, purpose, "
+                "parent_tool_operation_id, status, created_at) "
+                "VALUES (:id, :run_id, :execution_attempt_id, :call_index, :model, :purpose, "
+                ":parent_tool_operation_id, :status, :created_at)",
                 record,
             )
         return record
@@ -1958,6 +2402,244 @@ class LocalStore:
 
     # --- durable tool execution receipts ---
 
+    @staticmethod
+    def _subagent_invocation_projection(record: dict[str, Any]) -> dict[str, Any]:
+        receipt_status = str(record["status"])
+        _event_type, status = _SUBAGENT_EVENT_BY_RECEIPT_STATUS[receipt_status]
+        arguments = _json_payload(record.get("arguments_json"))
+        return {
+            "operation_id": str(record["operation_id"]),
+            "parent_run_id": str(record["run_id"]),
+            "parent_operation_id": (
+                str(record["parent_operation_id"])
+                if record.get("parent_operation_id") is not None
+                else None
+            ),
+            "tool_call_id": str(record["tool_call_id"]),
+            "subagent_type": str(arguments.get("subagent_type") or ""),
+            "description": str(arguments.get("description") or ""),
+            "status": status,
+            "receipt_status": receipt_status,
+            "attempt_count": int(record.get("attempt_count") or 0),
+            "usage": {
+                "model_calls": int(record.get("usage_model_calls") or 0),
+                "input_tokens": int(record.get("usage_input_tokens") or 0),
+                "output_tokens": int(record.get("usage_output_tokens") or 0),
+                "unmetered_calls": int(record.get("usage_unmetered_calls") or 0),
+                "outcome_unknown_calls": int(record.get("usage_outcome_unknown_calls") or 0),
+            },
+            "error_type": (
+                str(record["error_type"]) if record.get("error_type") is not None else None
+            ),
+            "created_at": str(record["created_at"]),
+            "started_at": (
+                str(record["started_at"]) if record.get("started_at") is not None else None
+            ),
+            "completed_at": (
+                str(record["completed_at"]) if record.get("completed_at") is not None else None
+            ),
+            "updated_at": str(record["updated_at"]),
+        }
+
+    @staticmethod
+    async def _subagent_invocations_uncommitted(
+        conn: aiosqlite.Connection,
+        run_ids: list[str],
+    ) -> list[dict[str, Any]]:
+        if not run_ids:
+            return []
+        placeholders = ",".join("?" for _ in run_ids)
+        rows = await (
+            await conn.execute(
+                "SELECT r.*, COUNT(m.id) AS usage_model_calls, "
+                "COALESCE(SUM(m.input_tokens), 0) AS usage_input_tokens, "
+                "COALESCE(SUM(m.output_tokens), 0) AS usage_output_tokens, "
+                "COALESCE(SUM(CASE WHEN m.status = 'completed_unmetered' THEN 1 ELSE 0 END), 0) "
+                "AS usage_unmetered_calls, "
+                "COALESCE(SUM(CASE WHEN m.status = 'outcome_unknown' THEN 1 ELSE 0 END), 0) "
+                "AS usage_outcome_unknown_calls "
+                "FROM local_tool_receipts r LEFT JOIN local_model_calls m "
+                "ON m.parent_tool_operation_id = r.operation_id "
+                f"WHERE r.tool_name = 'task' AND r.run_id IN ({placeholders}) "
+                "GROUP BY r.operation_id ORDER BY r.created_at, r.operation_id",
+                run_ids,
+            )
+        ).fetchall()
+        return [LocalStore._subagent_invocation_projection(dict(row)) for row in rows]
+
+    async def list_subagent_invocations_for_runs(
+        self,
+        run_ids: list[str],
+    ) -> list[dict[str, Any]]:
+        """Return receipt-owned SubAgent snapshots for a batch of parent Runs."""
+        normalized_run_ids = list(dict.fromkeys(str(run_id) for run_id in run_ids if run_id))
+        return await self._subagent_invocations_uncommitted(self._conn, normalized_run_ids)
+
+    @staticmethod
+    async def _touch_thread_for_run_event_uncommitted(
+        conn: aiosqlite.Connection,
+        *,
+        run_id: str,
+        change_type: str,
+        event_high_watermark: int,
+        changed_at: str,
+    ) -> None:
+        """Publish a Run event to P4 without changing assistant content or status."""
+        run = await (
+            await conn.execute(
+                "SELECT principal_id, thread_id, assistant_item_id FROM local_runs WHERE id = ?",
+                (run_id,),
+            )
+        ).fetchone()
+        if run is None or not run["thread_id"] or not run["assistant_item_id"]:
+            return
+        item_cursor = await conn.execute(
+            "UPDATE local_thread_items SET event_high_watermark = "
+            "MAX(event_high_watermark, ?), version = version + 1, updated_at = ? "
+            "WHERE id = ? AND run_id = ?",
+            (event_high_watermark, changed_at, run["assistant_item_id"], run_id),
+        )
+        if item_cursor.rowcount != 1:
+            raise RunResultConflictError(f"run {run_id} is missing its assistant projection")
+        thread = await (
+            await conn.execute(
+                "SELECT version FROM local_threads WHERE id = ? AND principal_id = ?",
+                (run["thread_id"], run["principal_id"]),
+            )
+        ).fetchone()
+        if thread is None:
+            raise RunResultConflictError(f"run {run_id} is missing its thread projection")
+        thread_version = int(thread["version"]) + 1
+        await conn.execute(
+            "UPDATE local_threads SET version = ?, updated_at = ? WHERE id = ?",
+            (thread_version, changed_at, run["thread_id"]),
+        )
+        await conn.execute(
+            "INSERT INTO local_thread_changes "
+            "(principal_id, thread_id, thread_version, change_type, run_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                run["principal_id"],
+                run["thread_id"],
+                thread_version,
+                change_type,
+                run_id,
+                changed_at,
+            ),
+        )
+
+    async def _append_subagent_receipt_event_uncommitted(
+        self,
+        conn: aiosqlite.Connection,
+        receipt: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if str(receipt.get("tool_name") or "") != "task":
+            return None
+        usage = await (
+            await conn.execute(
+                "SELECT COUNT(*) AS usage_model_calls, "
+                "COALESCE(SUM(input_tokens), 0) AS usage_input_tokens, "
+                "COALESCE(SUM(output_tokens), 0) AS usage_output_tokens, "
+                "COALESCE(SUM(CASE WHEN status = 'completed_unmetered' THEN 1 ELSE 0 END), 0) "
+                "AS usage_unmetered_calls, "
+                "COALESCE(SUM(CASE WHEN status = 'outcome_unknown' THEN 1 ELSE 0 END), 0) "
+                "AS usage_outcome_unknown_calls FROM local_model_calls "
+                "WHERE parent_tool_operation_id = ?",
+                (receipt["operation_id"],),
+            )
+        ).fetchone()
+        projected = self._subagent_invocation_projection(
+            {**receipt, **(dict(usage) if usage is not None else {})}
+        )
+        event_type, _status = _SUBAGENT_EVENT_BY_RECEIPT_STATUS[str(receipt["status"])]
+        event = await self._append_event_uncommitted(
+            conn,
+            str(receipt["run_id"]),
+            event_type,
+            payload_json=_encode_payload(projected),
+            created_at=str(receipt["updated_at"]),
+        )
+        await self._touch_thread_for_run_event_uncommitted(
+            conn,
+            run_id=str(receipt["run_id"]),
+            change_type=event_type,
+            event_high_watermark=int(event["seq"]),
+            changed_at=str(receipt["updated_at"]),
+        )
+        return event
+
+    async def _mark_running_tool_receipts_outcome_unknown_uncommitted(
+        self,
+        conn: aiosqlite.Connection,
+        *,
+        run_id: str,
+        execution_attempt_id: str,
+        error_type: str,
+        now: str,
+    ) -> None:
+        """Fence a lost attempt and project every transitioned task atomically."""
+        running = await (
+            await conn.execute(
+                "SELECT * FROM local_tool_receipts WHERE run_id = ? "
+                "AND execution_attempt_id = ? AND status = 'running' "
+                "ORDER BY created_at, operation_id",
+                (run_id, execution_attempt_id),
+            )
+        ).fetchall()
+        if not running:
+            return
+        await conn.execute(
+            "UPDATE local_tool_receipts SET status = 'outcome_unknown', "
+            "error_type = ?, updated_at = ?, completed_at = ? "
+            "WHERE run_id = ? AND execution_attempt_id = ? AND status = 'running'",
+            (error_type, now, now, run_id, execution_attempt_id),
+        )
+        for row in running:
+            receipt = {
+                **dict(row),
+                "status": "outcome_unknown",
+                "error_type": error_type,
+                "updated_at": now,
+                "completed_at": now,
+            }
+            await self._append_subagent_receipt_event_uncommitted(conn, receipt)
+
+    async def _cancel_unstarted_tool_receipts_uncommitted(
+        self,
+        conn: aiosqlite.Connection,
+        *,
+        run_id: str,
+        canceled_at: str,
+        error_type: str = "RunCanceled",
+    ) -> None:
+        """Close queued or paused tools when their parent Run can no longer resume them."""
+        open_receipts = await (
+            await conn.execute(
+                "SELECT * FROM local_tool_receipts WHERE run_id = ? "
+                "AND status IN ('prepared', 'paused') ORDER BY created_at, operation_id",
+                (run_id,),
+            )
+        ).fetchall()
+        if not open_receipts:
+            return
+        await conn.execute(
+            "UPDATE local_tool_receipts SET status = 'canceled', "
+            "error_type = ?, completed_at = ?, updated_at = ? "
+            "WHERE run_id = ? AND status IN ('prepared', 'paused')",
+            (error_type, canceled_at, canceled_at, run_id),
+        )
+        for row in open_receipts:
+            await self._append_subagent_receipt_event_uncommitted(
+                conn,
+                {
+                    **dict(row),
+                    "status": "canceled",
+                    "error_type": error_type,
+                    "completed_at": canceled_at,
+                    "updated_at": canceled_at,
+                },
+            )
+
     async def prepare_tool_receipt(
         self,
         *,
@@ -1971,8 +2653,17 @@ class LocalStore:
         risk: str,
         tool_version: str = "",
         execution_namespace: str = "main",
+        parent_operation_id: str | None = None,
     ) -> dict[str, Any]:
         async with self.run_write_transaction(run_id) as conn:
+            if parent_operation_id is not None:
+                if parent_operation_id == operation_id:
+                    raise ToolReceiptStateError(f"tool receipt {operation_id} cannot parent itself")
+                await self._require_tool_receipt_in_run_uncommitted(
+                    conn,
+                    operation_id=parent_operation_id,
+                    run_id=run_id,
+                )
             existing = await (
                 await conn.execute(
                     "SELECT * FROM local_tool_receipts WHERE run_id = ? "
@@ -1982,9 +2673,14 @@ class LocalStore:
             ).fetchone()
             if existing is not None:
                 record = dict(existing)
+                existing_parent_operation_id = record.get("parent_operation_id")
                 if (
                     record["operation_id"] != operation_id
                     or record["execution_namespace"] != execution_namespace
+                    or (
+                        parent_operation_id is not None
+                        and existing_parent_operation_id not in {None, parent_operation_id}
+                    )
                     or record["tool_name"] != tool_name
                     or record["tool_version"] != tool_version
                     or record["arguments_hash"] != arguments_hash
@@ -1992,19 +2688,28 @@ class LocalStore:
                     raise ToolReceiptConflictError(
                         f"tool call {tool_call_id} was reused with a different operation identity"
                     )
+                if parent_operation_id is not None and existing_parent_operation_id is None:
+                    await conn.execute(
+                        "UPDATE local_tool_receipts SET parent_operation_id = ? "
+                        "WHERE operation_id = ? AND parent_operation_id IS NULL",
+                        (parent_operation_id, operation_id),
+                    )
+                    record["parent_operation_id"] = parent_operation_id
                 return record
             now = _now()
             await conn.execute(
                 "INSERT INTO local_tool_receipts "
                 "(operation_id, run_id, execution_attempt_id, execution_namespace, "
+                "parent_operation_id, "
                 "tool_call_id, tool_name, "
                 "tool_version, arguments_hash, arguments_json, risk, status, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?, ?)",
                 (
                     operation_id,
                     run_id,
                     execution_attempt_id,
                     execution_namespace,
+                    parent_operation_id,
                     tool_call_id,
                     tool_name,
                     tool_version,
@@ -2022,7 +2727,9 @@ class LocalStore:
                 )
             ).fetchone()
             assert row is not None
-            return dict(row)
+            record = dict(row)
+            await self._append_subagent_receipt_event_uncommitted(conn, record)
+            return record
 
     async def record_tool_review(
         self,
@@ -2091,6 +2798,7 @@ class LocalStore:
         run_id: str,
         execution_attempt_id: str,
     ) -> dict[str, Any]:
+        execution_lease = _CURRENT_EXECUTION_LEASE.get()
         async with self.run_write_transaction(run_id) as conn:
             row = await (
                 await conn.execute(
@@ -2102,7 +2810,7 @@ class LocalStore:
                 raise ToolReceiptStateError(f"tool receipt {operation_id} is missing")
             record = dict(row)
             status = str(record["status"])
-            if status in {"completed", "failed", "rejected"}:
+            if status in {"completed", "failed", "rejected", "canceled"}:
                 return record
             if status in {"running", "outcome_unknown"}:
                 raise ToolOutcomeUnknownError(
@@ -2113,6 +2821,40 @@ class LocalStore:
                     f"tool operation {operation_id} cannot start from {status}"
                 )
             now = _now()
+            if execution_lease is not None:
+                job = await (
+                    await conn.execute(
+                        "SELECT cancel_requested_at FROM local_run_jobs "
+                        "WHERE id = ? AND run_id = ? AND status = 'leased' "
+                        "AND lease_owner = ? AND lease_generation = ?",
+                        (
+                            execution_lease.job_id,
+                            run_id,
+                            execution_lease.lease_owner,
+                            execution_lease.lease_generation,
+                        ),
+                    )
+                ).fetchone()
+                if job is None:
+                    raise LeaseFenceError("tool execution lease is stale")
+                if job["cancel_requested_at"] is not None:
+                    await conn.execute(
+                        "UPDATE local_tool_receipts SET status = 'canceled', "
+                        "error_type = 'RunCanceledBeforeToolStart', completed_at = ?, "
+                        "updated_at = ? WHERE operation_id = ? AND run_id = ? "
+                        "AND status IN ('prepared', 'paused')",
+                        (now, now, operation_id, run_id),
+                    )
+                    canceled = await (
+                        await conn.execute(
+                            "SELECT * FROM local_tool_receipts WHERE operation_id = ?",
+                            (operation_id,),
+                        )
+                    ).fetchone()
+                    assert canceled is not None
+                    record = dict(canceled)
+                    await self._append_subagent_receipt_event_uncommitted(conn, record)
+                    return record
             await conn.execute(
                 "UPDATE local_tool_receipts SET status = 'running', "
                 "execution_attempt_id = ?, attempt_count = attempt_count + 1, "
@@ -2127,7 +2869,9 @@ class LocalStore:
                 )
             ).fetchone()
             assert updated is not None
-            return dict(updated)
+            record = dict(updated)
+            await self._append_subagent_receipt_event_uncommitted(conn, record)
+            return record
 
     async def settle_tool_receipt(
         self,
@@ -2154,8 +2898,9 @@ class LocalStore:
                 "UPDATE local_tool_receipts SET status = ?, result_json = ?, result_hash = ?, "
                 "error_type = ?, updated_at = ?, completed_at = CASE WHEN ? = 'paused' "
                 "THEN completed_at ELSE ? END WHERE operation_id = ? AND run_id = ? "
-                "AND (status = 'running' OR (? IN ('rejected', 'failed', 'canceled') "
-                "AND status = 'prepared'))",
+                "AND (status = 'running' OR (? IN ('rejected', 'failed') "
+                "AND status = 'prepared') OR (? = 'canceled' "
+                "AND status IN ('prepared', 'paused')))",
                 (
                     status,
                     result_json,
@@ -2166,6 +2911,7 @@ class LocalStore:
                     now,
                     operation_id,
                     run_id,
+                    status,
                     status,
                 ),
             )
@@ -2178,7 +2924,9 @@ class LocalStore:
                 )
             ).fetchone()
             assert row is not None
-            return dict(row)
+            record = dict(row)
+            await self._append_subagent_receipt_event_uncommitted(conn, record)
+            return record
 
     async def reconcile_tool_receipt(
         self,
@@ -2197,6 +2945,9 @@ class LocalStore:
             "retry_not_executed": "prepared",
             "abort": "failed",
         }[decision]
+        settled_result_json = None if decision == "retry_not_executed" else result_json
+        settled_result_hash = None if decision == "retry_not_executed" else result_hash
+        error_type = "ReconciledByUser" if decision == "abort" else None
         async with self.run_write_transaction(run_id) as conn:
             now = _now()
             cursor = await conn.execute(
@@ -2206,9 +2957,9 @@ class LocalStore:
                 "WHERE operation_id = ? AND run_id = ? AND status = 'outcome_unknown'",
                 (
                     status,
-                    result_json,
-                    result_hash,
-                    None if decision == "confirmed_completed" else "ReconciledByUser",
+                    settled_result_json,
+                    settled_result_hash,
+                    error_type,
                     now,
                     status,
                     now,
@@ -2227,7 +2978,9 @@ class LocalStore:
                 )
             ).fetchone()
             assert row is not None
-            return dict(row)
+            record = dict(row)
+            await self._append_subagent_receipt_event_uncommitted(conn, record)
+            return record
 
     async def tool_execution_cancel_requested(self, run_id: str) -> bool:
         """Fence a tool start against the currently leased run job."""
@@ -2271,15 +3024,1120 @@ class LocalStore:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    async def accept_child_run(
+        self,
+        *,
+        parent_run_id: str,
+        spawn_operation_id: str,
+        goal: str,
+        agent_definition: dict[str, Any],
+        coordination: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], bool]:
+        """Atomically admit one Runtime-owned child Run and pending Job.
+
+        The caller must be executing the matching ``child.spawn`` Tool Receipt
+        under the parent's current job lease. ``spawn_operation_id`` is the
+        replay key, so a process crash can rediscover the same child instead of
+        creating a duplicate.
+        """
+        normalized_goal = goal.strip()
+        if not normalized_goal or len(normalized_goal) > 32 * 1024:
+            raise ValueError("child task is invalid")
+        definition = _normalize_child_agent_definition(agent_definition)
+        definition_json = _encode_payload(definition)
+        async with self.run_write_transaction(parent_run_id) as conn:
+            parent_row = await (
+                await conn.execute("SELECT * FROM local_runs WHERE id = ?", (parent_run_id,))
+            ).fetchone()
+            if parent_row is None:
+                raise KeyError(f"unknown parent run: {parent_run_id}")
+            parent = dict(parent_row)
+            normalized_coordination = _normalize_child_coordination(
+                coordination,
+                workspace_path=parent.get("workspace_path"),
+            )
+            policy = {
+                "max_depth": MAX_DURABLE_CHILD_DEPTH,
+                "max_children": MAX_DURABLE_CHILDREN_PER_RUN,
+                **normalized_coordination,
+            }
+            policy_json = _encode_payload(policy)
+            existing = await (
+                await conn.execute(
+                    "SELECT * FROM local_runs WHERE spawn_operation_id = ?",
+                    (spawn_operation_id,),
+                )
+            ).fetchone()
+            if existing is not None:
+                record = dict(existing)
+                metadata = _json_payload(record.get("metadata_json"))
+                if (
+                    record.get("run_kind") != "child"
+                    or record.get("parent_run_id") != parent_run_id
+                    or record.get("goal") != normalized_goal
+                    or record.get("agent_definition_id") != definition["id"]
+                    or record.get("agent_definition_version") != definition["version"]
+                    or _encode_payload(metadata.get("_child_agent_definition") or {})
+                    != definition_json
+                    or _encode_payload(_json_payload(record.get("collaboration_policy_json")))
+                    != policy_json
+                ):
+                    raise CommandConflictError(
+                        f"spawn operation {spawn_operation_id} was reused with a different child specification"
+                    )
+                return record, False
+
+            receipt = await (
+                await conn.execute(
+                    "SELECT tool_name, status, execution_attempt_id FROM local_tool_receipts "
+                    "WHERE operation_id = ? AND run_id = ?",
+                    (spawn_operation_id, parent_run_id),
+                )
+            ).fetchone()
+            if (
+                receipt is None
+                or receipt["tool_name"] != "child.spawn"
+                or receipt["status"] != "running"
+            ):
+                raise ToolReceiptStateError(
+                    "child admission requires its running child.spawn receipt"
+                )
+            lease = _CURRENT_EXECUTION_LEASE.get()
+            if lease is None:
+                raise LeaseFenceError("child admission requires the parent execution lease")
+            expected_attempt_id = f"{lease.job_id}:{lease.lease_generation}"
+            if str(receipt["execution_attempt_id"]) != expected_attempt_id:
+                raise LeaseFenceError("child.spawn receipt belongs to a stale execution attempt")
+            if parent["status"] != "running":
+                raise RunAdmissionError(
+                    "child_parent_not_running",
+                    "a child can only be admitted while its parent is running",
+                )
+            child_depth = int(parent.get("collaboration_depth") or 0) + 1
+            if child_depth > MAX_DURABLE_CHILD_DEPTH:
+                raise RunAdmissionError(
+                    "child_depth_exceeded",
+                    "durable child depth is exhausted for this Run",
+                )
+            child_count = int(
+                (
+                    await (
+                        await conn.execute(
+                            "SELECT COUNT(*) FROM local_runs "
+                            "WHERE parent_run_id = ? AND run_kind = 'child'",
+                            (parent_run_id,),
+                        )
+                    ).fetchone()
+                )[0]
+            )
+            if child_count >= MAX_DURABLE_CHILDREN_PER_RUN:
+                raise RunAdmissionError(
+                    "child_fanout_exceeded",
+                    "durable child fan-out is exhausted for this Run",
+                )
+
+            depends_on = normalized_coordination["depends_on"]
+            if depends_on:
+                placeholders = ",".join("?" for _ in depends_on)
+                rows = await (
+                    await conn.execute(
+                        "SELECT id FROM local_runs WHERE parent_run_id = ? "
+                        f"AND run_kind = 'child' AND id IN ({placeholders})",
+                        (parent_run_id, *depends_on),
+                    )
+                ).fetchall()
+                found = {str(row["id"]) for row in rows}
+                missing = [run_id for run_id in depends_on if run_id not in found]
+                if missing:
+                    raise RunAdmissionError(
+                        "child_dependency_invalid",
+                        "child dependencies must be previously admitted siblings",
+                    )
+
+            quorum_group = normalized_coordination["quorum_group"]
+            quorum_required = normalized_coordination["quorum_required"]
+            if quorum_group is not None:
+                existing_quorum = await (
+                    await conn.execute(
+                        "SELECT quorum_required FROM local_child_coordination "
+                        "WHERE parent_run_id = ? AND completion_mode = 'quorum' "
+                        "AND quorum_group = ? LIMIT 1",
+                        (parent_run_id, quorum_group),
+                    )
+                ).fetchone()
+                if existing_quorum is not None and int(existing_quorum[0]) != quorum_required:
+                    raise RunAdmissionError(
+                        "child_quorum_conflict",
+                        "all children in a quorum group must use the same quorum_required",
+                    )
+
+            root_run_id = str(parent.get("root_run_id") or parent_run_id)
+            for resource_key in normalized_coordination["resource_claims"]:
+                owner = await (
+                    await conn.execute(
+                        "SELECT owner_run_id FROM local_collaboration_resource_claims "
+                        "WHERE root_run_id = ? AND resource_key = ?",
+                        (root_run_id, resource_key),
+                    )
+                ).fetchone()
+                if owner is not None:
+                    raise RunAdmissionError(
+                        "child_resource_already_owned",
+                        f"collaboration resource is already owned by {owner['owner_run_id']}",
+                    )
+
+            parent_metadata = _json_payload(parent.get("metadata_json"))
+            child_metadata: dict[str, Any] = {
+                "_child_agent_definition": definition,
+                "_spawn_operation_id": spawn_operation_id,
+            }
+            attachments = parent_metadata.get("_attachments")
+            if isinstance(attachments, list):
+                child_metadata["_attachments"] = attachments
+            child = self._new_run_record(
+                principal_id=str(parent["principal_id"]),
+                goal=normalized_goal,
+                workspace_path=parent.get("workspace_path"),
+                parent_run_id=parent_run_id,
+                root_run_id=root_run_id,
+                settings=_json_payload(parent.get("settings_json")),
+                metadata=child_metadata,
+                mode=str(parent["mode"]),
+                run_kind="child",
+                agent_definition_id=str(definition["id"]),
+                agent_definition_version=str(definition["version"]),
+                collaboration_depth=child_depth,
+                collaboration_policy=policy,
+                spawn_operation_id=spawn_operation_id,
+            )
+            await self._insert_run(conn, child)
+            await conn.execute(
+                "INSERT INTO local_child_coordination "
+                "(child_run_id, root_run_id, parent_run_id, completion_mode, quorum_group, "
+                "quorum_required, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    child["id"],
+                    root_run_id,
+                    parent_run_id,
+                    normalized_coordination["completion_mode"],
+                    quorum_group,
+                    quorum_required,
+                    child["created_at"],
+                ),
+            )
+            for dependency_run_id in depends_on:
+                await conn.execute(
+                    "INSERT INTO local_child_dependencies "
+                    "(child_run_id, dependency_run_id, created_at) VALUES (?, ?, ?)",
+                    (child["id"], dependency_run_id, child["created_at"]),
+                )
+            for resource_key in normalized_coordination["resource_claims"]:
+                await conn.execute(
+                    "INSERT INTO local_collaboration_resource_claims "
+                    "(root_run_id, resource_key, owner_run_id, created_at) VALUES (?, ?, ?, ?)",
+                    (root_run_id, resource_key, child["id"], child["created_at"]),
+                )
+            await conn.execute(
+                "INSERT INTO local_run_inputs "
+                "(run_id, input_id, virtual_path, original_name, media_type, bytes, "
+                "sha256, blob_key, created_at) "
+                "SELECT ?, input_id, virtual_path, original_name, media_type, bytes, "
+                "sha256, blob_key, created_at FROM local_run_inputs WHERE run_id = ?",
+                (child["id"], parent_run_id),
+            )
+            await conn.execute(
+                "INSERT INTO run_plugin_bindings "
+                "(run_id, plugin_id, version, digest, selection_source, required, command_id, "
+                "action_catalog_hash, model_binding_json) "
+                "SELECT ?, plugin_id, version, digest, selection_source, required, command_id, "
+                "action_catalog_hash, model_binding_json FROM run_plugin_bindings WHERE run_id = ?",
+                (child["id"], parent_run_id),
+            )
+            await self._insert_run_job(
+                conn,
+                self._new_run_job_record(
+                    run_id=str(child["id"]),
+                    kind="start",
+                    input_payload=self._run_job_input(child),
+                ),
+            )
+            spawned_payload = {
+                "child_run_id": str(child["id"]),
+                "parent_run_id": parent_run_id,
+                "root_run_id": str(child["root_run_id"]),
+                "agent_definition_id": str(child["agent_definition_id"]),
+                "agent_definition_version": str(child["agent_definition_version"]),
+                "collaboration_depth": child_depth,
+                "goal": normalized_goal,
+                "status": "queued",
+                "spawn_operation_id": spawn_operation_id,
+                **normalized_coordination,
+                "created_at": str(child["created_at"]),
+                "updated_at": str(child["updated_at"]),
+            }
+            event = await self._append_event_uncommitted(
+                conn,
+                parent_run_id,
+                "child.spawned",
+                payload_json=_encode_payload(spawned_payload),
+                created_at=str(child["created_at"]),
+            )
+            await self._touch_thread_for_run_event_uncommitted(
+                conn,
+                run_id=parent_run_id,
+                change_type="child.spawned",
+                event_high_watermark=int(event["seq"]),
+                changed_at=str(child["created_at"]),
+            )
+            return {**child, "_spawn_event": event}, True
+
     async def list_child_runs_for_run(self, run_id: str) -> list[dict[str, Any]]:
         rows = await (
             await self._conn.execute(
-                "SELECT id, status, created_at, updated_at, completed_at "
-                "FROM local_runs WHERE parent_run_id = ? ORDER BY created_at, id",
+                self._child_run_snapshot_sql(
+                    "r.parent_run_id = ? AND r.run_kind = 'child'",
+                    "ORDER BY r.created_at, r.id",
+                ),
                 (run_id,),
             )
         ).fetchall()
-        return [dict(row) for row in rows]
+        return [self._child_run_projection(dict(row)) for row in rows]
+
+    async def child_run_for_spawn_operation(
+        self,
+        parent_run_id: str,
+        spawn_operation_id: str,
+    ) -> dict[str, Any] | None:
+        row = await (
+            await self._conn.execute(
+                self._child_run_snapshot_sql(
+                    "r.parent_run_id = ? AND r.spawn_operation_id = ? AND r.run_kind = 'child'",
+                ),
+                (parent_run_id, spawn_operation_id),
+            )
+        ).fetchone()
+        return self._child_run_projection(dict(row)) if row is not None else None
+
+    async def list_child_runs_for_runs(
+        self,
+        parent_run_ids: Sequence[str],
+    ) -> list[dict[str, Any]]:
+        normalized_ids = list(dict.fromkeys(str(run_id) for run_id in parent_run_ids if run_id))
+        if not normalized_ids:
+            return []
+        placeholders = ",".join("?" for _ in normalized_ids)
+        rows = await (
+            await self._conn.execute(
+                self._child_run_snapshot_sql(
+                    f"r.parent_run_id IN ({placeholders}) AND r.run_kind = 'child'",
+                    "ORDER BY r.parent_run_id, r.created_at, r.id",
+                ),
+                normalized_ids,
+            )
+        ).fetchall()
+        return [self._child_run_projection(dict(row)) for row in rows]
+
+    async def child_runs_for_parent(
+        self,
+        parent_run_id: str,
+        child_run_ids: Sequence[str],
+    ) -> list[dict[str, Any]]:
+        normalized_ids = list(dict.fromkeys(str(run_id) for run_id in child_run_ids if run_id))
+        if not normalized_ids:
+            return []
+        placeholders = ",".join("?" for _ in normalized_ids)
+        rows = await (
+            await self._conn.execute(
+                self._child_run_snapshot_sql(
+                    f"r.parent_run_id = ? AND r.run_kind = 'child' AND r.id IN ({placeholders})",
+                ),
+                (parent_run_id, *normalized_ids),
+            )
+        ).fetchall()
+        by_id = {str(row["id"]): self._child_run_projection(dict(row)) for row in rows}
+        missing = [run_id for run_id in normalized_ids if run_id not in by_id]
+        if missing:
+            raise KeyError(f"child run not found: {missing[0]}")
+        return [by_id[run_id] for run_id in normalized_ids]
+
+    @staticmethod
+    def _child_run_snapshot_sql(where: str, suffix: str = "") -> str:
+        return (
+            "SELECT r.id, r.parent_run_id, r.root_run_id, r.run_kind, r.goal, r.status, "
+            "r.agent_definition_id, r.agent_definition_version, r.collaboration_depth, "
+            "r.collaboration_policy_json, r.spawn_operation_id, r.graph_thread_id, "
+            "r.graph_checkpoint_id, r.created_at, r.updated_at, r.completed_at, "
+            "COALESCE(c.completion_mode, 'required') AS completion_mode, "
+            "c.quorum_group, c.quorum_required, "
+            "COALESCE((SELECT json_group_array(dependency_run_id) FROM "
+            "(SELECT dependency_run_id FROM local_child_dependencies "
+            "WHERE child_run_id = r.id ORDER BY dependency_run_id)), '[]') AS depends_on_json, "
+            "COALESCE((SELECT json_group_array(resource_key) FROM "
+            "(SELECT resource_key FROM local_collaboration_resource_claims "
+            "WHERE owner_run_id = r.id ORDER BY resource_key)), '[]') AS resource_claims_json, "
+            "d.content AS result_text, "
+            "(SELECT e.payload_json FROM local_events e WHERE e.run_id = r.id "
+            "AND e.event_type IN ('run.waiting', 'run.completed', 'run.failed', "
+            "'run.canceled', 'run.cleanup_required') ORDER BY e.seq DESC LIMIT 1) "
+            "AS result_payload_json, "
+            "(SELECT COUNT(*) FROM local_events e WHERE e.run_id = r.id) AS events_count "
+            "FROM local_runs r LEFT JOIN local_assistant_drafts d ON d.run_id = r.id "
+            "LEFT JOIN local_child_coordination c ON c.child_run_id = r.id "
+            f"WHERE {where} {suffix}"
+        )
+
+    @staticmethod
+    def _child_run_projection(row: dict[str, Any]) -> dict[str, Any]:
+        payload = _json_payload(row.pop("result_payload_json", None))
+        result_text = row.pop("result_text", None)
+        collaboration_policy = _json_payload(row.pop("collaboration_policy_json", None))
+        try:
+            depends_on = json.loads(str(row.pop("depends_on_json", "[]")))
+            resource_claims = json.loads(str(row.pop("resource_claims_json", "[]")))
+        except (json.JSONDecodeError, TypeError):
+            depends_on = []
+            resource_claims = []
+        projected = {
+            **row,
+            "collaboration_policy": collaboration_policy,
+            "depends_on": depends_on if isinstance(depends_on, list) else [],
+            "resource_claims": resource_claims if isinstance(resource_claims, list) else [],
+            "quorum_required": (
+                int(row["quorum_required"]) if row.get("quorum_required") is not None else None
+            ),
+            "result": (
+                str(result_text)
+                if row.get("status") == "completed" and result_text is not None
+                else None
+            ),
+            "error": payload.get("error"),
+            "error_type": payload.get("type"),
+            "retryable": payload.get("retryable"),
+            "input_tokens": int(payload.get("input_tokens") or 0),
+            "output_tokens": int(payload.get("output_tokens") or 0),
+            "model_calls": int(payload.get("model_calls") or 0),
+        }
+        return projected
+
+    async def assert_workspace_resource_owner(
+        self,
+        *,
+        run_id: str,
+        requested_path: str,
+    ) -> None:
+        run = await (
+            await self._conn.execute(
+                "SELECT root_run_id, workspace_path FROM local_runs WHERE id = ?",
+                (run_id,),
+            )
+        ).fetchone()
+        if run is None:
+            raise KeyError(f"unknown run: {run_id}")
+        root_run_id = str(run["root_run_id"] or run_id)
+        has_claims = await (
+            await self._conn.execute(
+                "SELECT 1 FROM local_collaboration_resource_claims WHERE root_run_id = ? LIMIT 1",
+                (root_run_id,),
+            )
+        ).fetchone()
+        if has_claims is None:
+            return
+        resource_key = _normalize_workspace_resource_key(
+            str(run["workspace_path"]) if run["workspace_path"] else None,
+            requested_path,
+        )
+        owner = await (
+            await self._conn.execute(
+                "SELECT owner_run_id FROM local_collaboration_resource_claims "
+                "WHERE root_run_id = ? AND resource_key = ?",
+                (root_run_id, resource_key),
+            )
+        ).fetchone()
+        if owner is not None and str(owner["owner_run_id"]) != run_id:
+            raise RunAdmissionError(
+                "collaboration_resource_not_owned",
+                f"workspace resource {resource_key} is owned by another collaboration member",
+            )
+
+    async def has_foreign_workspace_resource_claims(self, run_id: str) -> bool:
+        row = await (
+            await self._conn.execute(
+                "SELECT 1 FROM local_collaboration_resource_claims claims "
+                "JOIN local_runs run ON run.root_run_id = claims.root_run_id "
+                "WHERE run.id = ? AND claims.owner_run_id != ? LIMIT 1",
+                (run_id, run_id),
+            )
+        ).fetchone()
+        return row is not None
+
+    async def collaboration_snapshot(self, root_run_id: str) -> dict[str, Any]:
+        """Read one root collaboration at a single SQLite snapshot boundary."""
+        async with aiosqlite.connect(str(self._db_path)) as conn:
+            await _configure_connection(conn)
+            await conn.execute("BEGIN")
+            try:
+                root_row = await (
+                    await conn.execute(
+                        "SELECT r.id, r.parent_run_id, r.root_run_id, r.run_kind, r.goal, "
+                        "r.status, r.agent_definition_id, r.agent_definition_version, "
+                        "r.graph_thread_id, r.graph_checkpoint_id, r.created_at, r.updated_at, "
+                        "r.completed_at, d.content AS result_text, "
+                        "(SELECT e.payload_json FROM local_events e WHERE e.run_id = r.id "
+                        "AND e.event_type IN ('run.waiting', 'run.completed', 'run.failed', "
+                        "'run.canceled', 'run.cleanup_required') "
+                        "ORDER BY e.seq DESC LIMIT 1) AS result_payload_json "
+                        "FROM local_runs r LEFT JOIN local_assistant_drafts d ON d.run_id = r.id "
+                        "WHERE r.id = ?",
+                        (root_run_id,),
+                    )
+                ).fetchone()
+                if root_row is None:
+                    raise KeyError(f"unknown run: {root_run_id}")
+                if str(root_row["root_run_id"] or root_row["id"]) != root_run_id:
+                    raise RunAdmissionError(
+                        "collaboration_root_required",
+                        "collaboration snapshots must be requested from the root Run",
+                    )
+
+                child_rows = await (
+                    await conn.execute(
+                        self._child_run_snapshot_sql(
+                            "r.parent_run_id = ? AND r.run_kind = 'child'",
+                            "ORDER BY r.created_at, r.id",
+                        ),
+                        (root_run_id,),
+                    )
+                ).fetchall()
+                children = [self._child_run_projection(dict(row)) for row in child_rows]
+                run_ids = [root_run_id, *(str(child["id"]) for child in children)]
+                placeholders = ",".join("?" for _ in run_ids)
+
+                cursor_rows = await (
+                    await conn.execute(
+                        f"SELECT run_id, COALESCE(MAX(seq), 0) AS high_watermark "
+                        f"FROM local_events WHERE run_id IN ({placeholders}) GROUP BY run_id",
+                        run_ids,
+                    )
+                ).fetchall()
+                event_high_watermarks = {run_id: 0 for run_id in run_ids}
+                event_high_watermarks.update(
+                    {str(row["run_id"]): int(row["high_watermark"]) for row in cursor_rows}
+                )
+
+                message_rows = await (
+                    await conn.execute(
+                        "SELECT * FROM local_agent_messages WHERE root_run_id = ? "
+                        "ORDER BY created_at, id",
+                        (root_run_id,),
+                    )
+                ).fetchall()
+                wait_rows = await (
+                    await conn.execute(
+                        f"SELECT * FROM local_wait_candidates WHERE run_id IN ({placeholders}) "
+                        "AND status = 'pending' ORDER BY created_at, id",
+                        run_ids,
+                    )
+                ).fetchall()
+                resource_rows = await (
+                    await conn.execute(
+                        "SELECT resource_key, owner_run_id, created_at "
+                        "FROM local_collaboration_resource_claims WHERE root_run_id = ? "
+                        "ORDER BY resource_key, owner_run_id",
+                        (root_run_id,),
+                    )
+                ).fetchall()
+                dependency_rows = await (
+                    await conn.execute(
+                        f"SELECT child_run_id, dependency_run_id FROM local_child_dependencies "
+                        f"WHERE child_run_id IN ({placeholders}) "
+                        "ORDER BY child_run_id, dependency_run_id",
+                        run_ids,
+                    )
+                ).fetchall()
+                artifact_rows = await (
+                    await conn.execute(
+                        f"SELECT id, run_id, kind, title, content_type, bytes, sha256, "
+                        f"storage_kind, tool_name, created_at FROM local_artifacts "
+                        f"WHERE run_id IN ({placeholders}) ORDER BY created_at, id",
+                        run_ids,
+                    )
+                ).fetchall()
+
+                root = dict(root_row)
+                root_payload = _json_payload(root.pop("result_payload_json", None))
+                root_result_text = root.pop("result_text", None)
+                root.update(
+                    result=(
+                        str(root_result_text)
+                        if root.get("status") == "completed" and root_result_text is not None
+                        else None
+                    ),
+                    error=root_payload.get("error"),
+                    error_type=root_payload.get("type"),
+                    retryable=root_payload.get("retryable"),
+                    input_tokens=int(root_payload.get("input_tokens") or 0),
+                    output_tokens=int(root_payload.get("output_tokens") or 0),
+                    model_calls=int(root_payload.get("model_calls") or 0),
+                )
+                pending_waits: list[dict[str, Any]] = []
+                for row in wait_rows:
+                    wait = dict(row)
+                    wait["payload"] = _json_payload(wait.pop("payload_json", None))
+                    decision_raw = wait.pop("decision_json", None)
+                    wait["decision"] = _json_payload(decision_raw) if decision_raw else None
+                    pending_waits.append(wait)
+                captured_at = _now()
+                await conn.commit()
+                return {
+                    "schema_version": 1,
+                    "captured_at": captured_at,
+                    "root": root,
+                    "children": children,
+                    "messages": [_agent_message_projection(dict(row)) for row in message_rows],
+                    "pending_waits": pending_waits,
+                    "resource_owners": [dict(row) for row in resource_rows],
+                    "dependencies": [dict(row) for row in dependency_rows],
+                    "artifacts": [dict(row) for row in artifact_rows],
+                    "event_high_watermarks": event_high_watermarks,
+                }
+            except BaseException:
+                await conn.rollback()
+                raise
+
+    @staticmethod
+    async def _require_mailbox_receipt_uncommitted(
+        conn: aiosqlite.Connection,
+        *,
+        run_id: str,
+        tool_name: str,
+        operation_id: str | None,
+    ) -> None:
+        lease = _CURRENT_EXECUTION_LEASE.get()
+        if lease is None or lease.run_id != run_id:
+            raise LeaseFenceError("Agent mailbox mutation requires the sender execution lease")
+        execution_attempt_id = f"{lease.job_id}:{lease.lease_generation}"
+        if operation_id is None:
+            rows = await (
+                await conn.execute(
+                    "SELECT operation_id FROM local_tool_receipts WHERE run_id = ? "
+                    "AND tool_name = ? AND status = 'running' AND execution_attempt_id = ?",
+                    (run_id, tool_name, execution_attempt_id),
+                )
+            ).fetchall()
+            if len(rows) != 1:
+                raise ToolReceiptStateError(
+                    f"Agent mailbox mutation requires one running {tool_name} receipt"
+                )
+            return
+        receipt = await (
+            await conn.execute(
+                "SELECT tool_name, status, execution_attempt_id FROM local_tool_receipts "
+                "WHERE operation_id = ? AND run_id = ?",
+                (operation_id, run_id),
+            )
+        ).fetchone()
+        if (
+            receipt is None
+            or str(receipt["tool_name"]) != tool_name
+            or str(receipt["status"]) != "running"
+        ):
+            raise ToolReceiptStateError(
+                f"Agent mailbox mutation requires its running {tool_name} receipt"
+            )
+        if str(receipt["execution_attempt_id"]) != execution_attempt_id:
+            raise LeaseFenceError(f"{tool_name} receipt belongs to a stale execution attempt")
+
+    async def _append_agent_message_event_uncommitted(
+        self,
+        conn: aiosqlite.Connection,
+        *,
+        run_id: str,
+        event_type: str,
+        message: dict[str, Any],
+        created_at: str,
+    ) -> None:
+        event = await self._append_event_uncommitted(
+            conn,
+            run_id,
+            event_type,
+            payload_json=_encode_payload(_agent_message_projection(message)),
+            created_at=created_at,
+        )
+        await self._touch_thread_for_run_event_uncommitted(
+            conn,
+            run_id=run_id,
+            change_type=event_type,
+            event_high_watermark=int(event["seq"]),
+            changed_at=created_at,
+        )
+
+    async def _expire_agent_messages_uncommitted(
+        self,
+        conn: aiosqlite.Connection,
+        *,
+        recipient_run_id: str,
+        now: str,
+    ) -> None:
+        expired = await (
+            await conn.execute(
+                "SELECT * FROM local_agent_messages WHERE recipient_run_id = ? "
+                "AND status IN ('queued', 'delivered') AND deadline_at <= ? "
+                "ORDER BY created_at, id",
+                (recipient_run_id, now),
+            )
+        ).fetchall()
+        if not expired:
+            return
+        await conn.execute(
+            "UPDATE local_agent_messages SET status = 'expired' WHERE recipient_run_id = ? "
+            "AND status IN ('queued', 'delivered') AND deadline_at <= ?",
+            (recipient_run_id, now),
+        )
+        for row in expired:
+            message = {**dict(row), "status": "expired"}
+            await self._append_agent_message_event_uncommitted(
+                conn,
+                run_id=recipient_run_id,
+                event_type="agent.message.expired",
+                message=message,
+                created_at=now,
+            )
+
+    async def _insert_agent_message_uncommitted(
+        self,
+        conn: aiosqlite.Connection,
+        *,
+        sender_run_id: str,
+        sender_operation_id: str,
+        recipient_run_id: str,
+        kind: str,
+        text: str,
+        data_json: str,
+        artifact_refs_json: str,
+        ttl_seconds: int,
+        correlation_id: str | None,
+        in_reply_to: str | None,
+        sequence: int,
+        hop_count: int,
+        tool_name: str,
+    ) -> tuple[dict[str, Any], bool]:
+        existing = await (
+            await conn.execute(
+                "SELECT * FROM local_agent_messages WHERE sender_operation_id = ?",
+                (sender_operation_id,),
+            )
+        ).fetchone()
+        if existing is not None:
+            record = dict(existing)
+            expected_correlation = correlation_id or str(record["id"])
+            if any(
+                (str(record[key]) if record[key] is not None else None)
+                != (str(value) if value is not None else None)
+                for key, value in (
+                    ("sender_run_id", sender_run_id),
+                    ("recipient_run_id", recipient_run_id),
+                    ("kind", kind),
+                    ("text", text),
+                    ("data_json", data_json),
+                    ("artifact_refs_json", artifact_refs_json),
+                    ("ttl_seconds", ttl_seconds),
+                    ("correlation_id", expected_correlation),
+                    ("in_reply_to", in_reply_to),
+                    ("sequence", sequence),
+                    ("hop_count", hop_count),
+                )
+            ):
+                raise CommandConflictError(
+                    f"mailbox operation {sender_operation_id} was reused with a different message"
+                )
+            return _agent_message_projection(record), False
+
+        await self._require_mailbox_receipt_uncommitted(
+            conn,
+            run_id=sender_run_id,
+            tool_name=tool_name,
+            operation_id=sender_operation_id,
+        )
+        if sender_run_id == recipient_run_id:
+            raise RunAdmissionError(
+                "agent_message_self_send",
+                "an Agent cannot send a mailbox message to itself",
+            )
+        rows = await (
+            await conn.execute(
+                "SELECT id, principal_id, run_kind, root_run_id, parent_run_id, "
+                "collaboration_depth, status FROM local_runs WHERE id IN (?, ?)",
+                (sender_run_id, recipient_run_id),
+            )
+        ).fetchall()
+        by_id = {str(row["id"]): dict(row) for row in rows}
+        if sender_run_id not in by_id or recipient_run_id not in by_id:
+            raise RunAdmissionError(
+                "agent_message_run_not_found",
+                "Agent mailbox sender or recipient does not exist",
+            )
+        sender = by_id[sender_run_id]
+        recipient = by_id[recipient_run_id]
+        sender_root = str(sender.get("root_run_id") or sender_run_id)
+        recipient_root = str(recipient.get("root_run_id") or recipient_run_id)
+        if sender_root != recipient_root:
+            raise RunAdmissionError(
+                "agent_message_foreign_root",
+                "Agent mailbox participants must share one collaboration root",
+            )
+        if sender["principal_id"] != recipient["principal_id"]:
+            raise RunAdmissionError(
+                "agent_message_foreign_principal",
+                "Agent mailbox participants must share one principal",
+            )
+        if sender["run_kind"] != "child" and recipient["run_kind"] != "child":
+            raise RunAdmissionError(
+                "agent_message_requires_child",
+                "Agent mailbox messages require a durable child participant",
+            )
+        for participant in (sender, recipient):
+            if participant["run_kind"] == "child" and (
+                str(participant.get("parent_run_id") or "") != sender_root
+                or int(participant.get("collaboration_depth") or 0) != 1
+            ):
+                raise RunAdmissionError(
+                    "agent_message_invalid_topology",
+                    "Agent mailbox participants must belong to the direct-child topology",
+                )
+        artifact_refs = json.loads(artifact_refs_json)
+        if artifact_refs:
+            placeholders = ",".join("?" for _ in artifact_refs)
+            authorized_artifacts = await (
+                await conn.execute(
+                    "SELECT a.id FROM local_artifacts a JOIN local_runs r ON r.id = a.run_id "
+                    f"WHERE a.id IN ({placeholders}) AND COALESCE(r.root_run_id, r.id) = ?",
+                    (*artifact_refs, sender_root),
+                )
+            ).fetchall()
+            authorized_ids = {str(row["id"]) for row in authorized_artifacts}
+            if any(ref not in authorized_ids for ref in artifact_refs):
+                raise RunAdmissionError(
+                    "agent_message_artifact_forbidden",
+                    "Agent mailbox artifact references must belong to the collaboration root",
+                )
+        if str(recipient["status"]) in _TERMINAL_RUN_STATUSES:
+            raise RunAdmissionError(
+                "agent_message_recipient_terminal",
+                "Agent mailbox recipient is already terminal",
+            )
+
+        now = _now()
+        await self._expire_agent_messages_uncommitted(
+            conn,
+            recipient_run_id=recipient_run_id,
+            now=now,
+        )
+        pending = await (
+            await conn.execute(
+                "SELECT COUNT(*) FROM local_agent_messages WHERE recipient_run_id = ? "
+                "AND status IN ('queued', 'delivered')",
+                (recipient_run_id,),
+            )
+        ).fetchone()
+        if int(pending[0]) >= MAX_AGENT_MAILBOX_PENDING:
+            raise RunAdmissionError(
+                "agent_message_backpressure",
+                "Agent mailbox backpressure limit is reached",
+            )
+        root_total = await (
+            await conn.execute(
+                "SELECT COUNT(*) FROM local_agent_messages WHERE root_run_id = ?",
+                (sender_root,),
+            )
+        ).fetchone()
+        if int(root_total[0]) >= MAX_AGENT_MAILBOX_MESSAGES_PER_ROOT:
+            raise RunAdmissionError(
+                "agent_message_root_budget_exhausted",
+                "Agent mailbox message budget is exhausted for this collaboration root",
+            )
+
+        message_id = _new_id("agent_message")
+        record: dict[str, Any] = {
+            "id": message_id,
+            "root_run_id": sender_root,
+            "sender_run_id": sender_run_id,
+            "recipient_run_id": recipient_run_id,
+            "sender_operation_id": sender_operation_id,
+            "kind": kind,
+            "text": text,
+            "data_json": data_json,
+            "artifact_refs_json": artifact_refs_json,
+            "correlation_id": correlation_id or message_id,
+            "in_reply_to": in_reply_to,
+            "sequence": sequence,
+            "hop_count": hop_count,
+            "status": "queued",
+            "ttl_seconds": ttl_seconds,
+            "deadline_at": (datetime.now(UTC) + timedelta(seconds=ttl_seconds)).isoformat(),
+            "created_at": now,
+            "delivered_at": None,
+            "acknowledged_at": None,
+        }
+        await conn.execute(
+            "INSERT INTO local_agent_messages "
+            "(id, root_run_id, sender_run_id, recipient_run_id, sender_operation_id, kind, "
+            "text, data_json, artifact_refs_json, correlation_id, in_reply_to, sequence, "
+            "hop_count, status, ttl_seconds, deadline_at, created_at, delivered_at, "
+            "acknowledged_at) VALUES (:id, :root_run_id, :sender_run_id, :recipient_run_id, "
+            ":sender_operation_id, :kind, :text, :data_json, :artifact_refs_json, "
+            ":correlation_id, :in_reply_to, :sequence, :hop_count, :status, :ttl_seconds, "
+            ":deadline_at, :created_at, :delivered_at, :acknowledged_at)",
+            record,
+        )
+        await self._append_agent_message_event_uncommitted(
+            conn,
+            run_id=sender_run_id,
+            event_type="agent.message.sent",
+            message=record,
+            created_at=now,
+        )
+        return _agent_message_projection(record), True
+
+    async def send_agent_message(
+        self,
+        *,
+        sender_run_id: str,
+        sender_operation_id: str,
+        recipient_run_id: str,
+        kind: str,
+        text: str,
+        data: dict[str, Any],
+        artifact_refs: Sequence[str],
+        ttl_seconds: int,
+    ) -> tuple[dict[str, Any], bool]:
+        normalized = _normalize_agent_message_content(
+            kind=kind,
+            text=text,
+            data=data,
+            artifact_refs=artifact_refs,
+            ttl_seconds=ttl_seconds,
+        )
+        async with self.run_write_transaction(sender_run_id) as conn:
+            return await self._insert_agent_message_uncommitted(
+                conn,
+                sender_run_id=sender_run_id,
+                sender_operation_id=sender_operation_id,
+                recipient_run_id=recipient_run_id,
+                kind=normalized[0],
+                text=normalized[1],
+                data_json=normalized[2],
+                artifact_refs_json=normalized[3],
+                ttl_seconds=normalized[4],
+                correlation_id=None,
+                in_reply_to=None,
+                sequence=1,
+                hop_count=0,
+                tool_name="mailbox.send",
+            )
+
+    async def reply_agent_message(
+        self,
+        *,
+        sender_run_id: str,
+        sender_operation_id: str,
+        in_reply_to: str,
+        kind: str,
+        text: str,
+        data: dict[str, Any],
+        artifact_refs: Sequence[str],
+        ttl_seconds: int,
+    ) -> tuple[dict[str, Any], bool]:
+        normalized = _normalize_agent_message_content(
+            kind=kind,
+            text=text,
+            data=data,
+            artifact_refs=artifact_refs,
+            ttl_seconds=ttl_seconds,
+        )
+        async with self.run_write_transaction(sender_run_id) as conn:
+            replay = await (
+                await conn.execute(
+                    "SELECT * FROM local_agent_messages WHERE sender_operation_id = ?",
+                    (sender_operation_id,),
+                )
+            ).fetchone()
+            original = await (
+                await conn.execute(
+                    "SELECT * FROM local_agent_messages WHERE id = ?",
+                    (in_reply_to,),
+                )
+            ).fetchone()
+            if original is None:
+                raise RunAdmissionError(
+                    "agent_message_not_found",
+                    "Agent mailbox reply target does not exist",
+                )
+            original_record = dict(original)
+            if str(original_record["recipient_run_id"]) != sender_run_id:
+                raise RunAdmissionError(
+                    "agent_message_reply_forbidden",
+                    "an Agent can only reply to a message addressed to it",
+                )
+            if str(original_record["kind"]) not in {"request", "question", "update"}:
+                raise RunAdmissionError(
+                    "agent_message_reply_terminal",
+                    "result and cancel messages cannot be replied to",
+                )
+            if replay is None:
+                thread_head = await (
+                    await conn.execute(
+                        "SELECT MAX(sequence), MAX(hop_count) FROM local_agent_messages "
+                        "WHERE correlation_id = ?",
+                        (original_record["correlation_id"],),
+                    )
+                ).fetchone()
+                next_sequence = int(thread_head[0] or 0) + 1
+                next_hop = int(thread_head[1] or 0) + 1
+            else:
+                next_sequence = int(replay["sequence"])
+                next_hop = int(replay["hop_count"])
+            if next_hop > MAX_AGENT_MAILBOX_HOPS:
+                raise RunAdmissionError(
+                    "agent_message_hop_limit",
+                    "Agent mailbox conversation hop limit is exhausted",
+                )
+            return await self._insert_agent_message_uncommitted(
+                conn,
+                sender_run_id=sender_run_id,
+                sender_operation_id=sender_operation_id,
+                recipient_run_id=str(original_record["sender_run_id"]),
+                kind=normalized[0],
+                text=normalized[1],
+                data_json=normalized[2],
+                artifact_refs_json=normalized[3],
+                ttl_seconds=normalized[4],
+                correlation_id=str(original_record["correlation_id"]),
+                in_reply_to=in_reply_to,
+                sequence=next_sequence,
+                hop_count=next_hop,
+                tool_name="mailbox.reply",
+            )
+
+    async def deliver_agent_messages(self, recipient_run_id: str) -> list[dict[str, Any]]:
+        lease = _CURRENT_EXECUTION_LEASE.get()
+        if lease is None or lease.run_id != recipient_run_id:
+            raise LeaseFenceError("Agent mailbox delivery requires the recipient execution lease")
+        async with self.run_write_transaction(recipient_run_id) as conn:
+            now = _now()
+            await self._expire_agent_messages_uncommitted(
+                conn,
+                recipient_run_id=recipient_run_id,
+                now=now,
+            )
+            queued = await (
+                await conn.execute(
+                    "SELECT * FROM local_agent_messages WHERE recipient_run_id = ? "
+                    "AND status = 'queued' ORDER BY created_at, id",
+                    (recipient_run_id,),
+                )
+            ).fetchall()
+            for row in queued:
+                message = {**dict(row), "status": "delivered", "delivered_at": now}
+                await conn.execute(
+                    "UPDATE local_agent_messages SET status = 'delivered', delivered_at = ? "
+                    "WHERE id = ? AND status = 'queued'",
+                    (now, row["id"]),
+                )
+                await self._append_agent_message_event_uncommitted(
+                    conn,
+                    run_id=recipient_run_id,
+                    event_type="agent.message.received",
+                    message=message,
+                    created_at=now,
+                )
+            rows = await (
+                await conn.execute(
+                    "SELECT * FROM local_agent_messages WHERE recipient_run_id = ? "
+                    "AND status = 'delivered' ORDER BY created_at, id",
+                    (recipient_run_id,),
+                )
+            ).fetchall()
+            return [_agent_message_projection(dict(row)) for row in rows]
+
+    async def ack_agent_messages(
+        self,
+        *,
+        recipient_run_id: str,
+        message_ids: Sequence[str],
+        operation_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        normalized_ids = list(dict.fromkeys(str(message_id) for message_id in message_ids))
+        if not normalized_ids or len(normalized_ids) > MAX_AGENT_MAILBOX_PENDING:
+            raise ValueError("Agent mailbox acknowledgement message_ids are invalid")
+        async with self.run_write_transaction(recipient_run_id) as conn:
+            await self._require_mailbox_receipt_uncommitted(
+                conn,
+                run_id=recipient_run_id,
+                tool_name="mailbox.ack",
+                operation_id=operation_id,
+            )
+            placeholders = ",".join("?" for _ in normalized_ids)
+            rows = await (
+                await conn.execute(
+                    f"SELECT * FROM local_agent_messages WHERE id IN ({placeholders})",
+                    normalized_ids,
+                )
+            ).fetchall()
+            by_id = {str(row["id"]): dict(row) for row in rows}
+            if any(message_id not in by_id for message_id in normalized_ids):
+                raise RunAdmissionError(
+                    "agent_message_not_found",
+                    "Agent mailbox acknowledgement target does not exist",
+                )
+            now = _now()
+            for message_id in normalized_ids:
+                record = by_id[message_id]
+                if str(record["recipient_run_id"]) != recipient_run_id:
+                    raise RunAdmissionError(
+                        "agent_message_ack_forbidden",
+                        "an Agent can only acknowledge a message addressed to it",
+                    )
+                if str(record["status"]) == "acknowledged":
+                    continue
+                if str(record["status"]) != "delivered":
+                    raise RunAdmissionError(
+                        "agent_message_not_delivered",
+                        "Agent mailbox message must be delivered before acknowledgement",
+                    )
+                await conn.execute(
+                    "UPDATE local_agent_messages SET status = 'acknowledged', "
+                    "acknowledged_at = ? WHERE id = ? AND status = 'delivered'",
+                    (now, message_id),
+                )
+                record.update(status="acknowledged", acknowledged_at=now)
+                await self._append_agent_message_event_uncommitted(
+                    conn,
+                    run_id=recipient_run_id,
+                    event_type="agent.message.acknowledged",
+                    message=record,
+                    created_at=now,
+                )
+            return [_agent_message_projection(by_id[message_id]) for message_id in normalized_ids]
+
+    async def list_agent_inbox(self, run_id: str) -> list[dict[str, Any]]:
+        rows = await (
+            await self._conn.execute(
+                "SELECT * FROM local_agent_messages WHERE recipient_run_id = ? "
+                "ORDER BY created_at, id",
+                (run_id,),
+            )
+        ).fetchall()
+        return [_agent_message_projection(dict(row)) for row in rows]
+
+    async def list_agent_outbox(self, run_id: str) -> list[dict[str, Any]]:
+        rows = await (
+            await self._conn.execute(
+                "SELECT * FROM local_agent_messages WHERE sender_run_id = ? "
+                "ORDER BY created_at, id",
+                (run_id,),
+            )
+        ).fetchall()
+        return [_agent_message_projection(dict(row)) for row in rows]
 
     async def get_assistant_draft(self, run_id: str) -> dict[str, Any] | None:
         row = await (
@@ -2794,7 +4652,23 @@ class LocalStore:
         graph_checkpoint_id: str | None = None,
         graph_definition_id: str | None = None,
         graph_input_kind: str = "new",
+        run_kind: str | None = None,
+        root_run_id: str | None = None,
+        agent_definition_id: str = "shejane.default",
+        agent_definition_version: str = "1",
+        collaboration_depth: int = 0,
+        collaboration_policy: dict[str, Any] | None = None,
+        spawn_operation_id: str | None = None,
     ) -> dict[str, Any]:
+        if parent_run_id is not None and root_run_id is None:
+            parent = await (
+                await self._conn.execute(
+                    "SELECT root_run_id FROM local_runs WHERE principal_id = ? AND id = ?",
+                    (principal_id, parent_run_id),
+                )
+            ).fetchone()
+            if parent is not None:
+                root_run_id = str(parent["root_run_id"] or parent_run_id)
         run = self._new_run_record(
             principal_id=principal_id,
             goal=goal,
@@ -2807,6 +4681,13 @@ class LocalStore:
             graph_checkpoint_id=graph_checkpoint_id,
             graph_definition_id=graph_definition_id,
             graph_input_kind=graph_input_kind,
+            run_kind=run_kind,
+            root_run_id=root_run_id,
+            agent_definition_id=agent_definition_id,
+            agent_definition_version=agent_definition_version,
+            collaboration_depth=collaboration_depth,
+            collaboration_policy=collaboration_policy,
+            spawn_operation_id=spawn_operation_id,
         )
         await self._insert_run(self._conn, run)
         return run
@@ -2829,12 +4710,34 @@ class LocalStore:
         thread_id: str | None = None,
         assistant_item_id: str | None = None,
         user_input: str | None = None,
+        run_kind: str | None = None,
+        root_run_id: str | None = None,
+        agent_definition_id: str = "shejane.default",
+        agent_definition_version: str = "1",
+        collaboration_depth: int = 0,
+        collaboration_policy: dict[str, Any] | None = None,
+        spawn_operation_id: str | None = None,
     ) -> dict[str, Any]:
         if graph_input_kind not in {"new", "fork"}:
             raise ValueError(f"invalid graph input kind: {graph_input_kind}")
+        effective_run_kind = run_kind or ("fork" if graph_input_kind == "fork" else "turn")
+        if effective_run_kind not in {"turn", "fork", "child"}:
+            raise ValueError(f"invalid run kind: {effective_run_kind}")
+        if collaboration_depth < 0:
+            raise ValueError("collaboration depth must be non-negative")
+        run_id = _new_id("run")
         return {
-            "id": _new_id("run"),
+            "id": run_id,
             "principal_id": principal_id,
+            "run_kind": effective_run_kind,
+            "root_run_id": root_run_id or run_id,
+            "agent_definition_id": agent_definition_id,
+            "agent_definition_version": agent_definition_version,
+            "collaboration_depth": collaboration_depth,
+            "collaboration_policy_json": json.dumps(
+                collaboration_policy or {}, ensure_ascii=False, sort_keys=True
+            ),
+            "spawn_operation_id": spawn_operation_id,
             "graph_thread_id": graph_thread_id or _new_id("thread"),
             "graph_checkpoint_id": graph_checkpoint_id,
             "graph_definition_id": graph_definition_id,
@@ -2859,10 +4762,15 @@ class LocalStore:
     async def _insert_run(conn: aiosqlite.Connection, run: dict[str, Any]) -> None:
         await conn.execute(
             "INSERT INTO local_runs "
-            "(id, principal_id, graph_thread_id, graph_checkpoint_id, graph_definition_id, "
+            "(id, principal_id, run_kind, root_run_id, agent_definition_id, "
+            " agent_definition_version, collaboration_depth, collaboration_policy_json, "
+            " spawn_operation_id, graph_thread_id, graph_checkpoint_id, graph_definition_id, "
             " graph_input_kind, thread_id, assistant_item_id, user_input, goal, workspace_path, status, history_json, parent_run_id, "
             " settings_json, metadata_json, mode, created_at, updated_at, completed_at) "
-            "VALUES (:id, :principal_id, :graph_thread_id, :graph_checkpoint_id, "
+            "VALUES (:id, :principal_id, :run_kind, :root_run_id, :agent_definition_id, "
+            "        :agent_definition_version, :collaboration_depth, "
+            "        :collaboration_policy_json, :spawn_operation_id, "
+            "        :graph_thread_id, :graph_checkpoint_id, "
             "        :graph_definition_id, :graph_input_kind, :thread_id, :assistant_item_id, :user_input, :goal, :workspace_path, "
             "        :status, :history_json, :parent_run_id, :settings_json, :metadata_json, "
             "        :mode, :created_at, :updated_at, :completed_at)",
@@ -2880,6 +4788,12 @@ class LocalStore:
             "history": json.loads(run["history_json"] or "[]"),
             "settings": json.loads(run["settings_json"] or "{}"),
             "metadata": json.loads(run["metadata_json"] or "{}"),
+            "run_kind": run.get("run_kind") or "turn",
+            "root_run_id": run.get("root_run_id") or run.get("id") or run["run_id"],
+            "agent_definition_id": run.get("agent_definition_id") or "shejane.default",
+            "agent_definition_version": run.get("agent_definition_version") or "1",
+            "collaboration_depth": int(run.get("collaboration_depth") or 0),
+            "collaboration_policy": json.loads(run.get("collaboration_policy_json") or "{}"),
         }
 
     @staticmethod
@@ -4087,19 +6001,26 @@ class LocalStore:
                 )
                 if workspace_error is not None:
                     raise WorkspaceAdmissionError(workspace_error)
+                admitted_root_run_id: str | None = None
                 if parent_run_id is not None:
                     parent = await (
                         await transaction_conn.execute(
-                            "SELECT status FROM local_runs WHERE principal_id = ? AND id = ?",
+                            "SELECT status, run_kind, root_run_id FROM local_runs "
+                            "WHERE principal_id = ? AND id = ?",
                             (principal_id, parent_run_id),
                         )
                     ).fetchone()
                     if parent is None:
                         raise ParentRunAdmissionError("parent run not found")
+                    if str(parent["run_kind"]) == "child":
+                        raise ParentRunAdmissionError(
+                            "a durable child run cannot be used as a conversation parent"
+                        )
                     if str(parent["status"]) in {"queued", "running", "cleanup_required"}:
                         raise ParentRunAdmissionError(
                             "parent run has not reached a safely settled state"
                         )
+                    admitted_root_run_id = str(parent["root_run_id"] or parent_run_id)
 
                 plugin_bindings = await self._resolve_run_plugin_bindings(
                     transaction_conn,
@@ -4313,6 +6234,8 @@ class LocalStore:
                     graph_checkpoint_id=graph_checkpoint_id,
                     graph_definition_id=graph_definition_id,
                     graph_input_kind=graph_input_kind,
+                    run_kind="fork" if graph_input_kind == "fork" else "turn",
+                    root_run_id=admitted_root_run_id,
                 )
                 await self._insert_run(transaction_conn, run)
                 if run_inputs:
@@ -4603,11 +6526,12 @@ class LocalStore:
                 "AND status IN ('reserved', 'streaming')",
                 (now, job["run_id"], execution_attempt_id),
             )
-            await conn.execute(
-                "UPDATE local_tool_receipts SET status = 'outcome_unknown', "
-                "error_type = 'execution_lease_expired', updated_at = ?, completed_at = ? "
-                "WHERE run_id = ? AND execution_attempt_id = ? AND status = 'running'",
-                (now, now, job["run_id"], execution_attempt_id),
+            await self._mark_running_tool_receipts_outcome_unknown_uncommitted(
+                conn,
+                run_id=str(job["run_id"]),
+                execution_attempt_id=execution_attempt_id,
+                error_type="execution_lease_expired",
+                now=now,
             )
             # Only flag them here. Killing is an irreversible side effect and
             # this runs inside BEGIN IMMEDIATE, so it must not happen while the
@@ -4626,6 +6550,18 @@ class LocalStore:
                 "waiting_input": "completed",
             }.get(str(job["run_status"]))
             if settled_job_status is not None:
+                run_status = str(job["run_status"])
+                if run_status in _TERMINAL_RUN_STATUSES:
+                    await self._cancel_unstarted_tool_receipts_uncommitted(
+                        conn,
+                        run_id=str(job["run_id"]),
+                        canceled_at=now,
+                        error_type={
+                            "completed": "ParentRunCompleted",
+                            "failed": "ParentRunFailed",
+                            "canceled": "RunCanceled",
+                        }[run_status],
+                    )
                 await conn.execute(
                     "UPDATE local_run_jobs SET status = ?, updated_at = ?, finished_at = ?, "
                     "lease_owner = NULL, lease_expires_at = NULL "
@@ -4633,6 +6569,12 @@ class LocalStore:
                     (settled_job_status, now, now, job["id"]),
                 )
                 continue
+            await self._cancel_unstarted_tool_receipts_uncommitted(
+                conn,
+                run_id=str(job["run_id"]),
+                canceled_at=now,
+                error_type="ParentRunCleanupRequired",
+            )
             await conn.execute(
                 "UPDATE local_run_jobs SET quarantined_at = ?, "
                 "quarantine_reason = 'execution_lease_expired', "
@@ -4687,10 +6629,26 @@ class LocalStore:
             try:
                 now = _now()
                 await self._requeue_expired_jobs_uncommitted(conn, now)
+                blocked_rows = await (
+                    await conn.execute(
+                        "SELECT DISTINCT j.run_id FROM local_run_jobs j "
+                        "JOIN local_child_dependencies d ON d.child_run_id = j.run_id "
+                        "JOIN local_runs dependency ON dependency.id = d.dependency_run_id "
+                        "WHERE j.status = 'pending' "
+                        "AND dependency.status IN ('failed', 'canceled', 'cleanup_required') "
+                        "ORDER BY j.created_at, j.id"
+                    )
+                ).fetchall()
+                for blocked in blocked_rows:
+                    await self._request_run_cancel_uncommitted(conn, str(blocked["run_id"]))
                 row = await (
                     await conn.execute(
-                        "SELECT * FROM local_run_jobs WHERE status = 'pending' "
-                        "ORDER BY created_at, id LIMIT 1"
+                        "SELECT j.* FROM local_run_jobs j JOIN local_runs r ON r.id = j.run_id "
+                        "WHERE j.status = 'pending' AND (r.run_kind != 'child' OR NOT EXISTS ("
+                        "SELECT 1 FROM local_child_dependencies d "
+                        "JOIN local_runs dependency ON dependency.id = d.dependency_run_id "
+                        "WHERE d.child_run_id = j.run_id AND dependency.status != 'completed'"
+                        ")) ORDER BY j.created_at, j.id LIMIT 1"
                     )
                 ).fetchone()
                 if row is None:
@@ -4781,11 +6739,18 @@ class LocalStore:
                 "AND status IN ('reserved', 'streaming')",
                 (now, run_id, execution_attempt_id),
             )
-            await conn.execute(
-                "UPDATE local_tool_receipts SET status = 'outcome_unknown', "
-                "error_type = ?, updated_at = ?, completed_at = ? "
-                "WHERE run_id = ? AND execution_attempt_id = ? AND status = 'running'",
-                (reason, now, now, run_id, execution_attempt_id),
+            await self._mark_running_tool_receipts_outcome_unknown_uncommitted(
+                conn,
+                run_id=run_id,
+                execution_attempt_id=execution_attempt_id,
+                error_type=reason,
+                now=now,
+            )
+            await self._cancel_unstarted_tool_receipts_uncommitted(
+                conn,
+                run_id=run_id,
+                canceled_at=now,
+                error_type="ParentRunCleanupRequired",
             )
             await conn.execute(
                 "UPDATE local_runs SET status = 'cleanup_required', updated_at = ?, "
@@ -4852,6 +6817,12 @@ class LocalStore:
                 if row is None:
                     await conn.rollback()
                     return None
+                await self._cancel_unstarted_tool_receipts_uncommitted(
+                    conn,
+                    run_id=run_id,
+                    canceled_at=now,
+                    error_type="ParentRunCleanupRequired",
+                )
                 await conn.execute(
                     "UPDATE local_runs SET status = 'failed', updated_at = ?, completed_at = ? "
                     "WHERE id = ? AND status = 'cleanup_required'",
@@ -4927,11 +6898,18 @@ class LocalStore:
                     "AND status IN ('reserved', 'streaming')",
                     (now, run_id, execution_attempt_id),
                 )
-                await conn.execute(
-                    "UPDATE local_tool_receipts SET status = 'outcome_unknown', "
-                    "error_type = 'execution_lease_expired', updated_at = ?, completed_at = ? "
-                    "WHERE run_id = ? AND execution_attempt_id = ? AND status = 'running'",
-                    (now, now, run_id, execution_attempt_id),
+                await self._mark_running_tool_receipts_outcome_unknown_uncommitted(
+                    conn,
+                    run_id=run_id,
+                    execution_attempt_id=execution_attempt_id,
+                    error_type="execution_lease_expired",
+                    now=now,
+                )
+                await self._cancel_unstarted_tool_receipts_uncommitted(
+                    conn,
+                    run_id=run_id,
+                    canceled_at=now,
+                    error_type="ParentRunCleanupRequired",
                 )
                 await conn.execute(
                     "UPDATE local_sandbox_processes SET status = 'orphaned', updated_at = ? "
@@ -5024,16 +7002,26 @@ class LocalStore:
             return cursor.rowcount == 1
 
     async def request_run_cancel(self, run_id: str) -> str | None:
+        states = await self.request_run_cancel_tree(run_id)
+        return states.get(run_id)
+
+    async def request_run_cancel_tree(self, run_id: str) -> dict[str, str]:
         async with aiosqlite.connect(str(self._db_path)) as conn:
             await _configure_connection(conn)
             await conn.execute("BEGIN IMMEDIATE")
             try:
-                state = await self._request_run_cancel_uncommitted(conn, run_id)
-                if state is None:
+                states = await self._request_run_cancel_tree_uncommitted(conn, run_id)
+                if (
+                    not states
+                    and await (
+                        await conn.execute("SELECT 1 FROM local_runs WHERE id = ?", (run_id,))
+                    ).fetchone()
+                    is None
+                ):
                     await conn.rollback()
-                    return None
+                    return {}
                 await conn.commit()
-                return state
+                return states
             except BaseException:
                 await conn.rollback()
                 raise
@@ -5068,12 +7056,12 @@ class LocalStore:
                 ).fetchone()
                 if run is None:
                     raise KeyError(f"unknown run: {run_id}")
-                state = await self._request_run_cancel_uncommitted(conn, run_id)
+                states = await self._request_run_cancel_tree_uncommitted(conn, run_id)
                 receipt = {
                     "type": "run.cancel",
                     "command_id": command_id,
                     "run_id": run_id,
-                    "canceled": state is not None,
+                    "canceled": run_id in states,
                 }
                 await conn.execute(
                     "INSERT INTO local_commands "
@@ -5093,6 +7081,29 @@ class LocalStore:
             except BaseException:
                 await conn.rollback()
                 raise
+
+    async def _request_run_cancel_tree_uncommitted(
+        self,
+        conn: aiosqlite.Connection,
+        run_id: str,
+    ) -> dict[str, str]:
+        rows = await (
+            await conn.execute(
+                "WITH RECURSIVE tree(id, depth) AS ("
+                "SELECT id, 0 FROM local_runs WHERE id = ? UNION ALL "
+                "SELECT r.id, tree.depth + 1 FROM local_runs r "
+                "JOIN tree ON r.parent_run_id = tree.id WHERE r.run_kind = 'child'"
+                ") SELECT id FROM tree ORDER BY depth DESC, id",
+                (run_id,),
+            )
+        ).fetchall()
+        states: dict[str, str] = {}
+        for row in rows:
+            target_run_id = str(row["id"])
+            state = await self._request_run_cancel_uncommitted(conn, target_run_id)
+            if state is not None:
+                states[target_run_id] = state
+        return states
 
     async def request_question_answer_command(
         self,
@@ -5131,7 +7142,9 @@ class LocalStore:
                         "SELECT q.run_id, q.wait_cycle_id, q.status AS question_status, "
                         "q.answers_json, r.status AS run_status, r.principal_id, "
                         "r.goal, r.user_input, r.workspace_path, r.mode, r.history_json, "
-                        "r.settings_json, r.metadata_json "
+                        "r.settings_json, r.metadata_json, r.id AS id, r.run_kind, "
+                        "r.root_run_id, r.agent_definition_id, r.agent_definition_version, "
+                        "r.collaboration_depth, r.collaboration_policy_json "
                         "FROM local_questions q JOIN local_runs r ON r.id = q.run_id "
                         "WHERE q.id = ? AND r.principal_id = ?",
                         (question_id, principal_id),
@@ -5297,7 +7310,9 @@ class LocalStore:
                         "p.scope AS permission_scope, p.decision_json, p.tool_name, p.risk, "
                         "p.operation_id, r.status AS run_status, r.principal_id, "
                         "r.goal, r.user_input, r.workspace_path, r.mode, r.history_json, "
-                        "r.settings_json, r.metadata_json "
+                        "r.settings_json, r.metadata_json, r.id AS id, r.run_kind, "
+                        "r.root_run_id, r.agent_definition_id, r.agent_definition_version, "
+                        "r.collaboration_depth, r.collaboration_policy_json "
                         "FROM local_permissions p JOIN local_runs r ON r.id = p.run_id "
                         "WHERE p.id = ? AND r.principal_id = ?",
                         (permission_id, principal_id),
@@ -5490,7 +7505,10 @@ class LocalStore:
                         "SELECT p.run_id, p.wait_cycle_id, p.status AS approval_status, "
                         "p.instructions AS approval_instructions, "
                         "r.status AS run_status, r.principal_id, r.goal, r.user_input, r.workspace_path, "
-                        "r.mode, r.history_json, r.settings_json, r.metadata_json "
+                        "r.mode, r.history_json, r.settings_json, r.metadata_json, r.id AS id, "
+                        "r.run_kind, r.root_run_id, r.agent_definition_id, "
+                        "r.agent_definition_version, r.collaboration_depth, "
+                        "r.collaboration_policy_json "
                         "FROM local_plan_approvals p JOIN local_runs r ON r.id = p.run_id "
                         "WHERE p.id = ? AND r.principal_id = ?",
                         (approval_id, principal_id),
@@ -5649,7 +7667,9 @@ class LocalStore:
                     await conn.execute(
                         "SELECT c.*, r.status AS run_status, r.principal_id, r.goal, "
                         "r.user_input, r.workspace_path, r.mode, r.history_json, "
-                        "r.settings_json, r.metadata_json "
+                        "r.settings_json, r.metadata_json, r.id AS id, r.run_kind, "
+                        "r.root_run_id, r.agent_definition_id, r.agent_definition_version, "
+                        "r.collaboration_depth, r.collaboration_policy_json "
                         "FROM local_wait_candidates c JOIN local_runs r ON r.id = c.run_id "
                         "WHERE c.id = ? AND c.kind = 'tool_reconciliation' "
                         "AND r.principal_id = ?",
@@ -5840,6 +7860,11 @@ class LocalStore:
             "WHERE run_id = ? AND status = 'pending'",
             (requested_at, run_id),
         )
+        await self._cancel_unstarted_tool_receipts_uncommitted(
+            conn,
+            run_id=run_id,
+            canceled_at=requested_at,
+        )
         await conn.execute(
             "UPDATE local_runs SET status = 'canceled', updated_at = ?, completed_at = ? "
             "WHERE id = ?",
@@ -5963,6 +7988,9 @@ class LocalStore:
             """
             SELECT r.id, r.graph_thread_id, r.graph_checkpoint_id,
                    r.thread_id, r.assistant_item_id,
+                   r.run_kind, r.root_run_id, r.agent_definition_id,
+                   r.agent_definition_version, r.collaboration_depth,
+                   r.collaboration_policy_json, r.spawn_operation_id,
                    r.goal, r.user_input, r.status, r.workspace_path,
                    r.created_at, r.updated_at, r.completed_at,
                    r.metadata_json, c.id AS command_id, c.client_message_id,
@@ -5972,7 +8000,7 @@ class LocalStore:
               LEFT JOIN local_commands c ON c.run_id = r.id
                    AND c.principal_id = r.principal_id
                    AND c.command_type IN ('run.start', 'run.fork')
-             WHERE r.principal_id = ?
+             WHERE r.principal_id = ? AND r.run_kind <> 'child'
              ORDER BY datetime(r.updated_at) DESC, r.id DESC
              LIMIT ?
             """,
@@ -6068,6 +8096,7 @@ class LocalStore:
                 dict.fromkeys(str(item["run_id"]) for item in page_items if item["run_id"])
             )
             runs: list[aiosqlite.Row] = []
+            subagent_invocations_by_run: dict[str, list[dict[str, Any]]] = {}
             events: list[aiosqlite.Row] = []
             event_high_watermarks: dict[str, int] = {}
             events_truncated = False
@@ -6096,17 +8125,21 @@ class LocalStore:
                 ).fetchall()
                 events_truncated = len(events) > bounded_event_limit
                 events = events[:bounded_event_limit]
-                watermark_rows = await (
-                    await conn.execute(
-                        "SELECT run_id, MAX(event_high_watermark) AS high_watermark "
-                        "FROM local_thread_items "
-                        f"WHERE run_id IN ({placeholders}) GROUP BY run_id",
-                        run_ids,
+                subagent_invocations = await self._subagent_invocations_uncommitted(
+                    conn,
+                    run_ids,
+                )
+                for invocation in subagent_invocations:
+                    subagent_invocations_by_run.setdefault(
+                        str(invocation["parent_run_id"]), []
+                    ).append(invocation)
+                event_high_watermarks = dict.fromkeys(run_ids, 0)
+                for event in events:
+                    event_run_id = str(event["run_id"])
+                    event_high_watermarks[event_run_id] = max(
+                        event_high_watermarks[event_run_id],
+                        int(event["seq"]),
                     )
-                ).fetchall()
-                event_high_watermarks = {
-                    str(row["run_id"]): int(row["high_watermark"]) for row in watermark_rows
-                }
             cursor_row = await (
                 await conn.execute(
                     "SELECT COALESCE(MAX(cursor), 0) FROM local_thread_changes "
@@ -6118,7 +8151,13 @@ class LocalStore:
             return {
                 "thread": dict(thread),
                 "items": [dict(item) for item in page_items],
-                "runs": [dict(run) for run in runs],
+                "runs": [
+                    {
+                        **dict(run),
+                        "subagent_invocations": subagent_invocations_by_run.get(str(run["id"]), []),
+                    }
+                    for run in runs
+                ],
                 "events": [dict(event) for event in events],
                 "event_high_watermarks": event_high_watermarks,
                 "cursor": int(cursor_row[0] if cursor_row else 0),
@@ -6368,6 +8407,17 @@ class LocalStore:
                 )
 
             committed_at = _now()
+            if status in _TERMINAL_RUN_STATUSES:
+                await self._cancel_unstarted_tool_receipts_uncommitted(
+                    conn,
+                    run_id=run_id,
+                    canceled_at=committed_at,
+                    error_type={
+                        "completed": "ParentRunCompleted",
+                        "failed": "ParentRunFailed",
+                        "canceled": "RunCanceled",
+                    }[status],
+                )
             completed_at = committed_at if status in _TERMINAL_RUN_STATUSES else None
             await conn.execute(
                 "UPDATE local_runs SET status = ?, updated_at = ?, completed_at = ? WHERE id = ?",
@@ -6771,6 +8821,7 @@ class LocalStore:
         *,
         payload_json: str,
         created_at: str,
+        project_child: bool = True,
     ) -> dict[str, Any]:
         cursor = await conn.execute(
             "SELECT COALESCE(MAX(seq), 0) FROM local_events WHERE run_id = ?", (run_id,)
@@ -6790,13 +8841,96 @@ class LocalStore:
             "VALUES (:id, :run_id, :seq, :event_type, :payload_json, :created_at)",
             event,
         )
+        if project_child and event_type in _CHILD_EVENT_BY_RUN_EVENT:
+            parent_event = await self._append_child_parent_lifecycle_uncommitted(
+                conn,
+                child_run_id=run_id,
+                source_event=event,
+                source_payload=_json_payload(payload_json),
+            )
+            if parent_event is not None:
+                event["_parent_event"] = parent_event
         return event
 
-    async def events_since(self, run_id: str, after_seq: int = 0) -> list[dict[str, Any]]:
-        cursor = await self._conn.execute(
-            "SELECT * FROM local_events WHERE run_id = ? AND seq > ? ORDER BY seq",
-            (run_id, after_seq),
+    async def _append_child_parent_lifecycle_uncommitted(
+        self,
+        conn: aiosqlite.Connection,
+        *,
+        child_run_id: str,
+        source_event: dict[str, Any],
+        source_payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        child = await (
+            await conn.execute(
+                "SELECT id, parent_run_id, root_run_id, agent_definition_id, "
+                "agent_definition_version, collaboration_depth, goal, status, updated_at "
+                "FROM local_runs WHERE id = ? AND run_kind = 'child'",
+                (child_run_id,),
+            )
+        ).fetchone()
+        if child is None or not child["parent_run_id"]:
+            return None
+        parent_event_type, fixed_status = _CHILD_EVENT_BY_RUN_EVENT[str(source_event["event_type"])]
+        status = fixed_status or str(child["status"])
+        final_text = str(source_payload.get("final_text") or "")
+        payload: dict[str, Any] = {
+            "child_run_id": str(child["id"]),
+            "parent_run_id": str(child["parent_run_id"]),
+            "root_run_id": str(child["root_run_id"]),
+            "agent_definition_id": str(child["agent_definition_id"]),
+            "agent_definition_version": str(child["agent_definition_version"]),
+            "collaboration_depth": int(child["collaboration_depth"]),
+            "goal": str(child["goal"]),
+            "status": status,
+            "source_event_id": str(source_event["id"]),
+            "source_event_seq": int(source_event["seq"]),
+            "updated_at": str(child["updated_at"]),
+        }
+        if final_text:
+            payload["result_preview"] = final_text[:4096]
+            payload["result_truncated"] = len(final_text) > 4096
+        for key in (
+            "error",
+            "type",
+            "category",
+            "retryable",
+            "input_tokens",
+            "output_tokens",
+            "model_calls",
+            "final_answer_ref",
+        ):
+            if key in source_payload:
+                payload[key] = source_payload[key]
+        parent_event = await self._append_event_uncommitted(
+            conn,
+            str(child["parent_run_id"]),
+            parent_event_type,
+            payload_json=_encode_payload(payload),
+            created_at=str(source_event["created_at"]),
+            project_child=False,
         )
+        await self._touch_thread_for_run_event_uncommitted(
+            conn,
+            run_id=str(child["parent_run_id"]),
+            change_type=parent_event_type,
+            event_high_watermark=int(parent_event["seq"]),
+            changed_at=str(source_event["created_at"]),
+        )
+        return parent_event
+
+    async def events_since(
+        self,
+        run_id: str,
+        after_seq: int = 0,
+        *,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM local_events WHERE run_id = ? AND seq > ? ORDER BY seq"
+        parameters: tuple[Any, ...] = (run_id, after_seq)
+        if limit is not None:
+            sql += " LIMIT ?"
+            parameters += (limit,)
+        cursor = await self._conn.execute(sql, parameters)
         return [dict(row) for row in await cursor.fetchall()]
 
     async def event_sequence_window(self, run_id: str) -> tuple[int | None, int]:
@@ -6831,6 +8965,74 @@ class LocalStore:
             record,
         )
         return record
+
+    async def request_run_inject_command(
+        self,
+        *,
+        principal_id: str,
+        command_id: str,
+        run_id: str,
+        content: str,
+    ) -> tuple[dict[str, Any], bool]:
+        payload_json = _encode_payload({"type": "run.inject", "run_id": run_id, "content": content})
+        async with aiosqlite.connect(str(self._db_path)) as conn:
+            await _configure_connection(conn)
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                existing = await self._accepted_command_receipt_uncommitted(
+                    conn,
+                    principal_id=principal_id,
+                    command_id=command_id,
+                    command_type="run.inject",
+                    payload_json=payload_json,
+                )
+                if existing is not None:
+                    await conn.rollback()
+                    return existing, False
+                run = await (
+                    await conn.execute(
+                        "SELECT id, status FROM local_runs WHERE principal_id = ? AND id = ?",
+                        (principal_id, run_id),
+                    )
+                ).fetchone()
+                if run is None:
+                    raise KeyError(f"unknown run: {run_id}")
+                if str(run["status"]) in _TERMINAL_RUN_STATUSES | {"cleanup_required"}:
+                    raise RunAdmissionError("run_not_active", "run is not active")
+
+                now = _now()
+                instruction_id = _new_id("steer")
+                await conn.execute(
+                    "INSERT INTO local_steering "
+                    "(id, run_id, content, status, created_at, injected_at) "
+                    "VALUES (?, ?, ?, 'pending', ?, NULL)",
+                    (instruction_id, run_id, content, now),
+                )
+                receipt = {
+                    "command_id": command_id,
+                    "run_id": run_id,
+                    "instruction_id": instruction_id,
+                    "queued": True,
+                }
+                await conn.execute(
+                    "INSERT INTO local_commands "
+                    "(principal_id, id, command_type, client_message_id, payload_json, "
+                    "response_json, run_id, created_at) "
+                    "VALUES (?, ?, 'run.inject', '', ?, ?, ?, ?)",
+                    (
+                        principal_id,
+                        command_id,
+                        payload_json,
+                        _encode_payload(receipt),
+                        run_id,
+                        now,
+                    ),
+                )
+                await conn.commit()
+                return receipt, True
+            except BaseException:
+                await conn.rollback()
+                raise
 
     async def claim_pending_steering(self, run_id: str) -> list[dict[str, Any]]:
         async with self.run_write_transaction(run_id) as conn:
@@ -7591,8 +9793,8 @@ class LocalStore:
             )
             return updated
 
-    @staticmethod
     async def _resolve_tool_reconciliation_uncommitted(
+        self,
         conn: aiosqlite.Connection,
         *,
         candidate_id: str,
@@ -7675,6 +9877,7 @@ class LocalStore:
             raise WaitDecisionConflictError(
                 "tool reconciliation source is no longer outcome_unknown"
             )
+        projected_operation_ids = [prior_operation_id]
         if prior_operation_id == candidate_id and decision == "retry_not_executed":
             await conn.execute(
                 "UPDATE local_tool_receipts SET status = 'prepared', result_json = NULL, "
@@ -7703,6 +9906,7 @@ class LocalStore:
                 raise WaitDecisionConflictError(
                     "current tool reconciliation receipt is no longer prepared"
                 )
+            projected_operation_ids.append(candidate_id)
         cursor = await conn.execute(
             "UPDATE local_wait_candidates SET status = 'resolved', decision_json = ?, "
             "resolved_at = ? WHERE id = ? AND status = 'pending'",
@@ -7710,6 +9914,15 @@ class LocalStore:
         )
         if cursor.rowcount != 1:
             raise WaitDecisionConflictError("tool reconciliation was resolved concurrently")
+        for operation_id in projected_operation_ids:
+            receipt = await (
+                await conn.execute(
+                    "SELECT * FROM local_tool_receipts WHERE operation_id = ?",
+                    (operation_id,),
+                )
+            ).fetchone()
+            assert receipt is not None
+            await self._append_subagent_receipt_event_uncommitted(conn, dict(receipt))
         updated = await (
             await conn.execute(
                 "SELECT * FROM local_wait_candidates WHERE id = ?",

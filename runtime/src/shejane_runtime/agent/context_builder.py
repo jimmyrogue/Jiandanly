@@ -14,6 +14,7 @@ Priority   Layer                          Owner
 0          Identity and safety baseline   Runtime — identity.md
 20         Tool definitions               LangChain (auto)
 30         Developer instructions         Runtime — developer.md zones
+32         Durable child role             Runtime — frozen Agent definition
 35         Current task                   Runtime — this file (per-run)
 40         Active skills hint             Runtime — this file
 45         Memory (AGENTS.md cascade)     Runtime — deepagents MemoryMiddleware
@@ -177,6 +178,9 @@ class RuntimeContext:
     required_tools: tuple[str, ...] = ()
     memory_enabled: bool = True
     subagents_enabled: bool = True
+    child_run_control: object | None = None
+    child_agent_definitions: dict[str, dict[str, object]] = field(default_factory=dict)
+    agent_mailbox_control: object | None = None
     # Trusted ingress capability derived from the real top-level user input.
     # Tools may inspect it, but it is never rendered into the model prompt.
     memory_write_facts: tuple[str, ...] = ()
@@ -207,10 +211,17 @@ class RuntimeContext:
     # tool-call chains even if the user's original message scrolls out
     # of the model's attention window.
     task_goal: str | None = None
+    agent_role_prompt: str | None = None
+    allowed_tool_names: tuple[str, ...] = ()
 
     # Layer 50 — run state. These are the things the model can't see
     # but needs to know about the current run.
     mode: str | None = None  # Runtime model selection stored with the run
+    run_kind: str = "turn"
+    root_run_id: str | None = None
+    agent_definition_id: str = "shejane.default"
+    agent_definition_version: str = "1"
+    collaboration_depth: int = 0
     turn_count: int | None = None  # message count incl. current turn
     clarification_count: int = 0
     repair_intent: bool = False
@@ -273,6 +284,7 @@ class ContextBuilder:
         return [
             self._layer_identity_safety(),
             self._layer_developer(),
+            self._layer_agent_role(runtime.agent_role_prompt),
             self._layer_task(runtime.task_goal),
             self._layer_skills(runtime.enabled_skills),
             self._layer_state(runtime),
@@ -344,6 +356,17 @@ class ContextBuilder:
             max_chars=1024,
         )
 
+    def _layer_agent_role(self, role_prompt: str | None) -> ContextLayer:
+        if not role_prompt or not role_prompt.strip():
+            return ContextLayer(name="agent_role", priority=32, content="")
+        return ContextLayer(
+            name="agent_role",
+            priority=32,
+            content="<agent-role>\n" + role_prompt.strip() + "\n</agent-role>",
+            max_chars=8 * 1024,
+            truncatable=False,
+        )
+
     def _layer_state(self, runtime: RuntimeContext) -> ContextLayer:
         """Layer 50 — current run state. Things the model can't observe
         but should know: which model tier the user picked and how many
@@ -355,6 +378,13 @@ class ContextBuilder:
         bullets: list[str] = []
         if runtime.mode:
             bullets.append(f"- 当前模式: {runtime.mode}")
+        if runtime.run_kind == "child":
+            bullets.append(
+                "- 当前身份: Runtime 托管的 durable child Run "
+                f"({runtime.agent_definition_id}@{runtime.agent_definition_version})"
+            )
+            if runtime.root_run_id:
+                bullets.append(f"- 协作 root Run: {runtime.root_run_id}")
         if runtime.turn_count is not None:
             bullets.append(f"- 对话轮次: 第 {runtime.turn_count} 轮")
         if runtime.required_tools:

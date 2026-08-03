@@ -309,7 +309,14 @@ async def test_runtime_thread_pages_are_bounded_and_version_consistent(tmp_path:
         assert newest["has_more_items"] is True
         assert newest["next_before_position"] == 3
         assert newest["events_truncated"] is True
-        assert newest["event_high_watermarks"][run["id"]] == 2
+        assert newest["event_high_watermarks"][run["id"]] == newest["events"][0]["seq"]
+        assert [
+            event["event_type"]
+            for event in await store.events_since(
+                run["id"],
+                after_seq=newest["event_high_watermarks"][run["id"]],
+            )
+        ] == ["run.completed"]
 
         oldest = await store.get_thread_snapshot(
             principal_id=LOCAL_OWNER_PRINCIPAL_ID,

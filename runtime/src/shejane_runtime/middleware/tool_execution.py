@@ -17,11 +17,16 @@ from langgraph.types import Command, interrupt
 from ..agent.context_builder import AsyncToolExecutionGate
 from ..store.sqlite import (
     LocalStore,
+    RunAdmissionError,
     ToolOutcomeUnknownError,
     ToolReceiptStateError,
 )
 from ..tool_outcomes import tool_result_envelope, tool_result_envelope_failed
-from ..tools.runtime import RuntimeToolExecution, bind_runtime_tool_execution
+from ..tools.runtime import (
+    RuntimeToolExecution,
+    bind_runtime_tool_execution,
+    current_runtime_tool_execution_or_none,
+)
 
 READ_ONLY_TOOLS = {
     "clipboard.read",
@@ -51,6 +56,7 @@ WORKSPACE_WRITE_TOOLS = {
     "office.create_pptx",
     "office.delete_paragraph",
     "office.delete_slide",
+    "office.find_replace",
     "office.insert_paragraph",
     "office.merge_cells",
     "office.reorder_slides",
@@ -64,7 +70,20 @@ WORKSPACE_WRITE_TOOLS = {
     "office.update_slide",
 }
 RUNTIME_STATE_TOOLS = {"memory.write", "task.progress", "write_todos"}
-CONTROL_FLOW_TOOLS = {"task", "user.ask"}
+CONTROL_FLOW_TOOLS = {
+    "task",
+    "team.run",
+    "child.spawn",
+    "child.list",
+    "child.check",
+    "child.wait",
+    "child.cancel",
+    "mailbox.send",
+    "mailbox.inbox",
+    "mailbox.reply",
+    "mailbox.ack",
+    "user.ask",
+}
 SANDBOXED_COMMAND_TOOLS = {"execute"}
 MAX_MODEL_TOOL_RESULT_BYTES = 64 * 1024
 MAX_TOOL_ARTIFACT_BYTES = 16 * 1024 * 1024
@@ -75,13 +94,22 @@ class WorkspaceRequiredError(RuntimeError):
     retryable = False
 
 
-def _failed_tool_status(*, risk: str, tool_name: str, error: BaseException) -> str:
+class WorkspaceResourceOwnershipError(RuntimeError):
+    code = "collaboration_resource_not_owned"
+    retryable = False
+
+
+def _tool_error_status(*, risk: str, tool_name: str, error: BaseException) -> str:
+    if tool_name == "task" and isinstance(error, asyncio.CancelledError):
+        return "canceled"
     # A task only orchestrates Runtime-owned child work. Any real child side
     # effect has its own durable receipt and remains independently reconcilable.
     known = (
         risk in {"read_only", "plugin_action"}
         or tool_name == "task"
+        or tool_name.startswith("child.")
         or isinstance(error, WorkspaceRequiredError)
+        or isinstance(error, WorkspaceResourceOwnershipError)
     )
     return "failed" if known else "outcome_unknown"
 
@@ -292,6 +320,7 @@ class ToolExecutionMiddleware(AgentMiddleware):
                 status="error",
             )
         arguments = call.get("args") or {}
+        parent_execution = current_runtime_tool_execution_or_none()
         tool_version = await tool_version_for_invocation(context, tool_name, arguments)
         operation_id, arguments_hash, arguments_json = tool_operation_identity(
             run_id=run_id,
@@ -314,7 +343,27 @@ class ToolExecutionMiddleware(AgentMiddleware):
             arguments_hash=arguments_hash,
             arguments_json=arguments_json,
             risk=risk,
+            parent_operation_id=(
+                parent_execution.operation_id if parent_execution is not None else None
+            ),
         )
+        if receipt.get("status") == "outcome_unknown" and tool_name == "child.spawn":
+            receipt = await _recover_child_spawn_receipt(
+                store=store,
+                receipt=receipt,
+                run_id=run_id,
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+            )
+        if receipt.get("status") == "outcome_unknown" and tool_name.startswith("mailbox."):
+            # Every mailbox mutation is transactionally idempotent on the Tool
+            # Receipt operation id; inbox is read-only. Re-running is therefore
+            # the authoritative reconciliation path after a lost process.
+            receipt = await store.reconcile_tool_receipt(
+                operation_id=operation_id,
+                run_id=run_id,
+                decision="retry_not_executed",
+            )
         if receipt.get("status") == "outcome_unknown":
             _request_tool_reconciliation(
                 operation_id=operation_id,
@@ -445,6 +494,28 @@ class ToolExecutionMiddleware(AgentMiddleware):
                 raise WorkspaceRequiredError(
                     "Authorize a workspace before creating or changing files."
                 )
+            if risk == "workspace_write":
+                arguments = request.tool_call.get("args") or {}
+                requested_path = (
+                    arguments.get("file_path") or arguments.get("path")
+                    if isinstance(arguments, dict)
+                    else None
+                )
+                if isinstance(requested_path, str) and requested_path:
+                    try:
+                        await store.assert_workspace_resource_owner(
+                            run_id=run_id,
+                            requested_path=requested_path,
+                        )
+                    except RunAdmissionError as exc:
+                        raise WorkspaceResourceOwnershipError(str(exc)) from exc
+            if risk == "sandboxed_command" and await store.has_foreign_workspace_resource_claims(
+                run_id
+            ):
+                raise WorkspaceResourceOwnershipError(
+                    "execute is unavailable while another collaboration member owns workspace "
+                    "resources; use the typed file tools so ownership can be enforced"
+                )
             with bind_runtime_tool_execution(
                 RuntimeToolExecution(
                     context=request.runtime.context,
@@ -464,7 +535,7 @@ class ToolExecutionMiddleware(AgentMiddleware):
             raise
         except BaseException as exc:
             tool_name = str(request.tool_call.get("name") or "")
-            status = _failed_tool_status(
+            status = _tool_error_status(
                 risk=risk,
                 tool_name=tool_name,
                 error=exc,
@@ -524,7 +595,7 @@ class ToolExecutionMiddleware(AgentMiddleware):
             if len(result_json.encode("utf-8")) > MAX_MODEL_TOOL_RESULT_BYTES:
                 raise ToolReceiptStateError("bounded tool result still exceeds model limit")
         except BaseException as exc:
-            status = _failed_tool_status(
+            status = _tool_error_status(
                 risk=risk,
                 tool_name=str(request.tool_call.get("name") or ""),
                 error=exc,
@@ -559,6 +630,38 @@ class ToolExecutionMiddleware(AgentMiddleware):
             result_hash=result_hash,
         )
         return result
+
+
+async def _recover_child_spawn_receipt(
+    *,
+    store: LocalStore,
+    receipt: dict[str, Any],
+    run_id: str,
+    tool_name: str,
+    tool_call_id: str,
+) -> dict[str, Any]:
+    """Reconcile the one internal side effect whose outcome Runtime owns."""
+    operation_id = str(receipt["operation_id"])
+    child = await store.child_run_for_spawn_operation(run_id, operation_id)
+    if child is None:
+        return await store.reconcile_tool_receipt(
+            operation_id=operation_id,
+            run_id=run_id,
+            decision="retry_not_executed",
+        )
+    result = ToolMessage(
+        content=json.dumps(child, ensure_ascii=False),
+        name=tool_name,
+        tool_call_id=tool_call_id,
+    )
+    result_json = serialize_tool_result(result)
+    return await store.reconcile_tool_receipt(
+        operation_id=operation_id,
+        run_id=run_id,
+        decision="confirmed_completed",
+        result_json=result_json,
+        result_hash=hashlib.sha256(result_json.encode("utf-8")).hexdigest(),
+    )
 
 
 def _provider_safe_tool_result(
@@ -682,7 +785,7 @@ async def _cancel_before_tool_start(store: LocalStore, run_id: str, operation_id
     if not await store.tool_execution_cancel_requested(run_id):
         return
     receipt = await store.get_tool_receipt(operation_id)
-    if receipt is not None and receipt.get("status") == "prepared":
+    if receipt is not None and receipt.get("status") in {"prepared", "paused"}:
         await store.settle_tool_receipt(
             operation_id=operation_id,
             run_id=run_id,

@@ -21,6 +21,8 @@ Why this layout
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import re
@@ -51,6 +53,18 @@ log = logging.getLogger("shejane_runtime.agent.subagents")
 SUBAGENT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 SUBAGENT_MODEL_CALL_LIMIT = 50
 RESEARCHER_WEB_TOOL_LIMIT = 10
+DEEPAGENT_SUBAGENT_BASE_TOOL_NAMES = frozenset(
+    {
+        "write_todos",
+        "ls",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "glob",
+        "grep",
+        "execute",
+    }
+)
 
 
 def _fenced_prompt(prompt: str) -> str:
@@ -137,6 +151,48 @@ def build_subagents(
                     *subagent.get("middleware", []),
                 ]
     return list(by_name.values())
+
+
+def build_durable_child_definitions(
+    subagents: Sequence[SubAgent],
+) -> dict[str, dict[str, object]]:
+    """Freeze the role prompt and effective tool surface for durable children."""
+    identity_prefix = f"{identity_safety_prompt()}\n\n"
+    definitions: dict[str, dict[str, object]] = {}
+    for subagent in subagents:
+        name = str(subagent["name"])
+        blocked: set[str] = set()
+        for middleware in subagent.get("middleware", []):
+            if isinstance(middleware, ToolVisibilityMiddleware):
+                blocked.update(middleware.blocked_tool_names)
+        allowed_tools = (
+            DEEPAGENT_SUBAGENT_BASE_TOOL_NAMES | {tool.name for tool in subagent.get("tools", [])}
+        ) - blocked
+        system_prompt = str(subagent["system_prompt"])
+        if system_prompt.startswith(identity_prefix):
+            system_prompt = system_prompt[len(identity_prefix) :]
+        version_input = json.dumps(
+            {
+                "schema": 1,
+                "name": name,
+                "description": str(subagent["description"]),
+                "system_prompt": system_prompt,
+                "allowed_tools": sorted(allowed_tools),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        definition_id = f"subagent:{name}"
+        definitions[definition_id] = {
+            "id": definition_id,
+            "version": f"sha256:{hashlib.sha256(version_input.encode()).hexdigest()}",
+            "name": name,
+            "description": str(subagent["description"]),
+            "system_prompt": system_prompt,
+            "allowed_tools": sorted(allowed_tools),
+        }
+    return definitions
 
 
 def _builtin_subagents(
@@ -232,6 +288,12 @@ def _builtin_subagents(
             "model": main_model,
             "tools": [],
             "middleware": [
+                # Deep Agents prepends its filesystem/todo middleware even
+                # when a raw SubAgent declares no explicit tools. Keep the
+                # writer's advertised and enforced surface genuinely empty.
+                ToolVisibilityMiddleware(
+                    blocked_tool_names=set(DEEPAGENT_SUBAGENT_BASE_TOOL_NAMES),
+                ),
                 ModelCallLimitMiddleware(
                     run_limit=SUBAGENT_MODEL_CALL_LIMIT,
                     exit_behavior="end",

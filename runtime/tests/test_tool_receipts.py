@@ -37,6 +37,7 @@ from shejane_runtime.store.sqlite import (
     ToolReceiptStateError,
     WaitDecisionConflictError,
 )
+from shejane_runtime.tools.runtime import RuntimeToolExecution, bind_runtime_tool_execution
 
 
 async def _store_and_run(tmp_path: Path) -> tuple[LocalStore, dict[str, object]]:
@@ -126,6 +127,73 @@ async def test_tool_review_skips_calls_already_blocked_by_an_earlier_middleware(
         assert [(receipt["tool_call_id"], receipt["status"]) for receipt in receipts] == [
             ("task-0", "prepared")
         ]
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_nested_tool_review_preserves_parent_operation_identity(tmp_path: Path) -> None:
+    store, run = await _store_and_run(tmp_path)
+    run_id = str(run["id"])
+    await store.prepare_tool_receipt(
+        operation_id="toolop_parent_task",
+        run_id=run_id,
+        execution_attempt_id="job-parent:1",
+        execution_namespace="main",
+        tool_call_id="call-parent-task",
+        tool_name="task",
+        tool_version="graph-v1",
+        arguments_hash="parent-args",
+        arguments_json='{"subagent_type":"researcher","description":"research"}',
+        risk="control_flow",
+    )
+    context = RuntimeContext(
+        store=store,
+        run_id=run_id,
+        execution_attempt_id="job-parent:1",
+        graph_definition_id="graph-v1",
+        tool_registry={
+            "time.now": SimpleNamespace(
+                tool_call_schema={
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                }
+            )
+        },
+    )
+    state = {
+        "messages": [
+            AIMessage(
+                id="nested-batch",
+                content="",
+                tool_calls=[
+                    ToolCall(type="tool_call", id="call-child-tool", name="time.now", args={})
+                ],
+            )
+        ]
+    }
+    try:
+        with bind_runtime_tool_execution(
+            RuntimeToolExecution(
+                context=context,
+                operation_id="toolop_parent_task",
+                tool_call_id="call-parent-task",
+            )
+        ):
+            assert (
+                await ToolReviewMiddleware().aafter_model(
+                    state,
+                    SimpleNamespace(context=context),  # type: ignore[arg-type]
+                )
+                is None
+            )
+
+        receipts = await store.list_tool_receipts_for_run(run_id)
+        child = next(
+            receipt for receipt in receipts if receipt["tool_call_id"] == "call-child-tool"
+        )
+        assert child["parent_operation_id"] == "toolop_parent_task"
     finally:
         await store.close()
 
@@ -283,7 +351,7 @@ async def test_legacy_p10_tables_migrate_before_new_indexes(tmp_path: Path) -> N
             ).fetchall()
         }
         assert {"tool_version", "interrupt_id", "action_index"} <= permission_columns
-        assert "execution_namespace" in receipt_columns
+        assert {"execution_namespace", "parent_operation_id"} <= receipt_columns
         legacy_question = await (
             await store._conn.execute(
                 "SELECT wait_cycle_id, interrupt_id FROM local_questions WHERE id = ?",

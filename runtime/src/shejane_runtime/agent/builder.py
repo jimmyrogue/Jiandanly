@@ -2,25 +2,23 @@
 
 We use `deepagents.create_deep_agent` instead of plain
 `langchain.agents.create_agent` because it auto-assembles a sensible
-batteries-included middleware stack and the SubAgent / Skills /
-Filesystem / Shell integrations we need anyway. Our
+batteries-included middleware stack and the SubAgent / Filesystem / Shell
+integrations we need anyway. Our
 remaining job is to:
 
   1. Bind the Runtime-selected BYOK model connection.
   2. Build a *narrow* tool list (everything outside the deepagents auto
      stack: time, environment, clipboard, local web fetch, MCP, browser).
-  3. Pass per-run config: `subagents=`, `skills=`, `backend=`,
-     `checkpointer=`.
-  4. Append our custom middleware (5 phase hooks + retry/limit knobs)
-     into the user-middleware slot.
+  3. Pass per-run config: `subagents=`, `backend=`, `checkpointer=`.
+  4. Append our custom middleware, including DeepAgents' SkillsMiddleware
+     at the prompt tail so its absolute paths survive context compaction.
 
 What deepagents auto-adds for us (we no longer wire these manually):
 
   TodoListMiddleware              ← planning (P3)
-  SkillsMiddleware                ← when `skills=` passed
   FilesystemMiddleware            ← ls/read_file/write_file/edit_file
                                     + glob/grep + execute tools
-  SubAgentMiddleware + Async      ← when `subagents=` passed
+  SubAgentMiddleware              ← when `subagents=` passed
   SummarizationMiddleware         ← auto context compaction
   PatchToolCallsMiddleware        ← orphan tool_call self-heal
   ToolExclusionMiddleware         ← conditional tool gating
@@ -50,6 +48,7 @@ from urllib.parse import urlparse
 import httpx
 from deepagents import create_deep_agent
 from deepagents.backends import CompositeBackend, FilesystemBackend
+from deepagents.middleware import SkillsMiddleware
 from langchain.agents.middleware import (
     AgentMiddleware,
     ToolCallLimitMiddleware,
@@ -64,6 +63,7 @@ from PIL import Image, UnidentifiedImageError
 from ..config import Settings, get_settings
 from ..llm.ledger import LedgerChatModel
 from ..llm.runtime import RuntimeModelProxy
+from ..middleware.agent_mailbox import AgentMailboxMiddleware
 from ..middleware.completion_router import (
     CompletionRouterMiddleware,
     completion_repair_instruction,
@@ -88,7 +88,7 @@ from ..plugins.ocr import OCRActionExecutor
 from ..plugins.platforms import current_managed_worker_platform
 from ..plugins.sandbox_runtime import SandboxRuntimeError, configured_srt_launcher
 from ..plugins.tools import PluginActionError, PluginToolAdapter, build_plugin_tool
-from ..store.sqlite import LocalStore
+from ..store.sqlite import MAX_DURABLE_CHILD_DEPTH, LocalStore
 from ..tools.mcp import (
     MCP_TOOL_SEARCH_THRESHOLD,
     MCPToolCatalog,
@@ -105,14 +105,19 @@ from .backends import (
     RuntimeFilesystemBackend,
     RuntimeLocalShellBackend,
 )
+from .child_runs import build_child_run_tools
 from .context_builder import AsyncToolExecutionGate, RuntimeContext, build_default_context
-from .subagents import build_subagents
+from .mailbox import build_agent_mailbox_tools
+from .subagents import build_durable_child_definitions, build_subagents
+from .team_graph import build_team_roster, build_team_tool
 
 log = logging.getLogger("shejane_runtime.agent.builder")
 
 _AGENT_DEFINITION_CACHE_MAX = 16
 _AGENT_STATE_SCHEMA_VERSION = 2
 _MAX_SUBAGENT_TASKS_PER_RUN = 5
+_MAX_TEAM_RUNS_PER_RUN = 2
+_MAX_CHILD_CONTROL_CALLS_PER_RUN = 16
 _PARENT_MODEL_CALL_RESERVE = 5
 _APPROVAL_REVIEW_MAX_CALLS = 20
 _CLARIFICATION_REVIEW_MAX_CALLS = 4
@@ -121,10 +126,27 @@ _TITLE_GENERATION_MAX_CALLS = 1
 _VISION_MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024
 _VISION_MAX_IMAGE_PIXELS = 40_000_000
 _VISION_MEDIA_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+_SKILLS_SYSTEM_PROMPT = """<skills>
+{skills_locations}
+{skills_load_warnings}
+Available Skills:
+{skills_list}
+For a relevant Skill, read its listed SKILL.md with read_file before following it.
+</skills>"""
 
 _DEEPAGENTS_TOOL_NAMES = {
     "write_todos",
     "task",
+    "team.run",
+    "child.spawn",
+    "child.list",
+    "child.check",
+    "child.wait",
+    "child.cancel",
+    "mailbox.send",
+    "mailbox.inbox",
+    "mailbox.reply",
+    "mailbox.ack",
     "ls",
     "read_file",
     "write_file",
@@ -497,6 +519,27 @@ def _custom_middleware(
             ToolCallLimitMiddleware(
                 tool_name="task",
                 run_limit=_MAX_SUBAGENT_TASKS_PER_RUN,
+            ),
+            ToolCallLimitMiddleware(
+                tool_name="team.run",
+                run_limit=_MAX_TEAM_RUNS_PER_RUN,
+            ),
+            *(
+                ToolCallLimitMiddleware(
+                    tool_name=tool_name,
+                    run_limit=_MAX_CHILD_CONTROL_CALLS_PER_RUN,
+                )
+                for tool_name in (
+                    "child.spawn",
+                    "child.list",
+                    "child.check",
+                    "child.wait",
+                    "child.cancel",
+                    "mailbox.send",
+                    "mailbox.inbox",
+                    "mailbox.reply",
+                    "mailbox.ack",
+                )
             ),
             # Retry only network/IO-flaky tools, with a tight retryable
             # exception set. We deliberately exclude tools that use
@@ -1022,10 +1065,9 @@ async def build_agent(
                          from the tool list.
                          The user toggle in agent settings flows in here
                          via RunCoordinator._settings_overrides.
-        skills_enabled:  When False, passes `skills=None` to deepagents so
-                         no skill instructions get injected into the prompt
-                         and the agent doesn't see them. Mirrors the
-                         memory toggle pattern.
+        skills_enabled:  When False, omits SkillsMiddleware so no Skill
+                         catalog is injected into the model prompt. Mirrors
+                         the memory toggle pattern.
         mcp_enabled:     When False, omits MCP tools from this execution
                          entirely so no MCP tools land in the agent's tool
                          list. The discovered servers are still reported
@@ -1307,24 +1349,69 @@ async def build_agent(
         ),
     )
 
-    middleware = _custom_middleware(
-        settings,
-        deferred_tool_names=deferred_tool_names,
-    )
-    middleware.insert(3, SteeringMiddleware())
-
-    if extra_middleware:
-        middleware.extend(extra_middleware)
-
+    is_durable_child = runtime_context is not None and runtime_context.run_kind == "child"
     subagents_arg = (
         build_subagents(
             main_tools=tools,
             main_model=subagent_model,
             deferred_tool_names=deferred_tool_names,
         )
-        if settings.enable_subagents
+        if settings.enable_subagents and not is_durable_child
         else None
     )
+    child_definitions = build_durable_child_definitions(subagents_arg) if subagents_arg else {}
+    if runtime_context is not None:
+        runtime_context.child_agent_definitions = child_definitions
+    if subagents_arg:
+        tools.append(
+            build_team_tool(
+                roster=build_team_roster(subagents_arg),
+                checkpointer=checkpointer,
+            )
+        )
+    if (
+        runtime_context is not None
+        and runtime_context.child_run_control is not None
+        and runtime_context.collaboration_depth < MAX_DURABLE_CHILD_DEPTH
+        and child_definitions
+    ):
+        tools.extend(build_child_run_tools(child_definitions))
+    if runtime_context is not None and runtime_context.agent_mailbox_control is not None:
+        tools.extend(build_agent_mailbox_tools())
+
+    middleware = _custom_middleware(
+        settings,
+        deferred_tool_names=deferred_tool_names,
+    )
+    middleware.insert(3, SteeringMiddleware())
+    if runtime_context is not None and runtime_context.agent_mailbox_control is not None:
+        middleware.insert(4, AgentMailboxMiddleware())
+    if is_durable_child:
+        allowed = set(runtime_context.allowed_tool_names) | {
+            "mailbox.send",
+            "mailbox.inbox",
+            "mailbox.reply",
+            "mailbox.ack",
+        }
+        known = {tool.name for tool in tools} | _DEEPAGENTS_TOOL_NAMES
+        visibility = next(item for item in middleware if isinstance(item, ToolVisibilityMiddleware))
+        visibility.blocked_tool_names.update(known - allowed)
+
+    if extra_middleware:
+        middleware.extend(extra_middleware)
+    if skills_arg:
+        # DeepAgents normally installs SkillsMiddleware near the front of its
+        # prompt stack. Filesystem and subagent instructions then push the
+        # catalog into the middle of a large SystemMessage, where the context
+        # envelope can split an absolute SKILL.md path. Keep the dependency's
+        # loader/state contract, but place its prompt fragment at the tail.
+        middleware.append(
+            SkillsMiddleware(
+                backend=RuntimeBackend(),
+                sources=skills_arg,
+                system_prompt=_SKILLS_SYSTEM_PROMPT,
+            )
+        )
 
     # Complete provider-independent prompt stack: Runtime identity and safety,
     # developer instructions, task, skills hint, run state, and environment.
@@ -1342,7 +1429,7 @@ async def build_agent(
             title_model=title_model,
             dynamic_tools=dynamic_tool_map,
             execution_attempt_id=execution_attempt_id,
-            subagents_enabled=settings.enable_subagents,
+            subagents_enabled=bool(subagents_arg),
             tool_mutation_lock=AsyncToolExecutionGate(),
             outbound_is_external=_outbound_is_external(settings, model_binding),
             outbound_pii_types=_outbound_pii_types(settings.pii_redact_types),
@@ -1394,7 +1481,7 @@ async def build_agent(
         runtime_context.outbound_secrets = (model_api_key,) if model_api_key else ()
         runtime_context.dynamic_tools = dynamic_tool_map
         runtime_context.memory_enabled = memory_enabled
-        runtime_context.subagents_enabled = settings.enable_subagents
+        runtime_context.subagents_enabled = bool(subagents_arg)
         runtime_context.plugin_catalog_hash = (
             plugin_lease.action_catalog_hash if plugin_lease else None
         )
@@ -1419,6 +1506,10 @@ async def build_agent(
         skill_catalog_hash=effective_skill_catalog_hash,
         memory=memory_arg,
         plugin_catalog_hash=(plugin_lease.action_catalog_hash if plugin_lease else None),
+        agent_definition_id=runtime_context.agent_definition_id,
+        agent_definition_version=runtime_context.agent_definition_version,
+        agent_role_prompt=runtime_context.agent_role_prompt,
+        allowed_tool_names=runtime_context.allowed_tool_names,
     )
     runtime_context.graph_definition_id = fingerprint
 
@@ -1428,7 +1519,7 @@ async def build_agent(
             tools=tools,
             middleware=middleware,
             subagents=subagents_arg,
-            skills=skills_arg,
+            skills=None,
             memory=memory_arg,
             backend=RuntimeBackend(),
             checkpointer=checkpointer,
@@ -1460,6 +1551,10 @@ def _agent_definition_fingerprint(
     skill_catalog_hash: str | None,
     memory: list[str] | None,
     plugin_catalog_hash: str | None,
+    agent_definition_id: str = "shejane.default",
+    agent_definition_version: str = "1",
+    agent_role_prompt: str | None = None,
+    allowed_tool_names: tuple[str, ...] = (),
 ) -> str:
     payload = {
         "version": _AGENT_STATE_SCHEMA_VERSION,
@@ -1480,6 +1575,12 @@ def _agent_definition_fingerprint(
         "skill_catalog_hash": skill_catalog_hash,
         "memory": memory or [],
         "plugin_catalog_hash": plugin_catalog_hash,
+        "durable_agent": {
+            "id": agent_definition_id,
+            "version": agent_definition_version,
+            "role_prompt": agent_role_prompt,
+            "allowed_tools": sorted(allowed_tool_names),
+        },
         "middleware": {
             "max_model_calls": settings.max_model_calls,
             "input_guard": settings.input_guard_mode,

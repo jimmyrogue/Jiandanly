@@ -27,12 +27,12 @@ import mimetypes
 import re
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from langchain_core.load.dump import dumps as lc_dumps
 from langchain_core.messages import AIMessageChunk, HumanMessage, SystemMessage
@@ -41,7 +41,9 @@ from langgraph.store.base import BaseStore
 from langgraph.types import Command
 
 from .agent.builder import build_agent, skill_catalog_fingerprint
+from .agent.child_runs import ChildRunControl
 from .agent.context_builder import RuntimeContext
+from .agent.mailbox import AgentMailboxControl, AgentMessageKind
 from .config import Settings, clamp_run_budget, get_settings
 from .event_translator import translate
 from .failure_policy import classify_failure_payload
@@ -96,6 +98,8 @@ RUNTIME_CAPABILITIES = frozenset(
         "mcp",
         "plugins",
         "subagents",
+        "durable-child-runs",
+        "multi-agent-coordination",
         "schedules",
         "hitl",
     }
@@ -111,6 +115,111 @@ _IMAGE_TOOL_CAPABILITIES = {
     "image.generate": "image_generation",
     "image.edit": "image_editing",
 }
+_CHILD_TERMINAL_STATUSES = {"completed", "failed", "canceled", "cleanup_required"}
+
+
+def _child_wait_satisfied(
+    children: Sequence[dict[str, Any]],
+    condition: Literal["all", "any"],
+) -> bool:
+    terminal = [child.get("status") in _CHILD_TERMINAL_STATUSES for child in children]
+    return all(terminal) if condition == "all" else any(terminal)
+
+
+def _collaboration_completion_summary(
+    children: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    active = [
+        str(child["id"])
+        for child in children
+        if child.get("status") not in _CHILD_TERMINAL_STATUSES
+    ]
+    required = [child for child in children if child.get("completion_mode") == "required"]
+    required_failed = [
+        str(child["id"])
+        for child in required
+        if child.get("status") in _CHILD_TERMINAL_STATUSES and child.get("status") != "completed"
+    ]
+    required_waiting = [
+        str(child["id"])
+        for child in required
+        if child.get("status") not in _CHILD_TERMINAL_STATUSES
+    ]
+    best_effort_active = [
+        str(child["id"])
+        for child in children
+        if child.get("completion_mode") == "best_effort"
+        and child.get("status") not in _CHILD_TERMINAL_STATUSES
+    ]
+
+    quorum_members: dict[str, list[dict[str, Any]]] = {}
+    for child in children:
+        if child.get("completion_mode") != "quorum":
+            continue
+        quorum_members.setdefault(str(child.get("quorum_group") or ""), []).append(child)
+    quorum_groups: list[dict[str, Any]] = []
+    quorum_waiting: list[str] = []
+    quorum_cancel: list[str] = []
+    quorum_impossible = False
+    quorum_satisfied = True
+    for group, members in sorted(quorum_members.items()):
+        requirements = {int(member.get("quorum_required") or 0) for member in members}
+        required_count = next(iter(requirements)) if len(requirements) == 1 else 0
+        completed = sum(member.get("status") == "completed" for member in members)
+        member_active = [
+            str(member["id"])
+            for member in members
+            if member.get("status") not in _CHILD_TERMINAL_STATUSES
+        ]
+        failed = sum(
+            member.get("status") in _CHILD_TERMINAL_STATUSES and member.get("status") != "completed"
+            for member in members
+        )
+        satisfied = required_count > 0 and completed >= required_count
+        impossible = (
+            required_count <= 0
+            or len(members) < required_count
+            or completed + len(member_active) < required_count
+        )
+        if satisfied or impossible:
+            quorum_cancel.extend(member_active)
+        else:
+            quorum_waiting.extend(member_active)
+        quorum_satisfied = quorum_satisfied and satisfied
+        quorum_impossible = quorum_impossible or impossible
+        quorum_groups.append(
+            {
+                "group": group,
+                "required": required_count,
+                "completed": completed,
+                "active": len(member_active),
+                "failed": failed,
+                "satisfied": satisfied,
+                "impossible": impossible,
+            }
+        )
+
+    impossible = bool(required_failed) or quorum_impossible
+    required_satisfied = not required_failed and not required_waiting
+    satisfied = required_satisfied and quorum_satisfied and not impossible
+    wait_for = [] if impossible else [*required_waiting, *quorum_waiting]
+    cancel = [*best_effort_active, *quorum_cancel]
+    if impossible:
+        cancel = active
+    return {
+        "satisfied": satisfied,
+        "impossible": impossible,
+        "required": {
+            "total": len(required),
+            "completed": sum(child.get("status") == "completed" for child in required),
+            "failed": required_failed,
+            "active": len(required_waiting),
+        },
+        "quorum_groups": quorum_groups,
+        "best_effort_active": len(best_effort_active),
+        "wait_for": list(dict.fromkeys(wait_for)),
+        "cancel": list(dict.fromkeys(cancel)),
+    }
 
 
 async def _generate_conversation_title(
@@ -325,6 +434,10 @@ class ExecutionSkillBindingError(RuntimeError):
 
 class ExecutionSettlementError(RuntimeError):
     """Authoritative execution records cannot prove a safe terminal result."""
+
+
+class ChildCoordinationError(RuntimeError):
+    """Required child work could not satisfy the parent's completion policy."""
 
 
 class ExecutionLeaseExpiredError(RuntimeError):
@@ -584,6 +697,7 @@ class RunCoordinator:
         self._model_connection_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._agent_definitions: dict[str, Any] = {}
         self._agent_definition_lock = asyncio.Lock()
+        self._child_wait_locks: dict[str, asyncio.Lock] = {}
         self._fenced_checkpointer = (
             FencedCheckpointer(checkpointer, store) if checkpointer is not None else None
         )
@@ -1553,6 +1667,31 @@ class RunCoordinator:
                     identity_error = f"run job {job['id']} workspace_path does not match its run"
                 elif input_payload.get("mode") != run.get("mode"):
                     identity_error = f"run job {job['id']} model does not match its run"
+                elif input_payload.get("run_kind", run.get("run_kind")) != run.get("run_kind"):
+                    identity_error = f"run job {job['id']} kind does not match its run"
+                elif input_payload.get("root_run_id", run.get("root_run_id")) != run.get(
+                    "root_run_id"
+                ):
+                    identity_error = f"run job {job['id']} root does not match its run"
+                elif input_payload.get(
+                    "agent_definition_id", run.get("agent_definition_id")
+                ) != run.get("agent_definition_id"):
+                    identity_error = f"run job {job['id']} Agent definition does not match its run"
+                elif input_payload.get(
+                    "agent_definition_version", run.get("agent_definition_version")
+                ) != run.get("agent_definition_version"):
+                    identity_error = (
+                        f"run job {job['id']} Agent definition version does not match its run"
+                    )
+                elif int(
+                    input_payload.get(
+                        "collaboration_depth",
+                        run.get("collaboration_depth") or 0,
+                    )
+                ) != int(run.get("collaboration_depth") or 0):
+                    identity_error = (
+                        f"run job {job['id']} collaboration depth does not match its run"
+                    )
                 frozen_settings = _json_object(run.get("settings_json")) if run is not None else {}
                 if identity_error is None and input_payload.get("settings") != frozen_settings:
                     identity_error = f"run job {job['id']} settings snapshot does not match its run"
@@ -2001,6 +2140,7 @@ class RunCoordinator:
         lease_state: str = "current",
     ) -> RunOutcome:
         """Build one deterministic P11 result from durable Runtime records."""
+        outcome, collaboration = await self._settle_child_coordination(run_id, outcome)
         snapshot = await self.store.execution_settlement_snapshot(run_id)
         model_statuses = snapshot["model_statuses"]
         tool_statuses = snapshot["tool_statuses"]
@@ -2058,6 +2198,7 @@ class RunCoordinator:
             "tool_receipts": {"statuses": tool_statuses},
             "artifacts": snapshot["artifacts"],
             "verification": snapshot["verification"],
+            "collaboration": collaboration,
             "cleanup": cleanup_report,
         }
         payload = {**outcome.payload, "execution": execution}
@@ -2074,6 +2215,68 @@ class RunCoordinator:
             event_type=outcome.event_type,
             payload=payload,
         )
+
+    async def _settle_child_coordination(
+        self,
+        run_id: str,
+        outcome: RunOutcome,
+    ) -> tuple[RunOutcome, dict[str, Any]]:
+        children = await self.store.list_child_runs_for_run(run_id)
+        summary = _collaboration_completion_summary(children)
+        if not children or outcome.status not in {"completed", "failed", "canceled"}:
+            return outcome, summary
+
+        if outcome.status in {"failed", "canceled"}:
+            active = [
+                str(child["id"])
+                for child in children
+                if child.get("status") not in _CHILD_TERMINAL_STATUSES
+            ]
+            if active:
+                await self._cancel_child_runs(run_id, active)
+                await self._wait_for_child_runs_terminal(run_id, active)
+                children = await self.store.list_child_runs_for_run(run_id)
+            return outcome, _collaboration_completion_summary(children)
+
+        while True:
+            summary = _collaboration_completion_summary(children)
+            to_cancel = summary["cancel"]
+            if to_cancel:
+                await self._cancel_child_runs(run_id, to_cancel)
+                await self._wait_for_child_runs_terminal(run_id, to_cancel)
+                children = await self.store.list_child_runs_for_run(run_id)
+                summary = _collaboration_completion_summary(children)
+            if summary["impossible"]:
+                active = [
+                    str(child["id"])
+                    for child in children
+                    if child.get("status") not in _CHILD_TERMINAL_STATUSES
+                ]
+                if active:
+                    await self._cancel_child_runs(run_id, active)
+                    await self._wait_for_child_runs_terminal(run_id, active)
+                    children = await self.store.list_child_runs_for_run(run_id)
+                    summary = _collaboration_completion_summary(children)
+                error = ChildCoordinationError(
+                    "Required child work failed or could not satisfy its quorum."
+                )
+                return (
+                    RunOutcome("failed", "run.failed", _run_failed_payload(error)),
+                    summary,
+                )
+            if summary["satisfied"]:
+                return outcome, summary
+            wait_for = summary["wait_for"]
+            if not wait_for:
+                error = ChildCoordinationError(
+                    "Child completion policy has no satisfiable continuation."
+                )
+                return (
+                    RunOutcome("failed", "run.failed", _run_failed_payload(error)),
+                    summary,
+                )
+            await self._wait_for_child_status_change(run_id, children, wait_for)
+            children = await self.store.list_child_runs_for_run(run_id)
 
     async def _heartbeat_job(
         self,
@@ -2157,14 +2360,218 @@ class RunCoordinator:
         self._job_wakeup.set()
 
     async def cancel_run(self, run_id: str) -> bool:
-        state = await self.store.request_run_cancel(run_id)
-        if state is None:
+        states = await self.store.request_run_cancel_tree(run_id)
+        if not states:
             return False
-        task = self._tasks.get(run_id)
-        if task is not None and task in self._started_jobs:
-            task.cancel()
+        for target_run_id, state in states.items():
+            task = self._tasks.get(target_run_id)
+            if state == "leased" and task is not None and task in self._started_jobs:
+                task.cancel()
         self._job_wakeup.set()
-        return True
+        return run_id in states
+
+    def child_run_control(self) -> ChildRunControl:
+        return ChildRunControl(
+            spawn=self._spawn_child_run,
+            list=self.store.list_child_runs_for_run,
+            check=self.store.child_runs_for_parent,
+            wait=self._wait_for_child_runs,
+            cancel=self._cancel_child_runs,
+        )
+
+    def agent_mailbox_control(self) -> AgentMailboxControl:
+        return AgentMailboxControl(
+            send=self._send_agent_message,
+            reply=self._reply_agent_message,
+            inbox=self.store.list_agent_inbox,
+            ack=self._ack_agent_messages,
+        )
+
+    async def collaboration_snapshot(self, root_run_id: str) -> dict[str, Any]:
+        snapshot = await self.store.collaboration_snapshot(root_run_id)
+        snapshot["completion"] = _collaboration_completion_summary(snapshot["children"])
+        return snapshot
+
+    async def _send_agent_message(
+        self,
+        sender_run_id: str,
+        sender_operation_id: str,
+        recipient_run_id: str,
+        kind: AgentMessageKind,
+        text: str,
+        data: dict[str, Any],
+        artifact_refs: Sequence[str],
+        ttl_seconds: int,
+    ) -> dict[str, Any]:
+        message, _created = await self.store.send_agent_message(
+            sender_run_id=sender_run_id,
+            sender_operation_id=sender_operation_id,
+            recipient_run_id=recipient_run_id,
+            kind=kind,
+            text=text,
+            data=data,
+            artifact_refs=artifact_refs,
+            ttl_seconds=ttl_seconds,
+        )
+        return message
+
+    async def _reply_agent_message(
+        self,
+        sender_run_id: str,
+        sender_operation_id: str,
+        in_reply_to: str,
+        kind: AgentMessageKind,
+        text: str,
+        data: dict[str, Any],
+        artifact_refs: Sequence[str],
+        ttl_seconds: int,
+    ) -> dict[str, Any]:
+        message, _created = await self.store.reply_agent_message(
+            sender_run_id=sender_run_id,
+            sender_operation_id=sender_operation_id,
+            in_reply_to=in_reply_to,
+            kind=kind,
+            text=text,
+            data=data,
+            artifact_refs=artifact_refs,
+            ttl_seconds=ttl_seconds,
+        )
+        return message
+
+    async def _ack_agent_messages(
+        self,
+        recipient_run_id: str,
+        operation_id: str,
+        message_ids: Sequence[str],
+    ) -> list[dict[str, Any]]:
+        return await self.store.ack_agent_messages(
+            recipient_run_id=recipient_run_id,
+            message_ids=message_ids,
+            operation_id=operation_id,
+        )
+
+    async def _spawn_child_run(
+        self,
+        parent_run_id: str,
+        spawn_operation_id: str,
+        goal: str,
+        agent_definition: dict[str, Any],
+        coordination: dict[str, Any],
+    ) -> dict[str, Any]:
+        child, created = await self.store.accept_child_run(
+            parent_run_id=parent_run_id,
+            spawn_operation_id=spawn_operation_id,
+            goal=goal,
+            agent_definition=agent_definition,
+            coordination=coordination,
+        )
+        spawn_event = child.pop("_spawn_event", None)
+        if isinstance(spawn_event, dict):
+            async with self._stream_publication(parent_run_id):
+                self._publish_live(parent_run_id, self._stored_event_envelope(spawn_event))
+        if created:
+            self._job_wakeup.set()
+        return (await self.store.child_runs_for_parent(parent_run_id, [str(child["id"])]))[0]
+
+    async def _wait_for_child_runs(
+        self,
+        parent_run_id: str,
+        child_run_ids: Sequence[str],
+        condition: Literal["all", "any"],
+        timeout_seconds: float,
+    ) -> list[dict[str, Any]]:
+        snapshots = await self.store.child_runs_for_parent(parent_run_id, child_run_ids)
+        if _child_wait_satisfied(snapshots, condition) or timeout_seconds <= 0:
+            return snapshots
+        lock = self._child_wait_locks.setdefault(parent_run_id, asyncio.Lock())
+        async with lock:
+            deadline = asyncio.get_running_loop().time() + timeout_seconds
+            async with self._yield_execution_slot(parent_run_id):
+                while True:
+                    snapshots = await self.store.child_runs_for_parent(parent_run_id, child_run_ids)
+                    if _child_wait_satisfied(snapshots, condition):
+                        break
+                    remaining = deadline - asyncio.get_running_loop().time()
+                    if remaining <= 0:
+                        break
+                    await asyncio.sleep(min(0.25, remaining))
+        if not lock.locked():
+            self._child_wait_locks.pop(parent_run_id, None)
+        return snapshots
+
+    async def _wait_for_child_runs_terminal(
+        self,
+        parent_run_id: str,
+        child_run_ids: Sequence[str],
+    ) -> list[dict[str, Any]]:
+        if not child_run_ids:
+            return []
+        lock = self._child_wait_locks.setdefault(parent_run_id, asyncio.Lock())
+        async with lock:
+            async with self._yield_execution_slot(parent_run_id):
+                while True:
+                    snapshots = await self.store.child_runs_for_parent(parent_run_id, child_run_ids)
+                    if _child_wait_satisfied(snapshots, "all"):
+                        break
+                    await asyncio.sleep(0.25)
+        if not lock.locked():
+            self._child_wait_locks.pop(parent_run_id, None)
+        return snapshots
+
+    async def _wait_for_child_status_change(
+        self,
+        parent_run_id: str,
+        current: Sequence[dict[str, Any]],
+        child_run_ids: Sequence[str],
+    ) -> None:
+        previous = {
+            str(child["id"]): (str(child.get("status") or ""), str(child.get("updated_at") or ""))
+            for child in current
+            if str(child["id"]) in child_run_ids
+        }
+        lock = self._child_wait_locks.setdefault(parent_run_id, asyncio.Lock())
+        async with lock:
+            async with self._yield_execution_slot(parent_run_id):
+                while True:
+                    snapshots = await self.store.child_runs_for_parent(parent_run_id, child_run_ids)
+                    if any(
+                        previous.get(str(child["id"]))
+                        != (str(child.get("status") or ""), str(child.get("updated_at") or ""))
+                        for child in snapshots
+                    ):
+                        break
+                    await asyncio.sleep(0.25)
+        if not lock.locked():
+            self._child_wait_locks.pop(parent_run_id, None)
+
+    @asynccontextmanager
+    async def _yield_execution_slot(self, parent_run_id: str):
+        task = self._tasks.get(parent_run_id)
+        should_yield = task is not None and not task.done()
+        if not should_yield:
+            yield
+            return
+        self._slots.release()
+        self._job_wakeup.set()
+        try:
+            yield
+        finally:
+            acquire = asyncio.create_task(self._slots.acquire())
+            try:
+                await asyncio.shield(acquire)
+            except asyncio.CancelledError:
+                await acquire
+                raise
+
+    async def _cancel_child_runs(
+        self,
+        parent_run_id: str,
+        child_run_ids: Sequence[str],
+    ) -> list[dict[str, Any]]:
+        await self.store.child_runs_for_parent(parent_run_id, child_run_ids)
+        for child_run_id in child_run_ids:
+            await self.cancel_run(str(child_run_id))
+        return await self.store.child_runs_for_parent(parent_run_id, child_run_ids)
 
     async def cancel_model_connection_runs(
         self,
@@ -2336,6 +2743,29 @@ class RunCoordinator:
         try:
             settings = self.settings
             run_metadata = self._run_metadata.get(run_id) or {}
+            run_record = await self.store.get_run(run_id)
+            if run_record is None:
+                raise ExecutionIdentityError(f"run {run_id} disappeared before execution")
+            run_kind = str(run_record.get("run_kind") or "turn")
+            root_run_id = str(run_record.get("root_run_id") or run_id)
+            agent_definition_id = str(run_record.get("agent_definition_id") or "shejane.default")
+            agent_definition_version = str(run_record.get("agent_definition_version") or "1")
+            collaboration_depth = int(run_record.get("collaboration_depth") or 0)
+            child_definition: dict[str, Any] | None = None
+            if run_kind == "child":
+                candidate = run_metadata.get("_child_agent_definition")
+                if (
+                    not isinstance(candidate, dict)
+                    or candidate.get("id") != agent_definition_id
+                    or candidate.get("version") != agent_definition_version
+                    or not isinstance(candidate.get("system_prompt"), str)
+                    or not isinstance(candidate.get("allowed_tools"), list)
+                    or not all(isinstance(name, str) for name in candidate["allowed_tools"])
+                ):
+                    raise ExecutionIdentityError(
+                        f"child run {run_id} has an incompatible frozen Agent definition"
+                    )
+                child_definition = candidate
             repair_context = _repair_context_from_metadata(
                 run_metadata,
                 max_attempts=settings.repair_workflow_max,
@@ -2437,10 +2867,16 @@ class RunCoordinator:
                 principal_id=principal_id,
                 store=self.store,
                 steering_emit=emit_steering_event,
+                child_run_control=self.child_run_control(),
+                agent_mailbox_control=self.agent_mailbox_control(),
                 memory_enabled=memory_enabled,
-                memory_write_facts=extract_memory_write_facts(
-                    self._user_inputs.get(run_id, goal),
-                    history=full_messages,
+                memory_write_facts=(
+                    ()
+                    if run_kind == "child"
+                    else extract_memory_write_facts(
+                        self._user_inputs.get(run_id, goal),
+                        history=full_messages,
+                    )
                 ),
                 execution_attempt_id=execution_attempt_id,
                 workspace_root=workspace_path,
@@ -2450,7 +2886,20 @@ class RunCoordinator:
                     if item.get("virtual_path")
                 ),
                 task_goal=goal,
+                agent_role_prompt=(
+                    str(child_definition["system_prompt"]) if child_definition is not None else None
+                ),
+                allowed_tool_names=(
+                    tuple(str(name) for name in child_definition["allowed_tools"])
+                    if child_definition is not None
+                    else ()
+                ),
                 mode=resolved_model,
+                run_kind=run_kind,
+                root_run_id=root_run_id,
+                agent_definition_id=agent_definition_id,
+                agent_definition_version=agent_definition_version,
+                collaboration_depth=collaboration_depth,
                 permission_mode=str(run_settings.get("permission_mode") or "ask"),
                 capability_bindings={
                     str(key): dict(value)
@@ -3094,6 +3543,7 @@ class RunCoordinator:
         payload: dict[str, Any],
     ) -> None:
         """Publish transient output or persist an authoritative event."""
+        parent_event: dict[str, Any] | None = None
         async with self._stream_publication(run_id):
             if event_type in TRANSIENT_RUN_EVENT_TYPES:
                 event = {
@@ -3104,10 +3554,14 @@ class RunCoordinator:
                     "created_at": datetime.now(UTC).isoformat(),
                 }
             else:
-                event = self._stored_event_envelope(
-                    await self.store.append_event(run_id, event_type, payload)
-                )
+                stored_event = await self.store.append_event(run_id, event_type, payload)
+                candidate = stored_event.get("_parent_event")
+                if isinstance(candidate, dict):
+                    parent_event = candidate
+                event = self._stored_event_envelope(stored_event)
             self._publish_live(run_id, event)
+        if parent_event is not None:
+            await self._publish_derived_parent_event(parent_event)
         if wakeup is not None:
             wakeup.set()
 
@@ -3121,6 +3575,7 @@ class RunCoordinator:
         status: str,
     ) -> None:
         """Persist the authoritative result before notifying live subscribers."""
+        parent_event: dict[str, Any] | None = None
         async with self._stream_publication(run_id):
             event, created = await self.store.commit_run_result(
                 run_id,
@@ -3130,6 +3585,11 @@ class RunCoordinator:
             )
             if created:
                 self._publish_live(run_id, self._stored_event_envelope(event))
+                candidate = event.get("_parent_event")
+                if isinstance(candidate, dict):
+                    parent_event = candidate
+        if parent_event is not None:
+            await self._publish_derived_parent_event(parent_event)
         if not created:
             return
         wakeup.set()
@@ -3148,6 +3608,14 @@ class RunCoordinator:
             resume_payload = await self.store.latest_resolved_wait_cycle_payload(run_id)
             if resume_payload is not None:
                 await self.resume_run(run_id=run_id, decision=resume_payload)
+
+    async def _publish_derived_parent_event(self, event: dict[str, Any]) -> None:
+        parent_run_id = str(event["run_id"])
+        async with self._stream_publication(parent_run_id):
+            self._publish_live(parent_run_id, self._stored_event_envelope(event))
+        wakeup = self._wakeups.get(parent_run_id)
+        if wakeup is not None:
+            wakeup.set()
 
     @staticmethod
     def _terminal_callback_finished(task: asyncio.Task[None]) -> None:

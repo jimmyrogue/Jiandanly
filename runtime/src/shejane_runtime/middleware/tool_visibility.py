@@ -7,7 +7,9 @@ import re
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
-from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware import AgentMiddleware, ToolCallRequest
+from langchain_core.messages import ToolMessage
+from langgraph.types import Command
 
 from ..tools.mcp import MCP_TOOL_SEARCH_NAME, MCP_TOOL_SEARCH_RESULT_KIND
 
@@ -230,4 +232,31 @@ class ToolVisibilityMiddleware(AgentMiddleware):
                 self.deferred_tool_names,
                 self.blocked_tool_names,
             )
+        )
+
+    def wrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]],
+    ) -> ToolMessage | Command[Any]:
+        blocked = self._blocked_tool_result(request)
+        return blocked if blocked is not None else handler(request)
+
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
+    ) -> ToolMessage | Command[Any]:
+        blocked = self._blocked_tool_result(request)
+        return blocked if blocked is not None else await handler(request)
+
+    def _blocked_tool_result(self, request: ToolCallRequest) -> ToolMessage | None:
+        tool_name = str(request.tool_call.get("name") or "")
+        if tool_name not in self.blocked_tool_names:
+            return None
+        return ToolMessage(
+            content=f"Tool {tool_name} is not available to this Agent.",
+            name=tool_name,
+            tool_call_id=str(request.tool_call.get("id") or ""),
+            status="error",
         )

@@ -299,6 +299,7 @@ def test_render_snapshot_returns_per_layer_dict(tmp_path: Path) -> None:
     assert set(snap.keys()) == {
         "identity_safety",
         "developer",
+        "agent_role",
         "task",
         "skills",
         "state",
@@ -373,6 +374,25 @@ def test_state_layer_absent_when_no_state_fields(tmp_path: Path) -> None:
     builder = ContextBuilder(developer_prompt_path=prompt_file)
     result = builder.build(runtime=RuntimeContext())
     assert "<state>" not in result
+
+
+def test_durable_child_role_and_lineage_are_model_visible(tmp_path: Path) -> None:
+    prompt_file = tmp_path / "dev.md"
+    prompt_file.write_text("dev", encoding="utf-8")
+    builder = ContextBuilder(developer_prompt_path=prompt_file)
+    result = builder.build(
+        runtime=RuntimeContext(
+            run_kind="child",
+            root_run_id="root-1",
+            agent_definition_id="subagent:researcher",
+            agent_definition_version="sha256:v1",
+            agent_role_prompt="Only collect primary evidence.",
+        )
+    )
+
+    assert "<agent-role>\nOnly collect primary evidence.\n</agent-role>" in result
+    assert "subagent:researcher@sha256:v1" in result
+    assert "协作 root Run: root-1" in result
 
 
 # ---- priority ordering with new layers -------------------------------

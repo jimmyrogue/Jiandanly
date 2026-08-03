@@ -22,7 +22,6 @@ _TRANSIENT_EVENT_TYPES = {
     "llm.reasoning",
     "llm.usage",
     "llm.tool_call_chunk",
-    "subagent.spawned",
 }
 
 

@@ -4,6 +4,8 @@ import json
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+from langchain.agents.middleware import ToolCallRequest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 
@@ -181,6 +183,38 @@ def test_blocked_tools_are_hidden_even_when_the_goal_names_them() -> None:
     )
 
     assert [item.name for item in filtered.tools] == ["workspace.read"]
+
+
+@pytest.mark.asyncio
+async def test_blocked_tool_is_rejected_even_when_model_guesses_its_name() -> None:
+    middleware = ToolVisibilityMiddleware(blocked_tool_names={"execute"})
+    request = ToolCallRequest(
+        tool_call={
+            "id": "call-hidden-execute",
+            "name": "execute",
+            "args": {"command": "touch should-not-run"},
+            "type": "tool_call",
+        },
+        tool=execute,
+        state={"messages": []},
+        runtime=SimpleNamespace(),
+    )
+    calls = 0
+
+    async def handler(_request: ToolCallRequest) -> ToolMessage:
+        nonlocal calls
+        calls += 1
+        return ToolMessage(
+            content="executed",
+            name="execute",
+            tool_call_id="call-hidden-execute",
+        )
+
+    result = await middleware.awrap_tool_call(request, handler)
+
+    assert calls == 0
+    assert result.status == "error"
+    assert result.content == "Tool execute is not available to this Agent."
 
 
 @tool("docs_lookup")

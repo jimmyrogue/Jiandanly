@@ -22,6 +22,7 @@ import asyncio
 import json
 import os
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -1354,7 +1355,7 @@ def test_capability_2_subagent_task_surfaces_spawned_event(monkeypatch) -> None:
                         "id": "call_t1",
                         "name": "task",
                         "arguments": {
-                            "subagent_name": "researcher",
+                            "subagent_type": "researcher",
                             "description": "find the latest LangGraph release notes",
                         },
                     },
@@ -1371,12 +1372,11 @@ def test_capability_2_subagent_task_surfaces_spawned_event(monkeypatch) -> None:
     with _make_client(monkeypatch, handler) as client:
         events = _post_run_and_stream(client, "research the latest LangGraph notes")
 
-    event_names = [e[0] for e in events]
-    # When the main LLM emits a `task` tool_call, our event_translator
-    # surfaces it as `subagent.spawned`.
-    assert "subagent.spawned" in event_names, (
-        f"expected subagent.spawned for task() call. got: {event_names}"
-    )
+    spawn = next((payload for name, payload in events if name == "subagent.spawned"), None)
+    assert spawn is not None, f"expected durable task receipt spawn. got: {events}"
+    assert spawn["operation_id"].startswith("toolop_")
+    assert spawn["tool_call_id"] == "call_t1"
+    assert spawn["status"] == "queued"
 
 
 def test_capability_2c_subagent_tools_share_review_and_receipt_boundary(
@@ -1452,6 +1452,557 @@ def test_capability_2c_subagent_tools_share_review_and_receipt_boundary(
         "call_task",
         "call_child_write",
     }
+
+
+def test_capability_2d_team_graph_handoff_uses_nested_task_receipts(monkeypatch) -> None:
+    handler = RecordingHandler(
+        scripts=[
+            [
+                (
+                    "llm.tool_call",
+                    {
+                        "id": "call_team",
+                        "name": "team.run",
+                        "arguments": {
+                            "objective": "Research evidence, then review it.",
+                            "assignments": [
+                                {
+                                    "id": "research",
+                                    "member": "researcher",
+                                    "task": "Collect one evidence summary.",
+                                    "output_kind": "finding",
+                                },
+                                {
+                                    "id": "review",
+                                    "member": "writer",
+                                    "task": "Review the evidence summary.",
+                                    "output_kind": "review",
+                                    "depends_on": ["research"],
+                                    "handoff_from": "research",
+                                },
+                            ],
+                        },
+                    },
+                ),
+                ("llm.done", {"request_id": "team-parent-1", "finish_reason": "tool_calls"}),
+            ],
+            [
+                ("llm.delta", {"content_delta": "Evidence collected."}),
+                ("llm.done", {"request_id": "team-research", "finish_reason": "stop"}),
+            ],
+            [
+                ("llm.delta", {"content_delta": "Evidence reviewed."}),
+                ("llm.done", {"request_id": "team-review", "finish_reason": "stop"}),
+            ],
+            [
+                ("llm.delta", {"content_delta": "Team workflow complete."}),
+                ("llm.done", {"request_id": "team-parent-2", "finish_reason": "stop"}),
+            ],
+        ]
+    )
+    with _make_client(monkeypatch, handler) as client:
+        headers = {"Authorization": "Bearer tok"}
+        run = client.post(
+            "/v1/runs",
+            headers=headers,
+            json=run_command("run a research and review team"),
+        ).json()
+        with client.stream("GET", f"/v1/runs/{run['id']}/stream", headers=headers) as response:
+            events = _parse_sse(response.read().decode("utf-8"))
+        diagnostics = client.get(f"/v1/runs/{run['id']}/diagnostics", headers=headers).json()
+
+    assert "run.completed" in [event[0] for event in events]
+    lifecycle = [event for event in events if event[0].startswith("subagent.")]
+    assert [event[0] for event in lifecycle] == [
+        "subagent.spawned",
+        "subagent.started",
+        "subagent.completed",
+        "subagent.spawned",
+        "subagent.started",
+        "subagent.completed",
+    ]
+    receipts = diagnostics["tool_receipts"]
+    team_receipt = next(item for item in receipts if item["tool_name"] == "team.run")
+    task_receipts = [item for item in receipts if item["tool_name"] == "task"]
+    assert len(task_receipts) == 2
+    assert all(
+        event[1]["parent_operation_id"] == team_receipt["operation_id"] for event in lifecycle
+    )
+    writer_request = handler.requests[2]
+    writer_user_text = " ".join(
+        str(message.get("content") or "")
+        for message in writer_request.get("messages", [])
+        if message.get("role") == "user"
+    )
+    assert "Evidence collected." in writer_user_text
+    assert "summaries and Artifact references only" in writer_user_text
+
+
+def test_capability_2e_durable_child_spawn_wait_and_parent_projection(
+    monkeypatch,
+) -> None:
+    class DurableChildHandler(RecordingHandler):
+        def __init__(self) -> None:
+            super().__init__(scripts=[])
+            self._lock = threading.Lock()
+            self._parent_round = 0
+
+        def __call__(self, request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.read())
+            with self._lock:
+                self.requests.append(body)
+            body_text = json.dumps(body, ensure_ascii=False)
+            if "P9 final-answer reviewer" in body_text:
+                return _sse(
+                    [
+                        (
+                            "llm.delta",
+                            {
+                                "content_delta": json.dumps(
+                                    {"decision": "allow", "reason": "complete"}
+                                )
+                            },
+                        ),
+                        (
+                            "llm.done",
+                            {"request_id": "completion-review", "finish_reason": "stop"},
+                        ),
+                    ]
+                )
+            if "conversation title generator" in body_text:
+                return _sse(
+                    [
+                        ("llm.delta", {"content_delta": "Durable child run"}),
+                        ("llm.done", {"request_id": "title", "finish_reason": "stop"}),
+                    ]
+                )
+            if "<agent-role>" in body_text:
+                return _sse(
+                    [
+                        ("llm.delta", {"content_delta": "Child evidence complete."}),
+                        ("llm.done", {"request_id": "child", "finish_reason": "stop"}),
+                    ]
+                )
+
+            with self._lock:
+                self._parent_round += 1
+                parent_round = self._parent_round
+            if parent_round == 1:
+                return _sse(
+                    [
+                        (
+                            "llm.tool_call",
+                            {
+                                "id": "call_child_spawn",
+                                "name": "child.spawn",
+                                "arguments": {
+                                    "agent": "researcher",
+                                    "task": "Collect one primary-source finding.",
+                                },
+                            },
+                        ),
+                        ("llm.done", {"request_id": "parent-1", "finish_reason": "tool_calls"}),
+                    ]
+                )
+            if parent_round == 2:
+                child_id = ""
+                for message in reversed(body.get("messages", [])):
+                    content = message.get("content") if isinstance(message, dict) else None
+                    if not isinstance(content, str):
+                        continue
+                    try:
+                        candidate = json.loads(content)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(candidate, dict) and candidate.get("run_kind") == "child":
+                        child_id = str(candidate.get("id") or "")
+                        break
+                assert child_id
+                return _sse(
+                    [
+                        (
+                            "llm.tool_call",
+                            {
+                                "id": "call_child_wait",
+                                "name": "child.wait",
+                                "arguments": {
+                                    "run_ids": [child_id],
+                                    "condition": "all",
+                                    "timeout_seconds": 5,
+                                },
+                            },
+                        ),
+                        ("llm.done", {"request_id": "parent-2", "finish_reason": "tool_calls"}),
+                    ]
+                )
+            return _sse(
+                [
+                    ("llm.delta", {"content_delta": "Parent collected the child result."}),
+                    ("llm.done", {"request_id": "parent-3", "finish_reason": "stop"}),
+                ]
+            )
+
+    handler = DurableChildHandler()
+    with _make_client(monkeypatch, handler) as client:
+        headers = {"Authorization": "Bearer tok"}
+        client.app.state.coordinator._slots = asyncio.Semaphore(1)
+        run = client.post(
+            "/v1/runs",
+            headers=headers,
+            json=run_command("delegate durable research"),
+        ).json()
+        with client.stream("GET", f"/v1/runs/{run['id']}/stream", headers=headers) as response:
+            events = _parse_sse(response.read().decode("utf-8"))
+        children = client.get(f"/v1/runs/{run['id']}/children", headers=headers).json()["children"]
+        child = client.get(f"/v1/runs/{children[0]['id']}", headers=headers).json()
+
+    assert [event[0] for event in events if event[0].startswith("child.")] == [
+        "child.spawned",
+        "child.started",
+        "child.completed",
+    ]
+    assert len(children) == 1
+    assert children[0]["status"] == "completed"
+    assert children[0]["result"] == "Child evidence complete."
+    assert child["root_run_id"] == run["root_run_id"]
+    assert child["parent_run_id"] == run["id"]
+
+
+def test_capability_2g_parent_settlement_waits_for_required_child_without_model_wait(
+    monkeypatch,
+) -> None:
+    class CoordinatedChildHandler(RecordingHandler):
+        def __init__(self) -> None:
+            super().__init__(scripts=[])
+            self._lock = threading.Lock()
+            self._parent_round = 0
+
+        def __call__(self, request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.read())
+            with self._lock:
+                self.requests.append(body)
+            body_text = json.dumps(body, ensure_ascii=False)
+            if "P9 final-answer reviewer" in body_text:
+                return _sse(
+                    [
+                        (
+                            "llm.delta",
+                            {
+                                "content_delta": json.dumps(
+                                    {"decision": "allow", "reason": "complete"}
+                                )
+                            },
+                        ),
+                        ("llm.done", {"request_id": "review", "finish_reason": "stop"}),
+                    ]
+                )
+            if "conversation title generator" in body_text:
+                return _sse(
+                    [
+                        ("llm.delta", {"content_delta": "Coordinated child"}),
+                        ("llm.done", {"request_id": "title", "finish_reason": "stop"}),
+                    ]
+                )
+            if "<agent-role>" in body_text:
+                return _sse(
+                    [
+                        ("llm.delta", {"content_delta": "Required child finished."}),
+                        ("llm.done", {"request_id": "child", "finish_reason": "stop"}),
+                    ]
+                )
+
+            with self._lock:
+                self._parent_round += 1
+                parent_round = self._parent_round
+            if parent_round == 1:
+                return _sse(
+                    [
+                        (
+                            "llm.tool_call",
+                            {
+                                "id": "call_required_child",
+                                "name": "child.spawn",
+                                "arguments": {
+                                    "agent": "researcher",
+                                    "task": "Finish before the parent commits.",
+                                    "completion_mode": "required",
+                                },
+                            },
+                        ),
+                        ("llm.done", {"request_id": "parent-1", "finish_reason": "tool_calls"}),
+                    ]
+                )
+            return _sse(
+                [
+                    ("llm.delta", {"content_delta": "Parent answer proposed early."}),
+                    ("llm.done", {"request_id": "parent-2", "finish_reason": "stop"}),
+                ]
+            )
+
+    handler = CoordinatedChildHandler()
+    with _make_client(monkeypatch, handler) as client:
+        headers = {"Authorization": "Bearer tok"}
+        client.app.state.coordinator._slots = asyncio.Semaphore(1)
+        run = client.post(
+            "/v1/runs",
+            headers=headers,
+            json=run_command("complete only after required child"),
+        ).json()
+        with client.stream("GET", f"/v1/runs/{run['id']}/stream", headers=headers) as response:
+            events = _parse_sse(response.read().decode("utf-8"))
+        snapshot = client.get(
+            f"/v1/runs/{run['id']}/collaboration",
+            headers=headers,
+        ).json()
+
+    durable_names = [
+        event[0] for event in events if event[0].startswith("child.") or event[0] == "run.completed"
+    ]
+    assert durable_names[-2:] == ["child.completed", "run.completed"]
+    assert snapshot["root"]["status"] == "completed"
+    assert snapshot["children"][0]["status"] == "completed"
+    assert snapshot["children"][0]["completion_mode"] == "required"
+    assert snapshot["completion"]["satisfied"] is True
+    assert snapshot["completion"]["wait_for"] == []
+
+
+def test_capability_2f_root_and_durable_child_exchange_acknowledged_mailbox_messages(
+    monkeypatch,
+) -> None:
+    class MailboxHandler(RecordingHandler):
+        def __init__(self) -> None:
+            super().__init__(scripts=[])
+            self._lock = threading.Lock()
+            self._parent_round = 0
+            self._child_poll = 0
+            self._child_replied = False
+            self._parent_acked = False
+
+        @staticmethod
+        def mailbox_message(body: dict[str, Any]) -> dict[str, Any] | None:
+            for message in reversed(body.get("messages", [])):
+                content = message.get("content") if isinstance(message, dict) else None
+                if not isinstance(content, str) or "【同一协作任务中的 Agent 消息】" not in content:
+                    continue
+                try:
+                    return json.loads(content.rsplit("\n\n", 1)[-1])
+                except json.JSONDecodeError:
+                    return None
+            return None
+
+        @staticmethod
+        def child_run_id(body: dict[str, Any]) -> str:
+            for message in reversed(body.get("messages", [])):
+                content = message.get("content") if isinstance(message, dict) else None
+                if not isinstance(content, str) or not content.startswith("{"):
+                    continue
+                try:
+                    candidate = json.loads(content)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(candidate, dict) and candidate.get("run_kind") == "child":
+                    return str(candidate.get("id") or "")
+            return ""
+
+        def __call__(self, request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.read())
+            with self._lock:
+                self.requests.append(body)
+            body_text = json.dumps(body, ensure_ascii=False)
+            if "P9 final-answer reviewer" in body_text:
+                return _sse(
+                    [
+                        (
+                            "llm.delta",
+                            {
+                                "content_delta": json.dumps(
+                                    {"decision": "allow", "reason": "complete"}
+                                )
+                            },
+                        ),
+                        ("llm.done", {"request_id": "review", "finish_reason": "stop"}),
+                    ]
+                )
+            if "conversation title generator" in body_text:
+                return _sse(
+                    [
+                        ("llm.delta", {"content_delta": "Agent mailbox"}),
+                        ("llm.done", {"request_id": "title", "finish_reason": "stop"}),
+                    ]
+                )
+            if "<agent-role>" in body_text:
+                incoming = self.mailbox_message(body)
+                if incoming is None:
+                    with self._lock:
+                        self._child_poll += 1
+                        poll = self._child_poll
+                    return _sse(
+                        [
+                            (
+                                "llm.tool_call",
+                                {
+                                    "id": f"call_child_inbox_{poll}",
+                                    "name": "mailbox.inbox",
+                                    "arguments": {},
+                                },
+                            ),
+                            (
+                                "llm.done",
+                                {"request_id": f"child-poll-{poll}", "finish_reason": "tool_calls"},
+                            ),
+                        ]
+                    )
+                with self._lock:
+                    should_reply = not self._child_replied
+                    self._child_replied = True
+                if should_reply:
+                    return _sse(
+                        [
+                            (
+                                "llm.tool_call",
+                                {
+                                    "id": "call_child_reply",
+                                    "name": "mailbox.reply",
+                                    "arguments": {
+                                        "in_reply_to": incoming["message_id"],
+                                        "kind": "result",
+                                        "text": "Primary source confirmed.",
+                                    },
+                                },
+                            ),
+                            (
+                                "llm.tool_call",
+                                {
+                                    "id": "call_child_ack",
+                                    "name": "mailbox.ack",
+                                    "arguments": {"message_ids": [incoming["message_id"]]},
+                                },
+                            ),
+                            (
+                                "llm.done",
+                                {"request_id": "child-1", "finish_reason": "tool_calls"},
+                            ),
+                        ]
+                    )
+                return _sse(
+                    [
+                        ("llm.delta", {"content_delta": "Child mailbox work complete."}),
+                        ("llm.done", {"request_id": "child-2", "finish_reason": "stop"}),
+                    ]
+                )
+
+            with self._lock:
+                self._parent_round += 1
+                parent_round = self._parent_round
+            if parent_round == 1:
+                return _sse(
+                    [
+                        (
+                            "llm.tool_call",
+                            {
+                                "id": "call_mailbox_spawn",
+                                "name": "child.spawn",
+                                "arguments": {
+                                    "agent": "researcher",
+                                    "task": "Confirm the primary source.",
+                                },
+                            },
+                        ),
+                        ("llm.done", {"request_id": "parent-1", "finish_reason": "tool_calls"}),
+                    ]
+                )
+            child_id = self.child_run_id(body)
+            if parent_round == 2:
+                assert child_id
+                return _sse(
+                    [
+                        (
+                            "llm.tool_call",
+                            {
+                                "id": "call_parent_send",
+                                "name": "mailbox.send",
+                                "arguments": {
+                                    "recipient_run_id": child_id,
+                                    "kind": "request",
+                                    "text": "Return the verified source result.",
+                                },
+                            },
+                        ),
+                        ("llm.done", {"request_id": "parent-2", "finish_reason": "tool_calls"}),
+                    ]
+                )
+            if parent_round == 3:
+                assert child_id
+                return _sse(
+                    [
+                        (
+                            "llm.tool_call",
+                            {
+                                "id": "call_parent_wait",
+                                "name": "child.wait",
+                                "arguments": {
+                                    "run_ids": [child_id],
+                                    "condition": "all",
+                                    "timeout_seconds": 5,
+                                },
+                            },
+                        ),
+                        ("llm.done", {"request_id": "parent-3", "finish_reason": "tool_calls"}),
+                    ]
+                )
+            incoming = self.mailbox_message(body)
+            with self._lock:
+                should_ack = incoming is not None and not self._parent_acked
+                if should_ack:
+                    self._parent_acked = True
+            if should_ack:
+                return _sse(
+                    [
+                        (
+                            "llm.tool_call",
+                            {
+                                "id": "call_parent_ack",
+                                "name": "mailbox.ack",
+                                "arguments": {"message_ids": [incoming["message_id"]]},
+                            },
+                        ),
+                        ("llm.done", {"request_id": "parent-4", "finish_reason": "tool_calls"}),
+                    ]
+                )
+            return _sse(
+                [
+                    ("llm.delta", {"content_delta": "Parent received the verified result."}),
+                    ("llm.done", {"request_id": "parent-5", "finish_reason": "stop"}),
+                ]
+            )
+
+    handler = MailboxHandler()
+    with _make_client(monkeypatch, handler) as client:
+        headers = {"Authorization": "Bearer tok"}
+        client.app.state.coordinator._slots = asyncio.Semaphore(1)
+        run = client.post(
+            "/v1/runs",
+            headers=headers,
+            json=run_command("coordinate through a durable mailbox"),
+        ).json()
+        with client.stream("GET", f"/v1/runs/{run['id']}/stream", headers=headers) as response:
+            events = _parse_sse(response.read().decode("utf-8"))
+        child = client.get(f"/v1/runs/{run['id']}/children", headers=headers).json()["children"][0]
+        parent_inbox = client.get(
+            f"/v1/runs/{run['id']}/mailbox?box=inbox", headers=headers
+        ).json()["messages"]
+        child_inbox = client.get(
+            f"/v1/runs/{child['id']}/mailbox?box=inbox", headers=headers
+        ).json()["messages"]
+
+    assert [message["status"] for message in parent_inbox] == ["acknowledged"]
+    assert [message["status"] for message in child_inbox] == ["acknowledged"]
+    assert parent_inbox[0]["text"] == "Primary source confirmed."
+    assert child_inbox[0]["text"] == "Return the verified source result."
+    event_types = [event[0] for event in events]
+    assert "agent.message.sent" in event_types
+    assert "agent.message.received" in event_types
+    assert "agent.message.acknowledged" in event_types
 
 
 # ---- capability 3: prompt caching stays in the provider adapter ----
@@ -1540,6 +2091,40 @@ def test_capability_6_memory_middleware_injects_agents_md(monkeypatch, tmp_path)
     )
 
 
+def test_capability_6b_skills_middleware_lists_runtime_skill(monkeypatch, tmp_path) -> None:
+    skills_root = tmp_path / "skills"
+    skill_file = skills_root / "e2e-active-skill" / "SKILL.md"
+    skill_file.parent.mkdir(parents=True)
+    skill_file.write_text(
+        "---\n"
+        "name: e2e-active-skill\n"
+        "description: Runtime Skill prompt probe.\n"
+        "---\n"
+        "\nReply with E2E_SKILL_ACTIVE.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SHEJANE_RUNTIME_SKILLS_PATH", str(skills_root))
+    handler = RecordingHandler(
+        scripts=[
+            [
+                ("llm.delta", {"content_delta": "ack"}),
+                ("llm.done", {"request_id": "r1", "finish_reason": "stop"}),
+            ]
+        ]
+    )
+
+    with _make_client(monkeypatch, handler) as client:
+        _post_run_and_stream(client, "Use the active skill", settings={"skills": "on"})
+
+    system_text = " ".join(
+        message.get("content", "")
+        for message in handler.requests[0].get("messages", [])
+        if message.get("role") == "system"
+    )
+    assert "e2e-active-skill" in system_text
+    assert str(skill_file) in system_text
+
+
 # ---- capability 7: TodoList middleware exposes write_todos ----
 
 
@@ -1580,7 +2165,7 @@ def test_capability_7_todolist_middleware_exposes_write_todos_tool(monkeypatch, 
 def test_capability_2b_subagent_parallel_dispatch(monkeypatch) -> None:
     """Verify the LLM can dispatch **multiple** task() subagents in one
     turn. Mock LLM emits two `task` tool_calls in the same response —
-    we should see two `subagent.spawned` events. ToolNode runs
+    we should see two durable `subagent.spawned` events. ToolNode runs
     concurrency-safe tools in parallel via asyncio.gather, so we don't
     care about ordering; we only care both showed up."""
     handler = RecordingHandler(
@@ -1593,7 +2178,7 @@ def test_capability_2b_subagent_parallel_dispatch(monkeypatch) -> None:
                         "id": "call_p1",
                         "name": "task",
                         "arguments": {
-                            "subagent_name": "researcher",
+                            "subagent_type": "researcher",
                             "description": "subquery A: LangGraph 1.x changes",
                         },
                     },
@@ -1604,7 +2189,7 @@ def test_capability_2b_subagent_parallel_dispatch(monkeypatch) -> None:
                         "id": "call_p2",
                         "name": "task",
                         "arguments": {
-                            "subagent_name": "researcher",
+                            "subagent_type": "researcher",
                             "description": "subquery B: deepagents adoption",
                         },
                     },
@@ -1632,9 +2217,9 @@ def test_capability_2b_subagent_parallel_dispatch(monkeypatch) -> None:
         f"expected at least 2 subagent.spawned events. got {len(spawn_events)}: "
         f"{[e[1].get('id') for e in spawn_events]}"
     )
-    spawn_ids = {e[1].get("id") for e in spawn_events}
-    assert "call_p1" in spawn_ids
-    assert "call_p2" in spawn_ids
+    operation_ids = {e[1].get("operation_id") for e in spawn_events}
+    assert len(operation_ids) == 2
+    assert {e[1].get("tool_call_id") for e in spawn_events} == {"call_p1", "call_p2"}
 
 
 def test_capability_9_memory_search_tool_in_agent(monkeypatch, tmp_path) -> None:

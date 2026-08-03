@@ -26,8 +26,10 @@ client/src/features/chat/chatStore.ts):
                          — client looks for `tool.completed`)
   tool.failed          — tool result observed with status="error"
   agent.custom         — middleware-emitted custom payload
-  subagent.spawned     — deepagents task() tool spawning a subagent
-  subagent.completed   — subagent finished
+
+Subagent lifecycle is deliberately absent here. Runtime projects it from the
+durable ``task`` Tool Receipt transitions; stream chunks are neither complete
+nor replayable enough to own lifecycle state.
 """
 
 from __future__ import annotations
@@ -105,32 +107,17 @@ def _translate_messages(payload: Any) -> list[dict[str, Any]]:
 
         for tc in chunk.tool_call_chunks or []:
             tool_name = tc.get("name")
-            # Surface task() spawns (deepagents SubAgentMiddleware) as a
-            # narrower client-facing event so the UI can render a subagent
-            # tree without having to inspect tool_call schemas.
-            if tool_name == "task":
-                out.append(
-                    {
-                        "event": "subagent.spawned",
-                        "data": {
-                            "id": tc.get("id"),
-                            "args_delta": tc.get("args"),
-                            "index": tc.get("index"),
-                        },
-                    }
-                )
-            else:
-                out.append(
-                    {
-                        "event": "llm.tool_call_chunk",
-                        "data": {
-                            "id": tc.get("id"),
-                            "name": tool_name,
-                            "args_delta": tc.get("args"),
-                            "index": tc.get("index"),
-                        },
-                    }
-                )
+            out.append(
+                {
+                    "event": "llm.tool_call_chunk",
+                    "data": {
+                        "id": tc.get("id"),
+                        "name": tool_name,
+                        "args_delta": tc.get("args"),
+                        "index": tc.get("index"),
+                    },
+                }
+            )
 
         # `tool.requested` (pre-call signal) is best emitted from a
         # `wrap_tool_call` middleware hook in `agent/builder.py` so we
@@ -156,9 +143,7 @@ def _translate_messages(payload: Any) -> list[dict[str, Any]]:
         status = getattr(chunk, "status", None)
         envelope = tool_result_envelope(chunk.content)
         is_failed = status == "error" or tool_result_envelope_failed(envelope)
-        if chunk.name == "task":
-            event_name = "subagent.completed"
-        elif is_failed:
+        if is_failed:
             event_name = "tool.failed"
         else:
             event_name = "tool.completed"

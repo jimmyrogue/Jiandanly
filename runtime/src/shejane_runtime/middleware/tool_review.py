@@ -17,6 +17,7 @@ from langgraph.types import interrupt
 from ..permission_policy import IRREVERSIBLE_TOOLS, can_grant_for_run
 from ..store.sqlite import LocalStore, PermissionDecisionConflictError
 from ..tool_schemas import validate_tool_input
+from ..tools.runtime import current_runtime_tool_execution_or_none
 from .approval_reviewer import ApprovalReviewUnavailable, review_approval_batch
 from .tool_execution import (
     canonical_tool_execution_scope,
@@ -40,6 +41,11 @@ class ToolReviewStateError(RuntimeError):
 class ApprovalPolicyDecision:
     decision: str
     reason: str
+
+
+def _parent_operation_id() -> str | None:
+    execution = current_runtime_tool_execution_or_none()
+    return execution.operation_id if execution is not None else None
 
 
 def approval_policy_decision(
@@ -176,6 +182,7 @@ class ToolReviewMiddleware(AgentMiddleware):
                 arguments_hash=arguments_hash,
                 arguments_json=arguments_json,
                 risk=risk,
+                parent_operation_id=_parent_operation_id(),
             )
             current_permission = await store.get_permission_for_operation(
                 run_id=run_id, operation_id=operation_id
@@ -616,6 +623,7 @@ async def _record_rejection(
         arguments_hash=metadata["arguments_hash"],
         arguments_json=arguments_json,
         risk=metadata["risk"],
+        parent_operation_id=_parent_operation_id(),
     )
     if receipt.get("status") == "rejected":
         return
@@ -661,6 +669,7 @@ async def _record_preflight_failure(
         arguments_hash=arguments_hash,
         arguments_json=arguments_json,
         risk=risk,
+        parent_operation_id=_parent_operation_id(),
     )
     if receipt.get("status") == "failed":
         return

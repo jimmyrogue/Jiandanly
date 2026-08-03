@@ -35,6 +35,7 @@ from pydantic import Field
 
 from ..middleware.tool_visibility import visible_tools_for_messages
 from ..store.sqlite import LocalStore
+from ..tools.runtime import current_runtime_tool_execution_or_none
 from .errors import ModelServiceError
 
 
@@ -106,12 +107,16 @@ class LedgerChatModel(BaseChatModel):
         store = self.store
         if not isinstance(store, LocalStore):
             raise RuntimeError("model ledger store is not bound")
+        parent_execution = current_runtime_tool_execution_or_none()
         return await store.reserve_model_call(
             run_id=self.run_id,
             execution_attempt_id=self.execution_attempt_id,
             model=self.model_name,
             max_calls=self.max_calls,
             purpose=self.call_purpose,
+            parent_tool_operation_id=(
+                parent_execution.operation_id if parent_execution is not None else None
+            ),
         )
 
     async def _agenerate(

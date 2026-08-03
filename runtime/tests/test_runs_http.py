@@ -150,6 +150,10 @@ def test_create_run_returns_run_record(client: TestClient) -> None:
     "path",
     [
         "/v1/runs/run_missing",
+        "/v1/runs/run_missing/children",
+        "/v1/runs/run_missing/collaboration",
+        "/v1/runs/run_missing/mailbox",
+        "/v1/runs/run_missing/events",
         "/v1/runs/run_missing/stream",
     ],
 )
@@ -161,6 +165,122 @@ def test_unknown_run_returns_stable_machine_readable_error(
 
     assert response.status_code == 404
     assert response.json() == {"detail": {"code": "run_not_found", "message": "run not found"}}
+
+
+def test_child_runs_are_addressable_projected_and_hidden_from_top_level_list(
+    client: TestClient,
+) -> None:
+    store = client.app.state.store
+
+    async def seed() -> tuple[dict[str, Any], dict[str, Any]]:
+        parent = await store.create_run(
+            principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+            goal="Coordinate",
+            workspace_path=None,
+        )
+        child = await store.create_run(
+            principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+            goal="Research",
+            workspace_path=None,
+            parent_run_id=parent["id"],
+            root_run_id=parent["root_run_id"],
+            run_kind="child",
+            agent_definition_id="subagent:researcher",
+            agent_definition_version="sha256:test",
+            collaboration_depth=1,
+            collaboration_policy={"max_depth": 1, "max_children": 8},
+            spawn_operation_id="toolop-test-child",
+        )
+        return parent, child
+
+    parent, child = asyncio.run(seed())
+    headers = {"Authorization": "Bearer tok"}
+
+    parent_response = client.get(f"/v1/runs/{parent['id']}", headers=headers)
+    children_response = client.get(f"/v1/runs/{parent['id']}/children", headers=headers)
+    child_response = client.get(f"/v1/runs/{child['id']}", headers=headers)
+    collaboration_response = client.get(f"/v1/runs/{parent['id']}/collaboration", headers=headers)
+    child_collaboration_response = client.get(
+        f"/v1/runs/{child['id']}/collaboration", headers=headers
+    )
+    listed_response = client.get("/v1/runs", headers=headers)
+
+    assert parent_response.status_code == 200
+    assert [item["id"] for item in parent_response.json()["child_runs"]] == [child["id"]]
+    assert children_response.status_code == 200
+    assert [item["id"] for item in children_response.json()["children"]] == [child["id"]]
+    assert child_response.status_code == 200
+    assert child_response.json()["run_kind"] == "child"
+    assert child_response.json()["parent_run_id"] == parent["id"]
+    assert child_response.json()["child_runs"] == []
+    assert collaboration_response.status_code == 200
+    collaboration = collaboration_response.json()
+    assert collaboration["root"]["id"] == parent["id"]
+    assert [item["id"] for item in collaboration["children"]] == [child["id"]]
+    assert collaboration["children"][0]["completion_mode"] == "required"
+    assert collaboration["event_high_watermarks"] == {parent["id"]: 0, child["id"]: 0}
+    assert collaboration["completion"]["wait_for"] == [child["id"]]
+    assert child_collaboration_response.status_code == 409
+    assert child_collaboration_response.json()["detail"]["code"] == "collaboration_root_required"
+    assert child["id"] not in [item["id"] for item in listed_response.json()["runs"]]
+
+
+def test_list_run_events_is_finite_paginated_and_owned(client: TestClient) -> None:
+    store = client.app.state.store
+
+    async def seed_events() -> tuple[str, str]:
+        owned = await store.create_run(
+            principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+            goal="replay owned events",
+            workspace_path=None,
+        )
+        hidden = await store.create_run(
+            principal_id="principal_other",
+            goal="replay hidden events",
+            workspace_path=None,
+        )
+        await store.append_event(owned["id"], "run.started", {"step": 1})
+        await store.append_event(owned["id"], "permission.required", {"step": 2})
+        await store.append_event(owned["id"], "run.resumed", {"step": 3})
+        return str(owned["id"]), str(hidden["id"])
+
+    run_id, hidden_run_id = asyncio.run(seed_events())
+    headers = {"Authorization": "Bearer tok"}
+
+    first = client.get(f"/v1/runs/{run_id}/events?after=0&limit=2", headers=headers)
+    second = client.get(f"/v1/runs/{run_id}/events?after=2&limit=2", headers=headers)
+    exhausted = client.get(f"/v1/runs/{run_id}/events?after=3&limit=2", headers=headers)
+    hidden = client.get(f"/v1/runs/{hidden_run_id}/events", headers=headers)
+
+    assert first.status_code == 200
+    assert first.json() == {
+        "events": [
+            {
+                "id": first.json()["events"][0]["id"],
+                "run_id": run_id,
+                "seq": 1,
+                "event_type": "run.started",
+                "payload": {"step": 1},
+                "created_at": first.json()["events"][0]["created_at"],
+            },
+            {
+                "id": first.json()["events"][1]["id"],
+                "run_id": run_id,
+                "seq": 2,
+                "event_type": "permission.required",
+                "payload": {"step": 2},
+                "created_at": first.json()["events"][1]["created_at"],
+            },
+        ],
+        "has_more": True,
+        "next_after": 2,
+    }
+    assert [event["seq"] for event in second.json()["events"]] == [3]
+    assert second.json()["has_more"] is False
+    assert second.json()["next_after"] == 3
+    assert exhausted.json() == {"events": [], "has_more": False, "next_after": 3}
+    assert hidden.status_code == 404
+    assert hidden.json() == {"detail": {"code": "run_not_found", "message": "run not found"}}
 
 
 def test_create_run_rejects_unknown_permission_mode(client: TestClient) -> None:
@@ -1093,7 +1213,7 @@ def test_foreign_run_and_children_are_hidden(client: TestClient) -> None:
         client.post(
             f"/v1/runs/{run_id}/inject",
             headers=headers,
-            json={"content": "steal"},
+            json={"command_id": "inject_foreign", "content": "steal"},
         ).status_code
         == 404
     )
@@ -1107,6 +1227,44 @@ def test_foreign_run_and_children_are_hidden(client: TestClient) -> None:
         ).status_code
         == 404
     )
+
+
+def test_run_injection_is_an_idempotent_runtime_command(client: TestClient) -> None:
+    store = client.app.state.store
+
+    async def create_active_run() -> str:
+        run = await store.create_run(
+            principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+            goal="active run",
+            workspace_path=None,
+        )
+        return str(run["id"])
+
+    run_id = asyncio.run(create_active_run())
+    headers = {"Authorization": "Bearer tok"}
+    body = {"command_id": "inject_once", "content": "Focus on the failing test."}
+
+    first = client.post(f"/v1/runs/{run_id}/inject", headers=headers, json=body)
+    replay = client.post(f"/v1/runs/{run_id}/inject", headers=headers, json=body)
+    conflict = client.post(
+        f"/v1/runs/{run_id}/inject",
+        headers=headers,
+        json={"command_id": "inject_once", "content": "Do something else."},
+    )
+
+    assert first.status_code == 200
+    assert replay.status_code == 200
+    assert replay.json() == first.json()
+    assert first.json() == {
+        "command_id": "inject_once",
+        "run_id": run_id,
+        "instruction_id": first.json()["instruction_id"],
+        "queued": True,
+    }
+    assert conflict.status_code == 409
+
+    claimed = asyncio.run(store.claim_pending_steering(run_id))
+    assert [record["content"] for record in claimed] == ["Focus on the failing test."]
 
 
 def test_blob_artifact_metadata_and_range_download_are_owned(
@@ -1229,6 +1387,35 @@ def test_runtime_thread_snapshot_and_change_cursor_are_authoritative(client: Tes
             lease_owner="worker-thread-snapshot",
             lease_generation=int(job["lease_generation"]),
         ):
+            await store.prepare_tool_receipt(
+                operation_id="toolop_snapshot_child",
+                run_id=run["id"],
+                execution_attempt_id=f"{job['id']}:{job['lease_generation']}",
+                execution_namespace="main",
+                tool_call_id="call-snapshot-child",
+                tool_name="task",
+                tool_version="graph-v1",
+                arguments_hash="snapshot-child-args",
+                arguments_json=json.dumps(
+                    {
+                        "subagent_type": "researcher",
+                        "description": "Inspect the durable snapshot",
+                    }
+                ),
+                risk="control_flow",
+            )
+            await store.begin_tool_receipt(
+                operation_id="toolop_snapshot_child",
+                run_id=run["id"],
+                execution_attempt_id=f"{job['id']}:{job['lease_generation']}",
+            )
+            await store.settle_tool_receipt(
+                operation_id="toolop_snapshot_child",
+                run_id=run["id"],
+                status="completed",
+                result_json='{"kind":"tool_message"}',
+                result_hash="snapshot-child-result",
+            )
             await store.commit_run_result(
                 run["id"],
                 status="completed",
@@ -1241,14 +1428,17 @@ def test_runtime_thread_snapshot_and_change_cursor_are_authoritative(client: Tes
     headers = {"Authorization": "Bearer tok"}
 
     listing = client.get("/v1/threads", headers=headers)
-    snapshot = client.get("/v1/threads/conversation_snapshot", headers=headers)
+    snapshot = client.get(
+        "/v1/threads/conversation_snapshot?event_limit=1",
+        headers=headers,
+    )
     changes = client.get("/v1/threads/changes?after=0", headers=headers)
 
     assert listing.status_code == 200
     assert listing.json()["threads"][0]["id"] == "conversation_snapshot"
     assert listing.json()["cursor"] >= 2
     assert snapshot.status_code == 200
-    assert snapshot.json()["thread"]["version"] == 2
+    assert snapshot.json()["thread"]["version"] == 5
     assert snapshot.json()["thread"]["metadata"] == {"pinned": True}
     assert [item["item_type"] for item in snapshot.json()["items"]] == [
         "user_message",
@@ -1263,9 +1453,53 @@ def test_runtime_thread_snapshot_and_change_cursor_are_authoritative(client: Tes
     user = next(item for item in snapshot.json()["items"] if item["item_type"] == "user_message")
     assert user["content"] == "visible inspect"
     assert snapshot.json()["runs"][0]["id"] == run["id"]
-    assert snapshot.json()["event_high_watermarks"] == {run["id"]: 1}
+    [invocation] = snapshot.json()["runs"][0]["subagent_invocations"]
+    assert {
+        key: invocation[key]
+        for key in (
+            "operation_id",
+            "parent_run_id",
+            "parent_operation_id",
+            "tool_call_id",
+            "subagent_type",
+            "description",
+            "status",
+            "receipt_status",
+            "attempt_count",
+            "usage",
+            "error_type",
+        )
+    } == {
+        "operation_id": "toolop_snapshot_child",
+        "parent_run_id": run["id"],
+        "parent_operation_id": None,
+        "tool_call_id": "call-snapshot-child",
+        "subagent_type": "researcher",
+        "description": "Inspect the durable snapshot",
+        "status": "completed",
+        "receipt_status": "completed",
+        "attempt_count": 1,
+        "usage": {
+            "model_calls": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "unmetered_calls": 0,
+            "outcome_unknown_calls": 0,
+        },
+        "error_type": None,
+    }
+    assert invocation["created_at"]
+    assert invocation["started_at"]
+    assert invocation["completed_at"]
+    assert invocation["updated_at"]
+    assert snapshot.json()["events_truncated"] is True
+    [snapshot_event] = snapshot.json()["events"]
+    assert snapshot.json()["event_high_watermarks"] == {run["id"]: snapshot_event["seq"]}
     assert [change["change_type"] for change in changes.json()["changes"]] == [
         "turn.started",
+        "subagent.spawned",
+        "subagent.started",
+        "subagent.completed",
         "run.completed",
     ]
 

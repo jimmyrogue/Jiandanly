@@ -214,7 +214,6 @@ def test_replay_after_run_completion_has_same_envelope(client: TestClient) -> No
         "llm.reasoning",
         "llm.usage",
         "llm.tool_call_chunk",
-        "subagent.spawned",
     }.intersection(event["event_type"] for event in events)
 
 

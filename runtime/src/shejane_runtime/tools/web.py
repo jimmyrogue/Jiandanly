@@ -11,6 +11,7 @@ from __future__ import annotations
 import ipaddress
 import logging
 import socket
+import ssl
 from typing import Any
 from urllib.parse import urljoin, urlsplit
 
@@ -124,7 +125,12 @@ class _PinnedNetworkBackend(httpcore.AsyncNetworkBackend):
         await self.delegate.sleep(seconds)
 
 
-def _pinned_transport(url: str) -> tuple[httpx.AsyncHTTPTransport | None, str]:
+def _pinned_transport(
+    url: str,
+    *,
+    allow_fake_ip: bool | None = None,
+    ssl_context: ssl.SSLContext | None = None,
+) -> tuple[httpx.AsyncHTTPTransport | None, str]:
     parts = urlsplit(url)
     if parts.scheme not in ALLOWED_SCHEMES:
         return None, f"scheme {parts.scheme!r} not allowed"
@@ -138,13 +144,13 @@ def _pinned_transport(url: str) -> tuple[httpx.AsyncHTTPTransport | None, str]:
     # loopback, link-local, multicast, and reserved ranges remain blocked.
     ok, reason, address = _resolve_pinned(
         parts.hostname,
-        allow_fake_ip=parts.scheme == "https",
+        allow_fake_ip=parts.scheme == "https" if allow_fake_ip is None else allow_fake_ip,
     )
     if not ok or address is None:
         return None, reason
     transport = httpx.AsyncHTTPTransport()
     transport._pool = httpcore.AsyncConnectionPool(
-        ssl_context=httpx.create_ssl_context(),
+        ssl_context=ssl_context or httpx.create_ssl_context(),
         network_backend=_PinnedNetworkBackend(parts.hostname, address),
     )
     return transport, ""
