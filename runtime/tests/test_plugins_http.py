@@ -676,9 +676,9 @@ def test_browser_qa_is_runtime_managed_and_cannot_be_removed(
 def test_rebuilt_fixed_package_upgrades_existing_runtime_data(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    old_computer_use = tmp_path / "computer-use-0.2.0.shejane-plugin"
+    old_computer_use = tmp_path / "computer-use-0.2.1.shejane-plugin"
     new_computer_use = tmp_path / f"computer-use-{COMPUTER_USE_PLUGIN_VERSION}.shejane-plugin"
-    _pack_computer_use_builtin(old_computer_use, version="0.2.0")
+    _pack_computer_use_builtin(old_computer_use, version="0.2.1")
     _pack_computer_use_builtin(new_computer_use)
 
     asset_store = RuntimeAssetStore(tmp_path / "asset-store")
@@ -731,7 +731,7 @@ def test_rebuilt_fixed_package_upgrades_existing_runtime_data(
         "shejane_runtime.plugins.registry.current_managed_worker_platform",
         lambda: "darwin/arm64",
     )
-    monkeypatch.setattr(computer_use_module, "COMPUTER_USE_PLUGIN_VERSION", "0.2.0")
+    monkeypatch.setattr(computer_use_module, "COMPUTER_USE_PLUGIN_VERSION", "0.2.1")
     monkeypatch.setattr(browser_qa_module, "BROWSER_QA_PLUGIN_VERSION", "0.1.2")
     monkeypatch.setattr(ocr_module, "OCR_PLUGIN_VERSION", "0.1.2")
     data_dir = tmp_path / "runtime"
@@ -792,7 +792,7 @@ def test_rebuilt_fixed_package_upgrades_existing_runtime_data(
     assert versions == [
         ("org.shejane.browser-qa", "0.1.2"),
         ("org.shejane.browser-qa", BROWSER_QA_PLUGIN_VERSION),
-        ("org.shejane.computer-use", "0.2.0"),
+        ("org.shejane.computer-use", "0.2.1"),
         ("org.shejane.computer-use", COMPUTER_USE_PLUGIN_VERSION),
         ("org.shejane.ocr", "0.1.2"),
         ("org.shejane.ocr", OCR_PLUGIN_VERSION),

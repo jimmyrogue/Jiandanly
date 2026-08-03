@@ -10,7 +10,7 @@ Build on macOS:
 uv run --project runtime python runtime/plugins/computer-use/build_package.py \
   --platform darwin/arm64 \
   --upstream /path/to/pi-computer-use-at-9f59ed0 \
-  --output /tmp/computer-use-0.2.1-darwin-arm64.shejane-plugin
+  --output /tmp/computer-use-0.2.2-darwin-arm64.shejane-plugin
 ```
 
 Normal development and packaging use `scripts/build-computer-use-builtin.sh`. The Runtime provisions that archive automatically; users cannot import or remove it. Enabling it opens SheJane's three-step setup flow: install the signed helper, grant Screen Recording, then grant Accessibility. Permission requests remain user-triggered and are never exposed as model actions.

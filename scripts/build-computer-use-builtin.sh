@@ -6,7 +6,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 UPSTREAM_COMMIT="9f59ed0eeac09b115897732c46b794ee8ca4e5b0"
 UPSTREAM_DIR="${SHEJANE_COMPUTER_USE_UPSTREAM:-${ROOT_DIR}/.tmp/computer-use-upstream}"
-OUTPUT="${ROOT_DIR}/runtime/plugins/computer-use/dist/computer-use-0.2.1-darwin-arm64.shejane-plugin"
+OUTPUT="${ROOT_DIR}/runtime/plugins/computer-use/dist/computer-use-0.2.2-darwin-arm64.shejane-plugin"
 
 if [[ ! -d "${UPSTREAM_DIR}/.git" ]]; then
   mkdir -p "$(dirname "${UPSTREAM_DIR}")"

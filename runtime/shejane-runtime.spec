@@ -87,7 +87,7 @@ datas += [
 ]
 if sys.platform == "darwin" and platform.machine().lower() in {"arm64", "aarch64"}:
     computer_use_package = Path(
-        "plugins/computer-use/dist/computer-use-0.2.1-darwin-arm64.shejane-plugin"
+        "plugins/computer-use/dist/computer-use-0.2.2-darwin-arm64.shejane-plugin"
     )
     if not computer_use_package.is_file():
         raise SystemExit("Computer Use fixed capability package must be built before PyInstaller")
