@@ -60,9 +60,15 @@ The plugin platform is a preview. WASI packages can install and execute through 
 
 ### Agent collaboration today
 
-SheJane currently uses a manager-as-tools model. The parent agent invokes built-in or user-defined subagents through synchronous `task()` calls. Subagents have isolated context, bounded model/tool budgets, and the same Runtime permission and receipt boundary; the parent can dispatch several in one model turn and combine their results.
+SheJane has three bounded collaboration paths. Synchronous `task()` remains the cheapest manager-as-tools path. `team.run` adds a checkpointed same-Run graph with parallel fan-out, reducers, reviews, and explicit handoff edges. Work that must survive time or process boundaries becomes an independently addressable durable child Run with its own Job, Attempt, checkpoint, usage, cancellation, steering, and typed mailbox.
 
-This is controlled parallel delegation, not a handoff or an autonomous agent team. Independent background agents, handoffs, shared task boards, and swarm patterns are not currently planned; the existing subagents already cover bounded research, review, and writing.
+The Runtime coordinator freezes child dependencies, required/best-effort/quorum completion policy, and exact workspace-file ownership. Parent completion automatically waits for required/quorum work and cancels non-detached remainder; parent failure/cancellation propagates to child Runs. `GET /v1/runs/:root/collaboration` gives desktop and future mobile clients one cursor-safe projection of members, waits, messages, artifacts, dependencies, resource owners, and completion state.
+
+This is still intentionally bounded: one durable child level, eight children per parent, no open-ended swarm, and no hidden shared chain-of-thought.
+
+Independent Agent services can connect through the standalone `shejane-a2a-gateway`. It maps A2A 1.0 JSON-RPC Tasks, Messages, Artifacts, SSE, push notifications, peer/OIDC/mTLS identity, and tenant-scoped external IDs onto Runtime-owned Runs without mounting public routes in the loopback Runtime. The declared binding passes the pinned official TCK MUST suite and 14 Python/Go/TypeScript ITK scenarios; see the [A2A conformance manifest](./docs/a2a-conformance.md).
+
+The A2A gateway is for Agent federation, not a remote desktop/mobile Client protocol. A future mobile app still needs a separate authenticated remote Runtime gateway with device pairing and revocation.
 
 ## Roadmap
 
@@ -129,6 +135,7 @@ Run the workflow manually to test packages. Push a `client-vX.Y.Z` tag to create
 - [Runtime stages](./docs/harness-runtime-stages.md) defines the target P1-P12 architecture.
 - [Current run loop](./docs/run-loop.md) describes what the code does today.
 - [Runtime protocol](./docs/runtime-protocol.md) defines HTTP, SSE, events, and recovery cursors.
+- [A2A conformance manifest](./docs/a2a-conformance.md) fixes the external Agent federation surface, test versions, deviations, and reproducible gates.
 - [Roadmap](./docs/roadmap.md) turns current capability gaps into ordered delivery gates.
 - [Agent Harness capability audit](./docs/agent-harness-capabilities-latest-2026-07-26.md) compares the implementation with current OpenAI, Anthropic, Deep Agents/LangGraph, and Pi patterns.
 - [Contributor guide](./CONTRIBUTING.md) covers setup, testing, and the CLA process.

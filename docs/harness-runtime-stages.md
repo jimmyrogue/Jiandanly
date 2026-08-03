@@ -17,6 +17,7 @@ SheJane 的核心将是可独立运行的 Agent 运行内核（Harness Runtime�
 - Runtime 不依赖任何私有云端产品。
 - 未来移动端只做远程客户端，不在手机上实现完整 Harness。
 - 当前 Runtime 强制只监听回环地址。未来远程客户端连接独立接入网关，不把公网 TLS、设备配对和中继塞进运行内核。
+- 独立 Agent 服务使用单独的 A2A Gateway 完成 TLS、身份、租户和协议映射；Gateway 不改变 P3/P4/P5 的 Runtime 状态所有权，也不充当手机 Client 的设备接入网关。
 
 ## 文档职责
 

@@ -8,6 +8,18 @@
 >
 ---
 
+## 外部 A2A 边界
+
+A2A 不是 `/v1` Runtime 协议的一部分。独立 `shejane-a2a-gateway` 进程对外提供 A2A 1.0 JSON-RPC，并通过本页记录的 Runtime HTTP/SSE 创建、查询和取消权威 Run：
+
+- Runtime 仍只监听 loopback；A2A TLS、mTLS、OIDC、peer token、租户限域和速率限制由 Gateway 拥有。
+- Gateway 的 SQLite 只保存外部身份、不可枚举的 A2A ID 映射、push outbox/config 和审计；Run、Event、Artifact 正文与执行终态仍由 Runtime SQLite 拥有。
+- A2A Task 快照和订阅由 Runtime 快照/持久事件投影，断线后先重新取得完整 Task，再订阅后续状态；A2A 1.0 没有 SheJane `after=<seq>` 的跨服务 cursor 承诺。
+- 当前 Card 只声明经过官方 TCK/ITK 验证的 `JSONRPC` 1.0、streaming、push 和 extended Card；HTTP+JSON 与 gRPC 未声明。
+- 手机/桌面 Client 不使用 A2A。远程 Client 仍需要独立的设备配对、撤销和 Runtime gateway，不能把 Agent peer token 当用户设备凭证。
+
+固定版本、偏差和复现命令见 [`a2a-conformance.md`](a2a-conformance.md)；部署见 [`operations.md`](operations.md#独立-a2a-gateway)。
+
 ## Wire 格式
 
 每条事件如下：
@@ -74,7 +86,7 @@ run 失败/取消等状态变化才会触发 `missing` 或 `stale`。
 | `llm.usage` | 供应商返回的临时用量，只用于实时显示 | `input_tokens`, `output_tokens` |
 | `llm.error` | 流中报错（非致命） | `message` |
 
-以上四类 `llm.*` 增量和 `subagent.spawned` 都是临时事件，断线或慢客户端背压时可以丢失。`llm.usage` 不是结算事实来源；`run.completed` 中的用量由
+`llm.delta`、`llm.reasoning`、`llm.tool_call_chunk` 和 `llm.usage` 是临时事件，断线或慢客户端背压时可以丢失。`llm.usage` 不是结算事实来源；`run.completed` 中的用量由
 Runtime 持久模型调用账本聚合；重复 SSE 事件不会改变该结果。
 
 ### 工具
@@ -83,8 +95,73 @@ Runtime 持久模型调用账本聚合；重复 SSE 事件不会改变该结果�
 |---|---|---|
 | `tool.completed` | 一次工具调用完成 | `tool_call_id, name, tool, content, status: "ok"` |
 | `tool.failed` | 工具完成但 `ToolMessage.status == "error"`，或工具结果 envelope 明确 `ok:false` | `tool_call_id, name, tool, content, status: "error", error_code?, recoverable?, retryable?` |
-| `subagent.spawned` | deepagents `task` 子代理被派遣 | `id, args_delta, index` |
-| `subagent.completed` | 子代理完成 | `tool_call_id, name, content` |
+
+`task` 仍会产生通用的 `tool.completed` / `tool.failed`，供旧 Client 降级显示；Subagent 生命周期不从这些 ToolMessage 或流式参数猜测，而由同一事务内的持久 Tool Receipt 转换投影：
+
+| event_type | Receipt 转换 | 投影状态 |
+|---|---|---|
+| `subagent.spawned` | 新建 `prepared` | `queued` |
+| `subagent.started` | `prepared/paused → running` | `running` |
+| `subagent.waiting` | `running → paused` | `waiting` |
+| `subagent.completed` | `running/outcome_unknown → completed` | `completed` |
+| `subagent.failed` | `running/prepared/outcome_unknown → failed/rejected` | `failed` |
+| `subagent.canceled` | `running/prepared/paused → canceled` | `canceled` |
+| `subagent.outcome_unknown` | 执行租约丢失且无法证明结果 | `unknown` |
+
+这些事件都有持久 `seq`，公共 payload 使用同一结构：`operation_id, parent_run_id, parent_operation_id, tool_call_id, subagent_type, description, status, receipt_status, attempt_count, usage, error_type, created_at, started_at, completed_at, updated_at`。其中 `parent_operation_id`、`error_type`、`started_at`、`completed_at` 始终存在，无值时为 `null`；`usage` 包含 `model_calls, input_tokens, output_tokens, unmetered_calls, outcome_unknown_calls`。
+
+这里的 `operation_id` 只代表一次同步 `task` 调用，不是可寻址、可追问的 Agent 或 child Run。`LocalRun.subagent_invocations` 是同一 Receipt 的当前快照投影；即使线程事件因 `event_limit` 截断，Client 仍从该字段重建当前 Subagent 状态。`event_high_watermarks` 表示各 Run **实际包含在本次快照中的最高 seq**（未包含事件时为 `0`），Client 从这里续订，不能越过因截断而未返回的权限、提问或计划事件。
+
+#### Runtime-owned durable child Run
+
+需要后台执行、独立恢复/取消或稍后查询时，父 Agent 使用 `child.spawn` 创建真正的 child Run；短时同步委派仍使用上面的 `task`。两者不能互换：
+
+- `child.spawn` 在父 Run 当前 Attempt 的租约和 Tool Receipt 下，原子写入 child Run、待执行 Job 与父 Run 的 `child.spawned` 事件；同一 `spawn_operation_id` 重放只返回原 child。
+- child 拥有独立的 Run/Job/Attempt/checkpoint、冻结的 Agent 定义版本、工具权限子集和用量；当前拓扑限制为一层、每个父 Run 最多八个 child。
+- `child.list/check/wait/cancel` 只操作调用者直接拥有的 child。`wait` 支持 `all` / `any`，单次最长 30 秒；超时不取消任务。
+- `child.spawn` 同时冻结 `completion_mode=required|best_effort|quorum`、已存在 sibling 的 `depends_on`、精确 workspace 文件 `resource_claims`，以及 quorum 的 group/required。依赖未完成前 Job 不可领取；依赖失败后 dependent 原子取消。
+- 父 Run 成功结算前，P11 自动等待所有 required child 和尚未满足的 quorum，不依赖模型记得调用 `child.wait`；达到 quorum 后取消多余成员，best-effort 未完成成员也在父终态前取消。父失败或取消向整棵 child 树传播，不支持隐式 detach。
+- 同一 collaboration root 的精确 workspace 文件只能有一个 owner。已声明文件的其他成员写入会在 Tool Receipt 边界失败；存在他人 claim 时禁用无法静态证明写集的 `execute`，必须改用可检查路径的文件工具。
+- Client 断线不影响 child。Runtime 重启后从 SQLite 的 Run/Job/Attempt 恢复；旧租约丢失后先进入隔离，迟到 Attempt 不能写入新事实。
+- `child.spawn` 若在 child 已提交、工具回执未结算的窗口崩溃，Runtime 根据 `spawn_operation_id` 自动确认已发生的内部副作用，不要求用户手工对账，也不会重复创建 child。
+
+父 Run 的持久事件流投影以下 child 生命周期：
+
+| event_type | child 事实 | 父投影状态 |
+|---|---|---|
+| `child.spawned` | child Run + pending Job 已原子创建 | `queued` |
+| `child.started` | child Job 被领取或恢复 | `running` |
+| `child.waiting` | child 持久进入权限或输入等待 | `waiting_permission` / `waiting_input` |
+| `child.completed` | child 结果与用量已提交 | `completed` |
+| `child.failed` | child 明确失败 | `failed` |
+| `child.canceled` | child 取消已提交 | `canceled` |
+| `child.cleanup_required` | 旧 Attempt 的资源静止性无法证明 | `cleanup_required` |
+
+`LocalRun.child_runs` 返回当前直接 child 的权威快照；`GET /v1/runs/{parent_run_id}/children` 返回同一列表，`GET /v1/runs/{child_run_id}` 可单独查询 child。child 不出现在顶层 `GET /v1/runs` 对话列表中，Client 不能自行创建、推断或结算 child。
+
+`GET /v1/runs/{root_run_id}/collaboration` 在同一个 SQLite 读取事务中返回 root、child、pending waits、mailbox messages、artifact 元数据、dependency edges、resource owners，以及每个 Run **实际包含的事件高水位**。SDK 对应 `getCollaborationSnapshot()`。桌面端和未来手机端断线后用这份完整快照重建，再分别从各 Run 的高水位续订；手机仍通过现有 child `/inject`、HITL 命令和 `/cancel` 操作，不成为状态所有者。该接口只接受 collaboration root；它不放宽 Runtime 的 loopback 监听，远程手机仍需要独立 TLS/设备授权网关。
+
+#### Durable Agent mailbox
+
+同一个 collaboration root 内的根 Agent 与 durable child、或两个同级 durable child，可以使用 Runtime-owned mailbox 交换消息。它不是任意群聊，也不允许跨 root、跨 principal 或向自己发送：
+
+- `mailbox.send` 发送 `request / question / update / result / cancel` 类型消息；发送者 Run 和 Tool Receipt operation id 只由 Runtime 注入，模型不能伪造。
+- `mailbox.reply` 只能回复发给当前 Run 的 `request / question / update`，Runtime 自动绑定原发送者、`correlation_id`、递增序号和最多 8 跳的循环上限。
+- `mailbox.inbox` 返回当前 Run 的持久收件箱；`mailbox.ack` 只确认已投递消息。未确认消息会在检查点丢失时再次注入，语义是 at-least-once，不虚构 exactly-once。
+- 每个收件箱最多 32 条待处理消息，每个 root 最多 512 条消息；TTL 为 60 秒到 24 小时。超限明确返回 backpressure，不静默丢消息。
+- 消息内容是同级 Agent 输入，不是 system 指令，不能改变安全、权限、工具或用户要求。等待用户许可/输入的 Run 不会因收到消息而绕过等待。
+- `mailbox.send/reply/ack` 使用现有 Tool Receipt 和执行租约；进程丢失后的同 operation id 重放是事务幂等的，不会重复发信或重复确认。
+
+Runtime 在收件 Run 下一次模型调用前，把 `queued` 原子变为 `delivered` 并以稳定 `agent_message_id` 写入 checkpoint 消息。若数据库已标记投递、但 checkpoint 尚未提交，下一 Attempt 会再次注入同一 message id；checkpoint 已包含该 id 时不会重复注入。
+
+| event_type | mailbox 事实 |
+|---|---|
+| `agent.message.sent` | 消息已持久化到发送者 outbox 与收件者 inbox |
+| `agent.message.received` | 收件 Run 已取得消息，状态变为 `delivered` |
+| `agent.message.acknowledged` | 收件 Run 已显式处理并确认消息 |
+| `agent.message.expired` | TTL 到期前未确认，消息不再投递 |
+
+这些事件与消息状态由同一个 Runtime SQLite 事实源产生。`GET /v1/runs/{run_id}/mailbox?box=inbox|outbox` 返回当前权威消息列表，SDK 对应 `listAgentMessages()`；HTTP 只提供查询，发送与确认仍必须经过 Agent 工具、租约和 Receipt。
 
 ### 人在回路（HITL）
 
@@ -179,6 +256,11 @@ EventSource API 也能用，但不能传 Authorization 头；fetch + ReadableStr
 |---|---|---|
 | `POST /v1/runs` | `{command_id, client_message_id, goal, permission_mode?, attachment_paths?, history?, settings?, ...}` | `permission_mode` 为 `ask`、`auto` 或 `full_access`，省略时使用 `ask`；附件必须是本机现有文件，最多 10 个，接纳时流式导入 Runtime 的不可变内容寻址输入存储（单个及单 Run 合计上限 200 MiB）；后续执行不再依赖原始主机路径。任务附件和 PDF 文件的模型读取上限为 200 MiB，其他 workspace、Skill、Memory 与子任务文件读取上限为 20 MiB；更大的文件必须由兼容插件流式处理；创建后开 stream → `run.started` |
 | `POST /v1/runs/:id/fork` | `{command_id, client_message_id, assistant_message_id, thread_id, protocol_version, required_capabilities, checkpoint_id, ...}` | 创建分支后开 stream → `run.started` |
+| `GET /v1/runs/:id/events?after=<seq>&limit=<n>` | — | 有限分页返回已持久化事件；用于快照截断后的缓存重建，不等待未来事件 |
+| `GET /v1/runs/:id` | — | 返回一个普通或 child Run 的权威快照；child 包含 parent/root、Agent 定义版本、状态、结果/错误和用量 |
+| `GET /v1/runs/:id/children` | — | 返回该 Run 直接拥有的 durable child 快照；未知或越权父 Run 返回 404 |
+| `GET /v1/runs/:id/collaboration` | — | 仅以 root Run ID 返回同一读取边界的成员、pending waits、消息、artifact 元数据、依赖、resource owners、完成策略摘要和逐 Run 事件高水位；child ID 请求返回 409 |
+| `GET /v1/runs/:id/mailbox?box=inbox\|outbox` | — | 返回该 Run 的持久收件箱或发件箱；未知或越权 Run 返回 404 |
 | `GET /v1/runs/:id/stream` | — | （本协议） |
 | `POST /v1/commands` | Run/HITL 命令，以及 `plugin.install`、`plugin.runtime_asset.install`、`plugin.enable/disable/update/rollback/remove`、`plugin.model.bind`、`plugin.setup.advance` 的严格联合类型 | Run 命令产生对应状态事件；插件命令写入幂等 Command 日志并返回收据。`plugin.setup.advance` 只接受固定 Computer Use 能力和当前 revision，且不会由 Client 后台自动重试系统授权动作 |
 | `GET /v1/plugins` / `GET /v1/plugins/:id` | — | 返回当前 principal 可见的安装、版本、Action、Command、签名、能力与安全模型绑定摘要，不返回密钥、credential ref 或模型服务地址 |
@@ -244,6 +326,7 @@ Runtime 的线程快照是界面事实来源：
 - `GET /v1/threads/{thread_id}` 按消息位置分页；后续页携带线程版本，版本变化返回冲突并由客户端重读。
 - 助手消息投影在写入正文时原子记录它已覆盖的事件序号；线程快照返回这个安全高水位，客户端把该序号保存到可丢弃缓存。
 - `GET /v1/threads/changes?after=<cursor>` 用于发现其他客户端或后台任务提交的变化。
+- 线程快照标记 `events_truncated` 时，客户端对仍在等待用户动作的 Run 调用 `GET /v1/runs/{run_id}/events?after=<seq>`，有限分页补齐缺失事件后再保存缓存；它不会像 SSE 一样等待 Run 终态。
 - `GET /v1/runs/{run_id}/stream?after=<seq>` 只回放更大的事件序号，并在 SSE `id` 字段携带序号。SSE 提供低延迟增量，不承担最终一致性。
 - 如果 `after` 大于最新序号，或落在已删除事件形成的缺口之前，Runtime 返回 `409 event_cursor_reset_required`。客户端重新读取完整线程快照，再从快照高水位与首个保留序号前一位中的较大值继续订阅。当前版本尚未主动裁剪事件，但该检查同时覆盖数据库恢复或未来保留策略造成的窗口变化。
 - 正文消息可以完整分页；过程事件只是辅助时间线，达到上限时返回截断标记。

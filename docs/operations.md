@@ -51,6 +51,108 @@ Runtime 默认不要求用户环境变量。
 
 开发和测试可以使用 `SHEJANE_FAKE_LLM`、tracing 变量以及 Skills/MCP 路径覆盖，但这些不是用户安装配置，也不提供公开 `.env.example`。
 
+## 独立 A2A Gateway
+
+`shejane-a2a-gateway` 让独立 Agent 服务通过 A2A 1.0 JSON-RPC 使用 SheJane。它是单独进程和单独 SQLite，不是 Runtime 的公网监听模式：Runtime 继续绑定 loopback，Gateway 通过 Runtime token 调用公开 `/v1` 协议，外部 task/context/message/artifact ID 不暴露内部 Run ID。
+
+首次准备私有文件：
+
+```bash
+install -d -m 700 ~/.shejane/a2a-gateway
+umask 077
+openssl rand 32 > ~/.shejane/a2a-gateway/push-credential.key
+```
+
+把当前外部 Runtime 的配对 token 单独写入权限为 `0600` 的文件，例如 `~/.shejane/a2a-gateway/runtime.token`。Gateway 拒绝 group/other 可读的 Runtime token、push key 和 TLS private key；push key 必须恰好 32 个原始字节。
+
+推荐让成熟反向代理负责公网 TLS，Gateway 只监听本机：
+
+```bash
+cd runtime
+uv run shejane-a2a-gateway serve \
+  --db ~/.shejane/a2a-gateway/gateway.db \
+  --host 127.0.0.1 \
+  --port 17471 \
+  --runtime-url http://127.0.0.1:17371 \
+  --runtime-token-file ~/.shejane/a2a-gateway/runtime.token \
+  --push-credential-key-file ~/.shejane/a2a-gateway/push-credential.key \
+  --public-url https://agents.example.com
+```
+
+反向代理必须原样传递 `Authorization`、`A2A-Version`、`A2A-Extensions` 和 SSE，关闭流响应缓冲，不重写 `/a2a`、`/a2a/`、`/.well-known/agent-card.json`、`/a2a/artifacts/*`。Gateway 自己限制 JSON-RPC body 为 1 MiB；代理可以使用相同或更小的上限。用 public Card 作为就绪探针：
+
+```bash
+curl -fsS https://agents.example.com/.well-known/agent-card.json
+```
+
+如果 Gateway 自己终止 TLS，非 loopback listener 必须同时提供证书和私钥。需要 mTLS 时再增加 client CA；此模式由 Uvicorn 在 TLS 握手阶段拒绝无证书连接，不能只让一个不传递客户端身份的普通反向代理声称完成 mTLS：
+
+```bash
+uv run shejane-a2a-gateway serve \
+  --db ~/.shejane/a2a-gateway/gateway.db \
+  --host 0.0.0.0 \
+  --port 17471 \
+  --runtime-token-file ~/.shejane/a2a-gateway/runtime.token \
+  --push-credential-key-file ~/.shejane/a2a-gateway/push-credential.key \
+  --public-url https://agents.example.com:17471 \
+  --tls-certfile /secure/path/server.crt \
+  --tls-keyfile /secure/path/server.key \
+  --tls-client-ca-file /secure/path/client-ca.crt
+```
+
+创建最小权限 peer。命令只在创建或轮换时显示一次 opaque token，不要写入日志或 shell history：
+
+```bash
+uv run shejane-a2a-gateway peer create \
+  --db ~/.shejane/a2a-gateway/gateway.db \
+  --name research-partner \
+  --tenant partner-a \
+  --scope tasks.create \
+  --scope tasks.read \
+  --scope tasks.cancel \
+  --scope push.manage \
+  --runtime-model local:connection:model \
+  --permission-mode ask \
+  --push-origin https://partner.example.com
+
+uv run shejane-a2a-gateway peer list \
+  --db ~/.shejane/a2a-gateway/gateway.db
+uv run shejane-a2a-gateway peer rotate \
+  --db ~/.shejane/a2a-gateway/gateway.db --peer-id PEER_ID
+uv run shejane-a2a-gateway peer revoke \
+  --db ~/.shejane/a2a-gateway/gateway.db --peer-id PEER_ID
+```
+
+`runtime-model` 必须是明确的 `local:<connection>:<model>`，Gateway 不替调用者自动选模型。`runtime-workspace-path` 不配置时不授予工作区；`permission-mode=ask` 是默认值。只有经过单独风险审查的机器身份才考虑更宽权限。Push callback 必须匹配 peer 的 HTTPS origin；每次解析/连接继续执行私网、loopback、link-local、DNS rebinding 和 redirect 防护。
+
+可选 OIDC 使用 HTTPS discovery/JWKS，并把 `(issuer, subject)` 映射到数据库中的 peer 权限，而不是信任 JWT 自带 tenant/scope：
+
+```bash
+uv run shejane-a2a-gateway serve \
+  --db ~/.shejane/a2a-gateway/gateway.db \
+  --host 127.0.0.1 \
+  --port 17471 \
+  --runtime-url http://127.0.0.1:17371 \
+  --runtime-token-file ~/.shejane/a2a-gateway/runtime.token \
+  --push-credential-key-file ~/.shejane/a2a-gateway/push-credential.key \
+  --public-url https://agents.example.com \
+  --oidc-issuer https://identity.example.com \
+  --oidc-discovery-url https://identity.example.com/.well-known/openid-configuration \
+  --oidc-audience shejane-a2a
+
+uv run shejane-a2a-gateway peer create \
+  --db ~/.shejane/a2a-gateway/gateway.db \
+  --name oidc-partner \
+  --tenant partner-oidc \
+  --scope tasks.create \
+  --scope tasks.read \
+  --runtime-model local:connection:model \
+  --oidc-issuer https://identity.example.com \
+  --oidc-subject partner-service
+```
+
+备份时必须把 `gateway.db` 与 `push-credential.key` 作为同一恢复点；丢失 key 后旧 push credential 无法解密，应撤销并重建相应配置，不能绕过密文校验。Runtime 数据库仍是 Run/Event/Artifact 真相，Gateway 数据库只负责外部身份、映射、push 和审计。升级前后运行固定的 [A2A conformance gate](./a2a-conformance.md)。
+
 ## 连接 BYOK 模型服务
 
 Client 的“模型服务”设置调用 Runtime 的 `/v1/model-services` 接口。API Key 只写入操作系统凭据库；连接配置和缓存模型目录写入 Runtime SQLite。

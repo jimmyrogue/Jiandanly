@@ -108,6 +108,9 @@ MCP Server 只从 Runtime 自有配置读取，不会隐式启动 Claude Desktop
   │     ├─ SkillsMiddleware sources = [skills_dir]   ← 只读挂载，渐进披露 Markdown Skills │
   │     ├─ MemoryMiddleware  sources = [AGENTS.md]   ← 只读挂载，注入 system prompt    │
   │     ├─ SubAgentMiddleware subagents = [general-purpose, researcher, writer]       │
+  │     ├─ team.run → 同一 Runtime Run 的独立 LangGraph checkpoint thread             │
+  │     │   ├─ Send 并行 fan-out；reducer 合并 finding/claim/review                    │
+  │     │   └─ depends_on fan-in；受冻结 roster/edge 校验的显式 handoff                │
   │     ├─ ToolReviewMiddleware + ToolExecutionMiddleware + FileWriteConflictMiddleware │
   │     │   ← 主 Agent 和子 Agent 共用参数校验、人工确认、持久回执和文件冲突澄清       │
   │     ├─ checkpointer = lease-fenced AsyncSqliteSaver ← 当前任务租约保护写入          │
@@ -131,9 +134,11 @@ MCP Server 只从 Runtime 自有配置读取，不会隐式启动 Claude Desktop
   │   │   event_translator.translate(kind, payload)                              │    │
   │   │      │     → llm.round.started / llm.delta / llm.reasoning /            │    │
   │   │      │       llm.tool_call_chunk /                                       │    │
-  │   │      │       tool.completed / tool.failed /                              │    │
-  │   │      │       subagent.spawned / subagent.completed /                     │    │
-  │   │      │       agent.custom                                                │    │
+  │   │      │       tool.completed / tool.failed / agent.custom                 │    │
+  │   │      │                                                                   │    │
+  │   │      ├─ task Tool Receipt 同事务投影                                     │    │
+  │   │      │       subagent.spawned / started / waiting /                      │    │
+  │   │      │       completed / failed / canceled / outcome_unknown             │    │
   │   │      ▼                                                                   │    │
   │   │   状态事件 → SQLite + seq       临时增量 → 有界订阅队列（无 seq）          │    │
   │   │      │                          │                                       │    │
@@ -159,7 +164,7 @@ MCP Server 只从 Runtime 自有配置读取，不会隐式启动 Claude Desktop
   │     │  • SkillsMiddleware                    ├  ✅ cap 6  Markdown Skills 注入  │     │
   │     │  • FilesystemMiddleware                ├  注入 ls/read_file/write_file/  │     │
   │     │                                        │   edit_file/glob/grep/execute    │     │
-  │     │  • SubAgentMiddleware + AsyncSubAgent  ┤  ✅ cap 2  注入 task 工具         │     │
+  │     │  • SubAgentMiddleware                 ┤  ✅ cap 2  注入同步 task 工具      │     │
   │     │  • SummarizationMiddleware             │  上下文压缩                       │     │
   │     │  • PatchToolCallsMiddleware            │  orphan tool_call 自愈            │     │
   │     │  • InputGuardMiddleware (P1)           ┘  注入/越狱启发式                  │     │
@@ -176,7 +181,7 @@ MCP Server 只从 Runtime 自有配置读取，不会隐式启动 Claude Desktop
   │     │  • ToolResultRetryMiddleware retryable tool envelope 重试                 │     │
   │     │  • 模型自动重试已禁用；产生输出后不得从头重试               │     │
   │     │  • 本地 direct model fallback 已禁用；没有静默供应商切换             │     │
-  │     │  • local_model_calls 原子预留持久调用预算                                │     │
+  │     │  • local_model_calls 原子预留持久调用预算；子调用关联当前 task operation  │     │
   │     │  • OutboundPolicy 只处理出站副本：强制过滤凭据，外部供应商按策略脱敏   │     │
   │     │  • 按模型 max_input_tokens 、工具结构和安全余量建立硬上下文边界     │     │
   │     │  • 插件已产生产物时注入交付指令，并隐藏定位产物的兜底工具与同一 Action │     │
@@ -218,16 +223,20 @@ MCP Server 只从 Runtime 自有配置读取，不会隐式启动 Claude Desktop
   │     │  • approve / edit / reject 必须与 SQLite 中的同一决定相符               │     │
   │     │                                                                          │     │
   │     │ wrap_tool_call 的 ToolExecutionMiddleware                               │     │
-  │     │  • prepared → running → completed / failed / outcome_unknown            │     │
+  │     │  • prepared → running / paused → completed / failed / canceled / outcome_unknown │     │
+  │     │  • task 每次真实转换与 durable subagent.* 事件同事务，不从 stream chunk 猜状态 │     │
+  │     │  • Receipt 开始事务会同时检查当前租约取消标记；取消已接纳后不再启动工具   │     │
+  │     │  • 父 Run 进入终态/cleanup_required 时取消未执行或暂停的回执；真正执行中的租约丢失记 unknown │
   │     │  • 插件 tool version 固定 digest/schema/input/grant/limits；ContextVar 仅传本调用 operation │
   │     │  • 已完成回执直接复用；结果不明进入人工核对，不自动重跑                  │     │
   │     │  • 纯读取可并行；冲突调用按模型批次原始顺序通过公平读写门                │     │
   │     │  • 大结果保存为有配额的工作产物，只把短预览和引用交给模型                │     │
   │     │                                                                          │     │
   │     │  ┌─ 工具分派 ─────────────────────────────────────────────────┐         │     │
-  │     │  │  task(subagent_name=...)  → 子 agent 隔离 context + LLM    │         │     │
+  │     │  │  task(subagent_type=..., description=...) → 子 agent 隔离 context + LLM │     │     │
   │     │  │       │                       (researcher / writer)        │         │     │
-  │     │  │       └─ 跑完 → ToolMessage(name="task") → subagent.completed │       │     │
+  │     │  │       ├─ operation_id 是一次调用身份；parent_operation_id 记录嵌套关系 │     │     │
+  │     │  │       └─ 跑完 → task receipt 结算 + 生命周期事件；ToolMessage 仅是结果 │     │     │
   │     │  │                                                            │         │     │
   │     │  │  其他 tool → ToolNode 只并行明确只读调用                     │         │     │
   │     │  │              只读暂时错误 → ToolRetryMiddleware 有界重试     │         │     │
@@ -298,7 +307,7 @@ MCP Server 只从 Runtime 自有配置读取，不会隐式启动 Claude Desktop
   │       与同一等待周期的其他候选全部解决后，才创建恢复作业                          │
   │                                                                                     │
   │     CancelledError                                                                  │
-  │       return 候选结果：canceled + run.canceled                                      │
+  │       正在执行的 task 及同批 queued/paused receipt 先结算为 canceled，再返回 run.canceled │
   │                                                                                     │
   │     Exception                                                                       │
   │       return 候选结果：failed + run.failed { error, type, retryable,                │
@@ -345,8 +354,11 @@ MCP Server 只从 Runtime 自有配置读取，不会隐式启动 Claude Desktop
 | 1f | **整批先暂停** | 混合只读和写入调用时，确认前一个也不执行 | `capability_1f_review_pauses_the_entire_mixed_tool_batch` ✅ |
 | 1g | **参数前置校验** | 无效参数不询问用户、不进入工具 | `capability_1g_invalid_tool_arguments_fail_before_review` ✅ |
 | 1i | **任务级权限模式** | `ask`、`auto`、`full_access` 在 Runtime 工具审查层裁决，Client 只提交选择 | `test_permission_mode_*` ✅ |
-| 2 | **SubAgent 派发** | LLM 返 `task` tool_call | `cap_2_subagent_spawned` + `runtime-agent.contract.test.ts` 真实 Runtime 纵向链路 ✅ |
+| 2 | **SubAgent 派发** | LLM 返 `task` tool_call；Receipt 持久投影完整生命周期、父子关系和独立用量 | `test_subagent_lifecycle` + `runtime-agent.contract.test.ts` 真实 Runtime 纵向链路 ✅ |
 | 2c | **子 Agent 同一执行边界** | 子 Agent 内工具也经过确认和回执 | `capability_2c_subagent_tools_share_review_and_receipt_boundary` ✅ |
+| 2d | **同一 Run Team Graph** | `team.run` 用独立 checkpoint thread 执行有界 fan-out、fan-in 和显式 handoff，成员继续复用 `task` Receipt | `test_team_graph` + `capability_2d_team_graph_handoff_uses_nested_task_receipts` ✅ |
+| 2e | **Durable Child Run** | `child.spawn/list/check/wait/cancel` 复用 Run/Job/Attempt/lease/checkpoint；父事件原子投影 child 生命周期 | `test_durable_child_runs` + `test_child_runs` + `capability_2e_durable_child_spawn_wait_and_parent_projection` ✅ |
+| 2f | **Durable Agent Mailbox** | 同 root 的根/child/同级 child 以持久 typed envelope 通信；发送、回复、投递和确认受租约、Receipt、TTL、背压、幂等与稳定 message id 约束 | `test_agent_mailbox` + `test_agent_mailbox_tools` + `capability_2f_root_and_durable_child_exchange_acknowledged_mailbox_messages` ✅ |
 | 3 | 供应商缓存边界 | Runtime 不注入供应商私有缓存标记，由标准供应商适配器决定 | `capability_3_prompt_caching_is_gateway_owned` ✅ |
 | 4 | 自动模型回退禁用 | Runtime 不会在失败后自行更换模型或供应商 | `capability_4_local_direct_modelfallback_ignored` ✅ |
 | 6 | **AGENTS.md 注入** | `MemoryMiddleware` → system prompt | `cap_6_memory_md` ✅（出站 system 含 marker） |
@@ -373,7 +385,7 @@ MCP Server 只从 Runtime 自有配置读取，不会隐式启动 Claude Desktop
 | 模型重试防重复 | 不装配通用 `ModelRetryMiddleware`，错误直接交给运行时结束路径 | `test_agent_builder` |
 | 步上限 | `before_model` 计数 | `test_middleware` |
 | 上下文压缩 | Runtime 把已接纳历史原样交给 Deep Agents 的令牌感知摘要；不再按消息数二次截断或生成关键词摘要。旧对话首次迁入 Runtime 时，client 只保留 256 条 / 750000 字符的传输安全边界 | `test_runs_http` / `conversationHistory.test` |
-| 工具结构可见性 | 完整工具集固定属于图定义；Runtime 只在模型请求副本中按当前目标、保留历史和既有工具调用确定性隐藏无关的 Office 工具结构，并在供应商边界覆盖所有子 Agent，不改变 checkpoint 或图指纹 | `test_tool_visibility` / `test_model_ledger` / `test_agent_builder` |
+| 工具结构可见性 | 完整工具集固定属于图定义；Runtime 只在模型请求副本中按当前目标、保留历史和既有工具调用确定性隐藏无关的 Office 工具结构，并在供应商边界覆盖所有子 Agent，不改变 checkpoint 或图指纹。明确 blocked 的工具同时在 `wrap_tool_call` 拒绝，即使模型猜中隐藏工具名也不能执行 | `test_tool_visibility` / `test_model_ledger` / `test_agent_builder` |
 | 供应商上下文硬限制 | 每次真实模型调用前按声明窗口扣除工具结构并裁剪请求副本；剩余空间不足最小合法请求时在预留调用账本和联系供应商之前明确失败 | `test_model_ledger` |
 | 输出、时间与用量边界 | 模型资料限制最大输出，所有模型服务调用有硬超时；Runtime 记录 token，并用调用次数、输出和时间限制资源 | `test_model_ledger` / model-service tests |
 | research 收敛 | `before_model` per-tool 计数 | `test_middleware` |
@@ -387,6 +399,11 @@ MCP Server 只从 Runtime 自有配置读取，不会隐式启动 Claude Desktop
 | 检查点分叉 | 客户端持久保存 `run.fork`；Runtime 从公开检查点创建新产品对话和明确分支头，同编号重放返回原 Run | `test_runs_http` / `client.test` / `App.test` |
 | 用户触发 repair workflow | `metadata.intent=repair` → `<state>` 修复上下文 + `repair.workflow` started/completed/failed/rejected/canceled；client 按 `{conversation_id, assistant_message_id}` 给 repair action 加 in-flight guard，避免同一失败消息被连续点击创建重复替换 run；attempt 超过 `SHEJANE_RUNTIME_REPAIR_WORKFLOW_MAX` 时 fail-fast，不调用模型 | `test_runs_http` / `test_context_builder` / `test_run_recovery` / `App.test` |
 | 复杂任务小步执行 | `PlanFirstMiddleware` 按当前 Run 的 `task_input` 写入 `incremental_execution` 状态，不注入 Plan-First 文案；`CompletionRouter` 在 P9 强制先写 2–8 个 todos、只保留一个 `in_progress`、已完成任务不可回退，并阻止未全部完成时提交最终答案；并行研究任务可以在同一次状态更新中共同完成。默认 `auto`，可显式关闭 | `test_plan_first` / `test_middleware` / `test_e2e_capabilities` |
+| 同一 Run Team Graph | P6 将成员名、说明、工具面和允许的 handoff 边写入 Agent definition 指纹；`team.run` 在独立 LangGraph checkpoint thread 中用 `Send` 并行派发、reducer 合并结构化结果，并用 `Command` 返回 dispatcher 完成 fan-in / handoff。每个成员仍通过现有 `task` Receipt，因此审批、取消、用量、父子关联和生命周期不旁路；超过 64 KiB 的成员结论只向后继传预览与 Runtime Artifact 引用 | `test_team_graph` / `test_e2e_capabilities` / `test_subagents` |
+| Runtime-owned durable child Run | P3.5 在父 Run 当前租约与 `child.spawn` Receipt 下原子创建 child Run 和待执行 Job；P6 冻结 Agent 定义版本与父权限的工具子集；P5/P7 以独立 Attempt/checkpoint 执行和恢复；P4 将 child 快照嵌入父 Run，并提供 `/v1/runs/{id}/children`；P10 的 list/check/wait/cancel 只读写 Runtime 权威状态。单执行槽等待会临时归还执行名额；spawn 提交后崩溃可从 `spawn_operation_id` 自动恢复回执；租约丢失先隔离，迟到 Attempt 不能提交结果 | `test_durable_child_runs` / `test_child_runs` / `test_runs_http` / `test_e2e_capabilities` |
+| Durable Agent mailbox | P10 的 `mailbox.send/inbox/reply/ack` 复用当前 Attempt 租约和 Tool Receipt；P6 给 root 与冻结 child 定义加入同一受限工具面；P4/P12 从 Runtime SQLite 投影 typed envelope、inbox/outbox 和 `sent/received/acknowledged/expired` 持久事件。只允许同 root 的 root-child 或 sibling-child，使用稳定 operation/message id 实现重放幂等和 checkpoint 级 at-least-once 投递，并以 TTL、hop、pending 和 root 总量限制阻止循环与无界堆积 | `test_agent_mailbox` / `test_agent_mailbox_tools` / `test_runs_http` / `test_e2e_capabilities` / `runtime-sdk client.test.ts` |
+| Coordinator 与远程客户端投影 | P3.5 在 child 接纳事务冻结 dependency、`required/best_effort/quorum` 与精确文件 owner；P5 只领取依赖已成功的 Job，依赖失败原子取消 dependent；P11 在父终态前自动等待 required/quorum、取消 best-effort/多余 quorum，并把失败/取消传播到 child 树。P4 的 `/v1/runs/{root}/collaboration` 用单一 SQLite 读取快照返回成员、等待、mailbox、artifact metadata、依赖、owner 与逐 Run 高水位；SDK 暴露 `getCollaborationSnapshot()`。Runtime 仍只监听 loopback，手机远程网关不是本阶段实现 | `test_collaboration_coordinator` / `test_e2e_capabilities::test_capability_2g_*` / `test_runs_http` / `runtime-sdk client.test.ts` |
+| 独立 A2A Gateway | 外部 P1/P3 由单独进程完成 TLS/peer/OIDC/mTLS、版本/正文校验、租户限域和幂等映射；Gateway 经 Runtime `/v1` 创建 Run，并在外部 P4 把 Runtime 快照/事件/Artifact 投影为 A2A Task、JSON-RPC SSE 和持久 push。Gateway SQLite 只拥有外部身份、ID 映射、outbox 和审计；Runtime SQLite 仍拥有执行真相，本地 Runtime 不新增公网路由 | `test_a2a_gateway*` / `test_a2a_runtime_client` / `test_a2a_outbound_client` / 固定 TCK/ITK，见 `docs/a2a-conformance.md` |
 | 首轮对话标题 | 首个 Runtime thread 的回答通过 P9 后，使用当前冻结模型做一次独立 `title_generation` 账本调用；生成标题仅在原始种子标题未被用户改名时随 P11 `run.completed` 原子写入，失败则保留种子标题且不影响回答 | `test_e2e_capabilities` / `test_model_ledger` / `test_run_result_commit` |
 | 执行结算与资源清理 | 所有结束方式先关闭执行级 `AsyncExitStack`，再从助手草稿、模型账本、工具回执和验证记录生成结构化结果；清理不明时进入不可自动重试的隔离态 | `test_run_jobs` / `test_model_ledger` |
 | 长期记忆 | “我的名字是/我叫/My name is”这类明确姓名事实在本轮直接获得写入能力，无需二次确认；本轮明确指令、“记录一下”确认的上一条用户消息，或“记住我的名字”指代的上一条姓名事实也会提取精确事实。`memory.write` 只能写入该能力允许的用户原文，子 Agent 不拥有写权限；工作区检索继承同一所有者的全局事实；旧 `notes.global` 只兼容读取其中的 `user_fact`，清空接口会删除全部旧记录 | `test_memory` / `test_memory_http` / `test_subagents` / `runtime-tools.contract.test.ts` |
@@ -404,13 +421,13 @@ MCP Server 只从 Runtime 自有配置读取，不会隐式启动 Claude Desktop
 | 验证结果诊断 | `handoff.verification` 暴露最新 `task.verify` 结构化结果；最新验证通过时不再把更早的 `task.verify` 失败作为当前 failure/blocker | `test_runs_http` / `DiagnosticsPanel.test` |
 | 工具 envelope 失败翻译 | `ToolMessage` content 为 `ok:false` JSON/dict envelope 时翻译成 `tool.failed`，并保留 error_code / recoverable / retryable | `test_event_translator` / `test_runs_http` |
 | **流式 token** | `messages` 模式先用 `llm.round.started` 标记新的模型回合，再用 `llm.delta` 发送增量；Client 在新回合开始时替换旧的临时草稿 | `test_streaming_latency` / `chatStore.test` |
-| 取消 | 客户端持久保存 `run.cancel` → `POST /v1/commands` → Runtime 原子保存取消请求与回执 → `task.cancel()` → `CancelledError` | `test_runs_http` / `test_run_commands` / `App.test` |
+| 取消 | 客户端持久保存 `run.cancel` → `POST /v1/commands` → Runtime 在同一事务向 durable child 树保存取消请求与回执；Tool Receipt 从准备态进入执行态时检查当前租约的取消标记，已取消则不启动 handler；运行中的 root/child 执行分别由 `task.cancel()` → `CancelledError` 收口 | `test_runs_http` / `test_run_commands` / `test_subagent_lifecycle` / `test_collaboration_coordinator` / `App.test` |
 | 权限决定 | 客户端持久保存 `permission.resolve` → Runtime 原子保存决定、事件与回执；同批候选齐全时创建恢复作业 | `test_runs_http` / `test_tool_receipts` / `client.test` / `App.test` |
 | 计划审批 | 客户端持久保存 `plan.resolve` → Runtime 原子保存决定、事件与回执；与同一等待周期的其他候选共同结算 | `test_runs_http` / `test_plan_approval` / `client.test` / `App.test` |
 | 工具对账 | 客户端持久保存 `tool.reconcile` → Runtime 原子结算工具回执、等待候选、事件和命令回执 | `test_runs_http` / `test_tool_receipts` / `client.test` / `App.test` |
 | 恢复 | 只接受权限、问题、计划审批和工具对账的类型化决定；通用 `/resume` 已删除 | `test_runs_http` / `test_user_ask` |
 | 检查点持久化 | `durability="sync"` 保证每个 superstep 在下一步前提交；`checkpoints` 流用租约保护的比较交换更新当前 Run 分支头；diagnostics 只读取该明确分支头 | `test_agent_builder` / `test_runs_http` / `test_run_jobs` |
-| 快照与事件恢复 | 助手消息投影原子记录正文覆盖的事件高水位；客户端保存 `lastEventSeq`，SSE 用 `?after=<seq>` 仅回放后续事件 | `test_run_result_commit` / `test_sse_envelope` / `client.test` / `runtimeProjection.test` |
+| 快照与事件恢复 | 助手消息投影原子记录正文覆盖的事件高水位；截断快照用有限 `/events?after=` 补齐等待动作，实时 SSE 再用同一游标只回放后续事件 | `test_run_result_commit` / `test_runs_http` / `test_sse_envelope` / `client.test` / `runtimeProjection.test` / `App.test` |
 | 游标重同步 | Runtime 拒绝超出事件窗口的游标；客户端读取完整线程快照后继续订阅 | `test_sse_envelope` / `client.test` / `App.test` |
 | 临时增量 | 模型回合边界、逐字文本、推理、临时用量和未完成调用片段只走每订阅者有界队列，不写事件日志或重连重放；模型开始新回合或进入工具调用时清空上一回合的临时正文，失败时不把未完成正文显示为最终回答 | `test_sse_envelope` / `test_run_jobs` / `chatStore.test` / `MessageBubble.test` |
 | 观测层 | `RuntimeObserver` callback | `test_observability` ✅ 9 case |
@@ -441,6 +458,7 @@ SheJane follows the same split as LangGraph's fault-tolerance model:
 | structlog + RuntimeObserver | [`shejane_runtime/observability.py`](../runtime/src/shejane_runtime/observability.py) |
 | 工具注册 | [`shejane_runtime/tools/registry.py`](../runtime/src/shejane_runtime/tools/registry.py) |
 | 持久化 store | [`shejane_runtime/store/sqlite.py`](../runtime/src/shejane_runtime/store/sqlite.py) |
+| 独立 A2A Gateway | [`shejane_runtime/a2a_gateway/`](../runtime/src/shejane_runtime/a2a_gateway/) |
 
 ---
 

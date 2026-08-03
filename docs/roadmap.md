@@ -1,6 +1,6 @@
 # SheJane 路线图
 
-> 更新于 2026-07-29。当前能力基线和源码证据见 [Agent Harness 能力审计](./agent-harness-capabilities-latest-2026-07-26.md)。Runtime 的 P1–P12 只表示 [`harness-runtime-stages.md`](./harness-runtime-stages.md) 中的请求阶段；本路线图使用 Now / Next / Later / Explore，不另建一套阶段编号。
+> 更新于 2026-08-03。当前能力基线和源码证据见 [Agent Harness 能力审计](./agent-harness-capabilities-latest-2026-07-26.md)。Runtime 的 P1–P12 只表示 [`harness-runtime-stages.md`](./harness-runtime-stages.md) 中的请求阶段；本路线图使用 Now / Next / Later / Explore，不另建一套阶段编号。
 
 ## 当前基线
 
@@ -8,8 +8,8 @@ SheJane 已经具备本地 Agent Harness 的主干，不需要继续以“增加
 
 | 判定 | 数量 | 主要能力 |
 | --- | ---: | --- |
-| 已实现 | 17 / 24 | Agent 循环、指令与上下文、工具生命周期、工作区、持久 Run/Thread、SSE、取消恢复、压缩、主 Agent Sandbox/HITL、Checkpoint/Fork、Skills、MCP、计划、Runtime SDK、Provider 真实兼容性、Tracing、Agent Evals |
-| 部分实现 | 7 / 24 | 输出 Guard/结构化结果、插件发布、长期记忆、多 Agent、Artifact workspace snapshot、周期调度、多模态实时能力 |
+| 已实现 | 18 / 24 | Agent 循环、指令与上下文、工具生命周期、工作区、持久 Run/Thread、SSE、取消恢复、压缩、主 Agent Sandbox/HITL、Checkpoint/Fork、Skills、MCP、计划、Runtime SDK、Provider 真实兼容性、Tracing、Agent Evals、有界多 Agent 协作 |
+| 部分实现 | 6 / 24 | 输出 Guard/结构化结果、插件发布、长期记忆、Artifact workspace snapshot、周期调度、多模态实时能力 |
 
 路线图的目标是把“代码存在”推进为“真实 Provider 可用、失败可诊断、结果可验证、安装包可发布”。
 
@@ -97,6 +97,10 @@ Runtime 已拥有固定 origin、PKCE、动态 IPv4 loopback callback、一次�
 - 所有恢复、等待、计划、工具对账和最终结算都从 Runtime snapshot/event 推导。
 - 使用 contract/E2E 测试保证 Client 重启或事件游标失效后仍能收敛。
 
+多 Agent 的 P4 收敛已完成：同步 Subagent 生命周期、同 Run Team Graph、durable child Run、typed mailbox、dependency/required/best-effort/quorum、workspace resource owner 和 root collaboration snapshot 都以 Runtime SQLite/Receipt/Run 为事实源。父终态自动处理 child，不依赖模型记得收口；未来手机端可消费同一快照与现有 steering/HITL/cancel 接口，但远程网关仍是独立后续项目。
+
+独立 Agent federation 也已通过单独的 A2A Gateway 落地：只声明 A2A 1.0 JSON-RPC，把 peer/OIDC/mTLS 身份、租户作用域、外部 ID、Task/Message/Artifact、SSE 和持久 push 映射到 Runtime 权威状态。本地 Runtime 不增加公网路由。固定 TCK 的 MUST 为 100%，14 个 ITK 场景覆盖 Python/Go/TypeScript 双向 standard、stream、push、resubscribe/cancel 和四节点多跳；版本与偏差见 [`a2a-conformance.md`](./a2a-conformance.md)。这项能力服务 Agent-to-Agent，不替代手机端所需的设备身份、配对和撤销网关。
+
 ### 5. 插件与安装包发布 Gate
 
 - 在真实 runner 闭环 Managed Worker 的签名、公证、Gatekeeper/平台隔离和资产完整性证明。
@@ -124,7 +128,7 @@ Runtime 已拥有固定 origin、PKCE、动态 IPv4 loopback callback、一次�
 
 ## Explore：有需求证据后再做
 
-- **多 Agent 团队：** 当前同步子 Agent 已能并行查资料、审查和写作，暂不开发 Handoff、后台 Agent、共享任务板或 Swarm。只有真实任务证明现有委派不足时再评估，研究依据保留在 [Agent Harness 能力审计](./agent-harness-capabilities-latest-2026-07-26.md)。
+- **A2A 额外 binding 与目录：** JSON-RPC federation 已完成；只有真实互操作需求证明必要时才声明 HTTP+JSON、gRPC、私有 extension、托管 Agent 目录或更多 SDK oracle。每个新增 binding 必须单独通过固定 TCK MUST 和跨语言 ITK，不能从 JSON-RPC 结果推定兼容。
 - **长周期 fresh-agent 交接：** 只有 compaction 的质量或成本数据证明不足时，才增加结构化 handoff Artifact 和新上下文 continuation。
 - **Remote Client：** 移动端先连接用户自己的 Runtime；远程接入必须经过独立 TLS、设备身份、撤销和限流网关，Runtime 仍只监听 loopback。
 - **实时语音 Agent：** 与离线 `speech.transcribe` 分开设计低延迟音频 transport、可中断 turn、durable transcript、设备权限和隐私边界。
