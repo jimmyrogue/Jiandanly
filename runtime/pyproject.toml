@@ -44,10 +44,13 @@ dependencies = [
     "cryptography==48.0.0",
     "pillow==12.2.0",
     "pycdlib==1.16.0",
+    "a2a-sdk[fastapi]==1.1.2",
+    "pyjwt[crypto]==2.12.1",
 ]
 
 [project.scripts]
 shejane-runtime = "shejane_runtime.__main__:main"
+shejane-a2a-gateway = "shejane_runtime.a2a_gateway.__main__:main"
 shejane-plugin = "shejane_runtime.plugin_cli:main"
 
 [build-system]
