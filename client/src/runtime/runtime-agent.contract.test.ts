@@ -11,6 +11,7 @@ import {
   createLocalRun,
   deleteLocalSkill,
   forkLocalRun,
+  getLocalThreadSnapshot,
   getLocalRunDiagnostics,
   resolveLocalPermissionCommand,
   revokeLocalWorkspace,
@@ -251,13 +252,44 @@ describe.skipIf(!BASE_URL)('flow:P5-P12 > contract: Runtime agent loop (live run
       onDelta: () => undefined,
     })
 
+    const lifecycle = events.filter(event => event.type.startsWith('subagent.'))
+    expect(lifecycle.map(event => event.type)).toEqual([
+      'subagent.spawned',
+      'subagent.started',
+      'subagent.completed',
+    ])
+    expect(new Set(lifecycle.map(event => event.payload.operation_id)).size).toBe(1)
+    expect(new Set(lifecycle.map(event => event.payload.tool_call_id)).size).toBe(1)
+    expect(lifecycle.every(event => event.payload.parent_run_id === run.id)).toBe(true)
+    expect(lifecycle.every(event => event.payload.subagent_type === 'writer')).toBe(true)
+    expect(lifecycle.at(-1)?.payload).toMatchObject({
+      status: 'completed',
+      receipt_status: 'completed',
+      usage: expect.objectContaining({ model_calls: expect.any(Number) }),
+    })
     expect(events).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: 'subagent.spawned' }),
-      expect.objectContaining({ type: 'subagent.completed' }),
       expect.objectContaining({ type: 'run.completed' }),
     ]))
     const completed = [...events].reverse().find(event => event.type === 'run.completed')
     expect(String(completed?.payload.final_text ?? '')).toContain('E2E_SUBAGENT_RESULT')
+
+    const replay: Array<{ type: string; payload: Record<string, unknown> }> = []
+    await streamLocalRun(run.id, config, {
+      onEvent: event => replay.push({ type: event.event_type, payload: event.payload ?? {} }),
+      onDelta: () => undefined,
+    })
+    expect(replay.filter(event => event.type.startsWith('subagent.'))).toEqual(lifecycle)
+
+    expect(run.thread_id).toBeTruthy()
+    const snapshot = await getLocalThreadSnapshot(String(run.thread_id), config)
+    const invocation = snapshot.runs.find(item => item.id === run.id)?.subagent_invocations?.[0]
+    expect(invocation).toMatchObject({
+      operation_id: lifecycle[0]?.payload.operation_id,
+      parent_run_id: run.id,
+      status: 'completed',
+      receipt_status: 'completed',
+      subagent_type: 'writer',
+    })
   })
 
   it('updates the injected Todo state before completing', async () => {

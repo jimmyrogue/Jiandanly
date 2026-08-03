@@ -1951,13 +1951,24 @@
         "type": "object"
       },
       "InjectRunInstructionRequest": {
+        "additionalProperties": false,
         "properties": {
+          "command_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+            "title": "Command Id",
+            "type": "string"
+          },
           "content": {
+            "maxLength": 131072,
+            "minLength": 1,
             "title": "Content",
             "type": "string"
           }
         },
         "required": [
+          "command_id",
           "content"
         ],
         "title": "InjectRunInstructionRequest",
@@ -1965,6 +1976,10 @@
       },
       "InjectRunInstructionResponse": {
         "properties": {
+          "command_id": {
+            "title": "Command Id",
+            "type": "string"
+          },
           "instruction_id": {
             "title": "Instruction Id",
             "type": "string"
@@ -1981,6 +1996,7 @@
           }
         },
         "required": [
+          "command_id",
           "run_id",
           "instruction_id"
         ],
@@ -2038,6 +2054,38 @@
         "title": "LatestCheckpoint",
         "type": "object"
       },
+      "ListAgentMessagesResponse": {
+        "properties": {
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/LocalAgentMessage"
+            },
+            "title": "Messages",
+            "type": "array"
+          }
+        },
+        "required": [
+          "messages"
+        ],
+        "title": "ListAgentMessagesResponse",
+        "type": "object"
+      },
+      "ListChildRunsResponse": {
+        "properties": {
+          "children": {
+            "items": {
+              "$ref": "#/components/schemas/LocalChildRun"
+            },
+            "title": "Children",
+            "type": "array"
+          }
+        },
+        "required": [
+          "children"
+        ],
+        "title": "ListChildRunsResponse",
+        "type": "object"
+      },
       "ListModelCapabilityBindingsResponse": {
         "properties": {
           "bindings": {
@@ -2085,6 +2133,33 @@
           "plugins"
         ],
         "title": "ListPluginsResponse",
+        "type": "object"
+      },
+      "ListRunEventsResponse": {
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/LocalThreadEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "has_more": {
+            "default": false,
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "next_after": {
+            "minimum": 0.0,
+            "title": "Next After",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "events",
+          "next_after"
+        ],
+        "title": "ListRunEventsResponse",
         "type": "object"
       },
       "ListRunsResponse": {
@@ -2204,6 +2279,149 @@
         "title": "ListWorkspacesResponse",
         "type": "object"
       },
+      "LocalAgentMessage": {
+        "description": "Durable typed envelope exchanged inside one collaboration root.",
+        "properties": {
+          "acknowledged_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acknowledged At"
+          },
+          "artifact_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Artifact Refs",
+            "type": "array"
+          },
+          "correlation_id": {
+            "title": "Correlation Id",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "data": {
+            "additionalProperties": true,
+            "title": "Data",
+            "type": "object"
+          },
+          "deadline_at": {
+            "title": "Deadline At",
+            "type": "string"
+          },
+          "delivered_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivered At"
+          },
+          "hop_count": {
+            "minimum": 0.0,
+            "title": "Hop Count",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "in_reply_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "In Reply To"
+          },
+          "kind": {
+            "enum": [
+              "request",
+              "question",
+              "update",
+              "result",
+              "cancel"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "recipient_run_id": {
+            "title": "Recipient Run Id",
+            "type": "string"
+          },
+          "root_run_id": {
+            "title": "Root Run Id",
+            "type": "string"
+          },
+          "sender_operation_id": {
+            "title": "Sender Operation Id",
+            "type": "string"
+          },
+          "sender_run_id": {
+            "title": "Sender Run Id",
+            "type": "string"
+          },
+          "sequence": {
+            "minimum": 1.0,
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "delivered",
+              "acknowledged",
+              "expired"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "ttl_seconds": {
+            "maximum": 86400.0,
+            "minimum": 60.0,
+            "title": "Ttl Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "root_run_id",
+          "sender_run_id",
+          "recipient_run_id",
+          "sender_operation_id",
+          "kind",
+          "text",
+          "data",
+          "artifact_refs",
+          "correlation_id",
+          "sequence",
+          "hop_count",
+          "status",
+          "ttl_seconds",
+          "deadline_at",
+          "created_at"
+        ],
+        "title": "LocalAgentMessage",
+        "type": "object"
+      },
       "LocalArtifact": {
         "description": "Authorized Artifact metadata; blob bodies use the separate content route.",
         "properties": {
@@ -2274,9 +2492,835 @@
         "title": "LocalArtifact",
         "type": "object"
       },
+      "LocalChildRun": {
+        "description": "Addressable Runtime-owned child with its own job and checkpoint.",
+        "properties": {
+          "agent_definition_id": {
+            "title": "Agent Definition Id",
+            "type": "string"
+          },
+          "agent_definition_version": {
+            "title": "Agent Definition Version",
+            "type": "string"
+          },
+          "collaboration_depth": {
+            "minimum": 1.0,
+            "title": "Collaboration Depth",
+            "type": "integer"
+          },
+          "collaboration_policy": {
+            "additionalProperties": true,
+            "title": "Collaboration Policy",
+            "type": "object"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "completion_mode": {
+            "default": "required",
+            "enum": [
+              "required",
+              "best_effort",
+              "quorum"
+            ],
+            "title": "Completion Mode",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 7,
+            "title": "Depends On",
+            "type": "array"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "error_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Type"
+          },
+          "events_count": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Events Count",
+            "type": "integer"
+          },
+          "goal": {
+            "title": "Goal",
+            "type": "string"
+          },
+          "graph_checkpoint_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Graph Checkpoint Id"
+          },
+          "graph_thread_id": {
+            "title": "Graph Thread Id",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "input_tokens": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "model_calls": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Model Calls",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "parent_run_id": {
+            "title": "Parent Run Id",
+            "type": "string"
+          },
+          "quorum_group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quorum Group"
+          },
+          "quorum_required": {
+            "anyOf": [
+              {
+                "maximum": 8.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quorum Required"
+          },
+          "resource_claims": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 16,
+            "title": "Resource Claims",
+            "type": "array"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "retryable": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retryable"
+          },
+          "root_run_id": {
+            "title": "Root Run Id",
+            "type": "string"
+          },
+          "run_kind": {
+            "const": "child",
+            "default": "child",
+            "title": "Run Kind",
+            "type": "string"
+          },
+          "spawn_operation_id": {
+            "title": "Spawn Operation Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "running",
+              "waiting_permission",
+              "waiting_input",
+              "cleanup_required",
+              "completed",
+              "canceled",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "parent_run_id",
+          "root_run_id",
+          "goal",
+          "status",
+          "agent_definition_id",
+          "agent_definition_version",
+          "collaboration_depth",
+          "collaboration_policy",
+          "spawn_operation_id",
+          "graph_thread_id",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "LocalChildRun",
+        "type": "object"
+      },
+      "LocalCollaborationArtifact": {
+        "properties": {
+          "bytes": {
+            "minimum": 0.0,
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "content_type": {
+            "title": "Content Type",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha256"
+          },
+          "storage_kind": {
+            "enum": [
+              "inline_text",
+              "blob"
+            ],
+            "title": "Storage Kind",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "tool_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Name"
+          }
+        },
+        "required": [
+          "id",
+          "run_id",
+          "kind",
+          "title",
+          "content_type",
+          "bytes",
+          "storage_kind",
+          "created_at"
+        ],
+        "title": "LocalCollaborationArtifact",
+        "type": "object"
+      },
+      "LocalCollaborationCompletionSummary": {
+        "properties": {
+          "best_effort_active": {
+            "minimum": 0.0,
+            "title": "Best Effort Active",
+            "type": "integer"
+          },
+          "cancel": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Cancel",
+            "type": "array"
+          },
+          "impossible": {
+            "title": "Impossible",
+            "type": "boolean"
+          },
+          "quorum_groups": {
+            "items": {
+              "$ref": "#/components/schemas/LocalCollaborationQuorumSummary"
+            },
+            "title": "Quorum Groups",
+            "type": "array"
+          },
+          "required": {
+            "$ref": "#/components/schemas/LocalCollaborationRequiredSummary"
+          },
+          "satisfied": {
+            "title": "Satisfied",
+            "type": "boolean"
+          },
+          "wait_for": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Wait For",
+            "type": "array"
+          }
+        },
+        "required": [
+          "satisfied",
+          "impossible",
+          "required",
+          "quorum_groups",
+          "best_effort_active",
+          "wait_for",
+          "cancel"
+        ],
+        "title": "LocalCollaborationCompletionSummary",
+        "type": "object"
+      },
+      "LocalCollaborationDependency": {
+        "properties": {
+          "child_run_id": {
+            "title": "Child Run Id",
+            "type": "string"
+          },
+          "dependency_run_id": {
+            "title": "Dependency Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "child_run_id",
+          "dependency_run_id"
+        ],
+        "title": "LocalCollaborationDependency",
+        "type": "object"
+      },
+      "LocalCollaborationQuorumSummary": {
+        "properties": {
+          "active": {
+            "minimum": 0.0,
+            "title": "Active",
+            "type": "integer"
+          },
+          "completed": {
+            "minimum": 0.0,
+            "title": "Completed",
+            "type": "integer"
+          },
+          "failed": {
+            "minimum": 0.0,
+            "title": "Failed",
+            "type": "integer"
+          },
+          "group": {
+            "title": "Group",
+            "type": "string"
+          },
+          "impossible": {
+            "title": "Impossible",
+            "type": "boolean"
+          },
+          "required": {
+            "minimum": 0.0,
+            "title": "Required",
+            "type": "integer"
+          },
+          "satisfied": {
+            "title": "Satisfied",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "group",
+          "required",
+          "completed",
+          "active",
+          "failed",
+          "satisfied",
+          "impossible"
+        ],
+        "title": "LocalCollaborationQuorumSummary",
+        "type": "object"
+      },
+      "LocalCollaborationRequiredSummary": {
+        "properties": {
+          "active": {
+            "minimum": 0.0,
+            "title": "Active",
+            "type": "integer"
+          },
+          "completed": {
+            "minimum": 0.0,
+            "title": "Completed",
+            "type": "integer"
+          },
+          "failed": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Failed",
+            "type": "array"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "completed",
+          "failed",
+          "active"
+        ],
+        "title": "LocalCollaborationRequiredSummary",
+        "type": "object"
+      },
+      "LocalCollaborationResourceOwner": {
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "owner_run_id": {
+            "title": "Owner Run Id",
+            "type": "string"
+          },
+          "resource_key": {
+            "title": "Resource Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "resource_key",
+          "owner_run_id",
+          "created_at"
+        ],
+        "title": "LocalCollaborationResourceOwner",
+        "type": "object"
+      },
+      "LocalCollaborationRoot": {
+        "properties": {
+          "agent_definition_id": {
+            "title": "Agent Definition Id",
+            "type": "string"
+          },
+          "agent_definition_version": {
+            "title": "Agent Definition Version",
+            "type": "string"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "error_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Type"
+          },
+          "goal": {
+            "title": "Goal",
+            "type": "string"
+          },
+          "graph_checkpoint_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Graph Checkpoint Id"
+          },
+          "graph_thread_id": {
+            "title": "Graph Thread Id",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "input_tokens": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "model_calls": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Model Calls",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "parent_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Run Id"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "retryable": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retryable"
+          },
+          "root_run_id": {
+            "title": "Root Run Id",
+            "type": "string"
+          },
+          "run_kind": {
+            "enum": [
+              "turn",
+              "fork"
+            ],
+            "title": "Run Kind",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "running",
+              "waiting_permission",
+              "waiting_input",
+              "cleanup_required",
+              "completed",
+              "canceled",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "root_run_id",
+          "run_kind",
+          "goal",
+          "status",
+          "agent_definition_id",
+          "agent_definition_version",
+          "graph_thread_id",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "LocalCollaborationRoot",
+        "type": "object"
+      },
+      "LocalCollaborationSnapshot": {
+        "properties": {
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/LocalCollaborationArtifact"
+            },
+            "title": "Artifacts",
+            "type": "array"
+          },
+          "captured_at": {
+            "title": "Captured At",
+            "type": "string"
+          },
+          "children": {
+            "items": {
+              "$ref": "#/components/schemas/LocalChildRun"
+            },
+            "title": "Children",
+            "type": "array"
+          },
+          "completion": {
+            "$ref": "#/components/schemas/LocalCollaborationCompletionSummary"
+          },
+          "dependencies": {
+            "items": {
+              "$ref": "#/components/schemas/LocalCollaborationDependency"
+            },
+            "title": "Dependencies",
+            "type": "array"
+          },
+          "event_high_watermarks": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Event High Watermarks",
+            "type": "object"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/LocalAgentMessage"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "pending_waits": {
+            "items": {
+              "$ref": "#/components/schemas/LocalCollaborationWait"
+            },
+            "title": "Pending Waits",
+            "type": "array"
+          },
+          "resource_owners": {
+            "items": {
+              "$ref": "#/components/schemas/LocalCollaborationResourceOwner"
+            },
+            "title": "Resource Owners",
+            "type": "array"
+          },
+          "root": {
+            "$ref": "#/components/schemas/LocalCollaborationRoot"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "captured_at",
+          "root",
+          "children",
+          "messages",
+          "pending_waits",
+          "resource_owners",
+          "dependencies",
+          "artifacts",
+          "event_high_watermarks",
+          "completion"
+        ],
+        "title": "LocalCollaborationSnapshot",
+        "type": "object"
+      },
+      "LocalCollaborationWait": {
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "decision": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "interrupt_id": {
+            "title": "Interrupt Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "tool_review",
+              "question",
+              "plan",
+              "tool_reconciliation"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "position": {
+            "minimum": 0.0,
+            "title": "Position",
+            "type": "integer"
+          },
+          "resolved_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved At"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "status": {
+            "const": "pending",
+            "title": "Status",
+            "type": "string"
+          },
+          "wait_cycle_id": {
+            "title": "Wait Cycle Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "run_id",
+          "kind",
+          "wait_cycle_id",
+          "interrupt_id",
+          "position",
+          "status",
+          "payload",
+          "created_at"
+        ],
+        "title": "LocalCollaborationWait",
+        "type": "object"
+      },
       "LocalRun": {
         "description": "One row of the `local_runs` table, surfaced over HTTP.\n\n`history_json` / `settings_json` are stringified JSON because\nSQLite stores them that way — the client parses on demand. Kept\nas strings here (not dict) to keep the wire format honest.",
         "properties": {
+          "agent_definition_id": {
+            "default": "shejane.default",
+            "title": "Agent Definition Id",
+            "type": "string"
+          },
+          "agent_definition_version": {
+            "default": "1",
+            "title": "Agent Definition Version",
+            "type": "string"
+          },
           "assistant_item_id": {
             "anyOf": [
               {
@@ -2299,6 +3343,13 @@
             ],
             "title": "Canceled At"
           },
+          "child_runs": {
+            "items": {
+              "$ref": "#/components/schemas/LocalChildRun"
+            },
+            "title": "Child Runs",
+            "type": "array"
+          },
           "client_message_id": {
             "anyOf": [
               {
@@ -2309,6 +3360,17 @@
               }
             ],
             "title": "Client Message Id"
+          },
+          "collaboration_depth": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Collaboration Depth",
+            "type": "integer"
+          },
+          "collaboration_policy_json": {
+            "default": "{}",
+            "title": "Collaboration Policy Json",
+            "type": "string"
           },
           "command_id": {
             "anyOf": [
@@ -2405,10 +3467,35 @@
             ],
             "title": "Parent Run Id"
           },
+          "root_run_id": {
+            "title": "Root Run Id",
+            "type": "string"
+          },
+          "run_kind": {
+            "default": "turn",
+            "enum": [
+              "turn",
+              "fork",
+              "child"
+            ],
+            "title": "Run Kind",
+            "type": "string"
+          },
           "settings_json": {
             "default": "{}",
             "title": "Settings Json",
             "type": "string"
+          },
+          "spawn_operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spawn Operation Id"
           },
           "status": {
             "enum": [
@@ -2423,6 +3510,13 @@
             ],
             "title": "Status",
             "type": "string"
+          },
+          "subagent_invocations": {
+            "items": {
+              "$ref": "#/components/schemas/LocalSubagentInvocation"
+            },
+            "title": "Subagent Invocations",
+            "type": "array"
           },
           "thread_id": {
             "anyOf": [
@@ -2464,6 +3558,7 @@
         },
         "required": [
           "id",
+          "root_run_id",
           "goal",
           "status",
           "created_at",
@@ -2872,6 +3967,173 @@
         "title": "LocalScheduledRun",
         "type": "object"
       },
+      "LocalSubagentInvocation": {
+        "description": "Current projection of one synchronous ``task`` tool invocation.\n\nThis is not an independently addressable child Run. ``operation_id`` is\nthe durable tool-operation identity owned by Runtime.",
+        "properties": {
+          "attempt_count": {
+            "minimum": 0.0,
+            "title": "Attempt Count",
+            "type": "integer"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "error_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Type"
+          },
+          "operation_id": {
+            "title": "Operation Id",
+            "type": "string"
+          },
+          "parent_operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Operation Id"
+          },
+          "parent_run_id": {
+            "title": "Parent Run Id",
+            "type": "string"
+          },
+          "receipt_status": {
+            "enum": [
+              "prepared",
+              "running",
+              "paused",
+              "completed",
+              "failed",
+              "outcome_unknown",
+              "rejected",
+              "canceled"
+            ],
+            "title": "Receipt Status",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "running",
+              "waiting",
+              "completed",
+              "failed",
+              "canceled",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "subagent_type": {
+            "title": "Subagent Type",
+            "type": "string"
+          },
+          "tool_call_id": {
+            "title": "Tool Call Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/LocalSubagentUsage"
+          }
+        },
+        "required": [
+          "operation_id",
+          "parent_run_id",
+          "parent_operation_id",
+          "tool_call_id",
+          "subagent_type",
+          "description",
+          "status",
+          "receipt_status",
+          "attempt_count",
+          "usage",
+          "error_type",
+          "created_at",
+          "started_at",
+          "completed_at",
+          "updated_at"
+        ],
+        "title": "LocalSubagentInvocation",
+        "type": "object"
+      },
+      "LocalSubagentUsage": {
+        "properties": {
+          "input_tokens": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "model_calls": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Model Calls",
+            "type": "integer"
+          },
+          "outcome_unknown_calls": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Outcome Unknown Calls",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "unmetered_calls": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Unmetered Calls",
+            "type": "integer"
+          }
+        },
+        "title": "LocalSubagentUsage",
+        "type": "object"
+      },
       "LocalThread": {
         "properties": {
           "archived_at": {
@@ -3115,6 +4377,7 @@
             "additionalProperties": {
               "type": "integer"
             },
+            "description": "Highest event sequence included in this snapshot per Run; 0 means replay all.",
             "title": "Event High Watermarks",
             "type": "object"
           },
@@ -8084,6 +9347,84 @@
         "summary": "Cancel Run"
       }
     },
+    "/v1/runs/{run_id}/children": {
+      "get": {
+        "operationId": "list_child_runs_v1_runs__run_id__children_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListChildRunsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Child Runs"
+      }
+    },
+    "/v1/runs/{run_id}/collaboration": {
+      "get": {
+        "operationId": "get_collaboration_snapshot_v1_runs__run_id__collaboration_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocalCollaborationSnapshot"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Collaboration Snapshot"
+      }
+    },
     "/v1/runs/{run_id}/diagnostics": {
       "get": {
         "description": "Return the full `LocalRunDiagnostics` payload.\n\nShape is defined by `LocalRunDiagnostics` and generated into the SDK.\nIt includes the redacted durable trace projection used by exports.\n\nPhase 5'+ used to return only `{run, events}`, so the\n`DiagnosticsPanel` rendered NaN counts (permissions.length on\nundefined) and the \"latest checkpoint\" tab was always missing.",
@@ -8122,6 +9463,68 @@
           }
         },
         "summary": "Run Diagnostics"
+      }
+    },
+    "/v1/runs/{run_id}/events": {
+      "get": {
+        "operationId": "list_run_events_v1_runs__run_id__events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "After",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 1000,
+              "maximum": 5000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListRunEventsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Run Events"
       }
     },
     "/v1/runs/{run_id}/fork": {
@@ -8319,6 +9722,59 @@
           }
         },
         "summary": "Get Run Input Pptx Outline"
+      }
+    },
+    "/v1/runs/{run_id}/mailbox": {
+      "get": {
+        "operationId": "list_agent_messages_v1_runs__run_id__mailbox_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "box",
+            "required": false,
+            "schema": {
+              "default": "inbox",
+              "enum": [
+                "inbox",
+                "outbox"
+              ],
+              "title": "Box",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListAgentMessagesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Agent Messages"
       }
     },
     "/v1/runs/{run_id}/stream": {

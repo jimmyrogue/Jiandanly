@@ -25,10 +25,14 @@ export function parseRuntimeModelSpec(value: string): RuntimeModelSpec | undefin
 }
 
 export type LocalRun = Schemas['LocalRun']
+export type LocalChildRun = Schemas['LocalChildRun']
+export type LocalAgentMessage = Schemas['LocalAgentMessage']
+export type LocalCollaborationSnapshot = Schemas['LocalCollaborationSnapshot']
 export type PermissionMode = Schemas['CreateRunRequest']['permission_mode']
 export type LocalThread = Schemas['LocalThread']
 export type LocalThreadItem = Schemas['LocalThreadItem']
 export type LocalThreadChange = Schemas['LocalThreadChange']
+export type LocalThreadEvent = Schemas['LocalThreadEvent']
 export type LocalThreadSnapshot = Schemas['LocalThreadSnapshot']
 export type RuntimeInfo = Schemas['RuntimeInfo']
 export type RuntimeSettings = Schemas['RuntimeSettingsResponse']
@@ -583,6 +587,11 @@ export interface PendingRunCancelCommand extends PendingRuntimeCommandBase {
   input: { runId: string; threadId: string }
 }
 
+export interface PendingRunInjectCommand extends PendingRuntimeCommandBase {
+  type: 'run.inject'
+  input: { runId: string; threadId: string; content: string }
+}
+
 export interface PendingQuestionAnswerCommand extends PendingRuntimeCommandBase {
   type: 'question.answer'
   input: {
@@ -675,6 +684,7 @@ export type PendingRuntimeCommand =
   | PendingRunStartCommand
   | PendingRunForkCommand
   | PendingRunCancelCommand
+  | PendingRunInjectCommand
   | PendingQuestionAnswerCommand
   | PendingPermissionResolveCommand
   | PendingPlanResolveCommand
@@ -689,6 +699,7 @@ export type PendingRuntimeCommand =
 export type RuntimeCommandResult =
   | LocalRun
   | CancelRunCommandReceipt
+  | InjectRunInstructionResponse
   | AnswerQuestionCommandReceipt
   | ResolvePermissionCommandReceipt
   | PlanResolveCommandReceipt
@@ -864,6 +875,14 @@ async function deliverRuntimeCommand(
       return forkLocalRun(command.commandId, command.input, config, fetcher)
     case 'run.cancel':
       return cancelLocalRunCommand(command.commandId, command.input.runId, config, fetcher)
+    case 'run.inject':
+      return injectLocalRunInstruction(
+        command.commandId,
+        command.input.runId,
+        command.input.content,
+        config,
+        fetcher,
+      )
     case 'question.answer':
       return answerLocalQuestionCommand(
         command.commandId,
@@ -1153,6 +1172,57 @@ export async function listLocalRuns(config: RuntimeClientConfig, fetcher: Fetche
   })
   const body = await decodeLocalResponse<{ runs?: LocalRun[] }>(response)
   return body.runs ?? []
+}
+
+export async function getLocalRun(
+  runID: string,
+  config: RuntimeClientConfig,
+  fetcher: Fetcher = fetch,
+): Promise<LocalRun> {
+  const response = await fetcher(
+    `${normalizeBaseURL(config.baseURL)}/v1/runs/${encodeURIComponent(runID)}`,
+    { method: 'GET', headers: localHeaders(config, false) },
+  )
+  return decodeLocalResponse<LocalRun>(response)
+}
+
+export async function listLocalChildRuns(
+  runID: string,
+  config: RuntimeClientConfig,
+  fetcher: Fetcher = fetch,
+): Promise<LocalChildRun[]> {
+  const response = await fetcher(
+    `${normalizeBaseURL(config.baseURL)}/v1/runs/${encodeURIComponent(runID)}/children`,
+    { method: 'GET', headers: localHeaders(config, false) },
+  )
+  const body = await decodeLocalResponse<Schemas['ListChildRunsResponse']>(response)
+  return body.children
+}
+
+export async function getLocalCollaborationSnapshot(
+  runID: string,
+  config: RuntimeClientConfig,
+  fetcher: Fetcher = fetch,
+): Promise<LocalCollaborationSnapshot> {
+  const response = await fetcher(
+    `${normalizeBaseURL(config.baseURL)}/v1/runs/${encodeURIComponent(runID)}/collaboration`,
+    { method: 'GET', headers: localHeaders(config, false) },
+  )
+  return decodeLocalResponse<LocalCollaborationSnapshot>(response)
+}
+
+export async function listLocalAgentMessages(
+  runID: string,
+  box: 'inbox' | 'outbox',
+  config: RuntimeClientConfig,
+  fetcher: Fetcher = fetch,
+): Promise<LocalAgentMessage[]> {
+  const response = await fetcher(
+    `${normalizeBaseURL(config.baseURL)}/v1/runs/${encodeURIComponent(runID)}/mailbox?box=${box}`,
+    { method: 'GET', headers: localHeaders(config, false) },
+  )
+  const body = await decodeLocalResponse<Schemas['ListAgentMessagesResponse']>(response)
+  return body.messages
 }
 
 export async function listLocalPlugins(
@@ -1744,6 +1814,7 @@ export async function resolveLocalPermissionCommand(
 }
 
 export async function injectLocalRunInstruction(
+  commandID: string,
   runID: string,
   content: string,
   config: RuntimeClientConfig,
@@ -1752,7 +1823,7 @@ export async function injectLocalRunInstruction(
   const response = await fetcher(`${normalizeBaseURL(config.baseURL)}/v1/runs/${encodeURIComponent(runID)}/inject`, {
     method: 'POST',
     headers: localHeaders(config, true),
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({ command_id: commandID, content }),
   })
   return decodeLocalResponse<InjectRunInstructionResponse>(response)
 }
@@ -1901,6 +1972,31 @@ export async function revokeLocalWorkspace(
     headers: localHeaders(config, false),
   })
   return decodeLocalResponse<LocalWorkspaceAuthorization>(response)
+}
+
+export async function listLocalRunEvents(
+  runID: string,
+  afterSeq: number,
+  config: RuntimeClientConfig,
+  fetcher: Fetcher = fetch,
+): Promise<LocalThreadEvent[]> {
+  const events: LocalThreadEvent[] = []
+  let after = Number.isSafeInteger(afterSeq) ? Math.max(0, afterSeq) : 0
+  for (let pageNumber = 0; pageNumber < 10_000; pageNumber += 1) {
+    const params = new URLSearchParams({ after: String(after), limit: '1000' })
+    const response = await fetcher(
+      `${normalizeBaseURL(config.baseURL)}/v1/runs/${encodeURIComponent(runID)}/events?${params.toString()}`,
+      { method: 'GET', headers: localHeaders(config, false) },
+    )
+    const page = await decodeLocalResponse<Schemas['ListRunEventsResponse']>(response)
+    events.push(...page.events)
+    if (!page.has_more) return events
+    if (!Number.isSafeInteger(page.next_after) || page.next_after <= after) {
+      throw new Error('Runtime returned an invalid run event cursor')
+    }
+    after = page.next_after
+  }
+  throw new Error('Runtime run event pagination limit exceeded')
 }
 
 export async function streamLocalRun(
@@ -2202,6 +2298,22 @@ export class SheJaneRuntimeClient {
 
   listRuns(): Promise<LocalRun[]> {
     return listLocalRuns(this.config, this.fetcher)
+  }
+
+  getRun(runID: string): Promise<LocalRun> {
+    return getLocalRun(runID, this.config, this.fetcher)
+  }
+
+  listChildRuns(runID: string): Promise<LocalChildRun[]> {
+    return listLocalChildRuns(runID, this.config, this.fetcher)
+  }
+
+  getCollaborationSnapshot(runID: string): Promise<LocalCollaborationSnapshot> {
+    return getLocalCollaborationSnapshot(runID, this.config, this.fetcher)
+  }
+
+  listAgentMessages(runID: string, box: 'inbox' | 'outbox' = 'inbox'): Promise<LocalAgentMessage[]> {
+    return listLocalAgentMessages(runID, box, this.config, this.fetcher)
   }
 
   listPlugins(): Promise<PluginSummary[]> {

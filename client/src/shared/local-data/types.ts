@@ -1,4 +1,9 @@
-import type { ImportModelServiceRequest, RuntimeModelSpec } from '@shejane/runtime-sdk'
+import type {
+  ImportModelServiceRequest,
+  RuntimeModelSpec,
+  SubagentInvocationStatus,
+  SubagentReceiptStatus,
+} from '@shejane/runtime-sdk'
 import type { FilePreviewKind } from '../files/filePreview'
 
 export type MessageRole = 'system' | 'user' | 'assistant'
@@ -39,6 +44,38 @@ export interface AgentPlanTodo {
   status: 'pending' | 'in_progress' | 'completed'
 }
 
+export type AgentSubagentStatus = SubagentInvocationStatus
+
+export type AgentSubagentReceiptStatus = SubagentReceiptStatus
+
+export interface AgentSubagentUsage {
+  modelCalls: number
+  inputTokens: number
+  outputTokens: number
+  unmeteredCalls: number
+  outcomeUnknownCalls: number
+}
+
+/** Disposable Client projection of one Runtime-owned `task` invocation.
+ *  `operationId` is an execution identity, not an addressable Agent or child Run. */
+export interface AgentSubagentProjection {
+  operationId: string
+  parentRunId: string
+  parentOperationId?: string
+  toolCallId: string
+  subagentType: string
+  description: string
+  status: AgentSubagentStatus
+  receiptStatus: AgentSubagentReceiptStatus
+  attemptCount: number
+  usage: AgentSubagentUsage
+  errorType?: string
+  createdAt: string
+  startedAt?: string
+  completedAt?: string
+  updatedAt: string
+}
+
 export interface AgentTimelineItem {
   type: string
   label: string
@@ -65,6 +102,12 @@ export interface AgentTimelineItem {
    *  calls are in flight (notably `task` subagent dispatches running in
    *  parallel). Populated by `timelineItem()` from `payload.tool_call_id`. */
   toolCallId?: string
+  subagentOperationId?: string
+  subagentStatus?: AgentSubagentStatus
+  subagentReceiptStatus?: AgentSubagentReceiptStatus
+  subagentType?: string
+  subagentDescription?: string
+  subagentUsage?: AgentSubagentUsage
   /** Back-compat single-string identifier (host, basename, etc.).
    *  New code should set `toolDetail` instead; the renderer prefers
    *  toolDetail when both are present. */
@@ -132,6 +175,9 @@ export interface ChatMessage {
   lastEventSeq?: number
   tokens?: number
   agentEvents?: AgentTimelineItem[]
+  /** Current subagent state rebuilt from the authoritative Run snapshot and
+   *  advanced by durable lifecycle events while the stream is connected. */
+  subagents?: AgentSubagentProjection[]
   /** Thinking-mode trace from the model (DeepSeek `reasoning_content`).
    *  Accumulated from `llm.reasoning` SSE events for backend round-trip
    *  to subsequent LLM calls (DeepSeek API requires reasoning_content

@@ -89,6 +89,7 @@ import {
   listInstalledSkills,
   listLocalPlugins,
   listLocalRuns,
+  listLocalRunEvents,
   listLocalThreads,
   listLocalThreadChanges,
   listLocalRuntimeModels,
@@ -125,6 +126,7 @@ import {
   type LocalPermissionScope,
   type PendingRunStartCommand,
   type PendingRunCancelCommand,
+  type PendingRunInjectCommand,
   type PendingQuestionAnswerCommand,
   type PendingPermissionResolveCommand,
   type PendingPlanResolveCommand,
@@ -144,12 +146,13 @@ import {
   type LocalRunDiagnostics,
   type LocalRunMetadata,
   type LocalScheduledRun,
+  type LocalThreadSnapshot,
   type LocalWorkspaceDiagnosis,
   type LocalWorkspaceAuthorization,
 } from './runtime/client'
 import { filePreviewKind } from './shared/files/filePreview'
 import { downloadFile } from './shared/files/downloadFile'
-import { projectRuntimeThread } from './features/chat/runtimeProjection'
+import { applySubagentLifecycleEvent, projectRuntimeThread } from './features/chat/runtimeProjection'
 
 const ArtifactPanel = lazy(() => import('./features/chat/components/ArtifactPanel').then((module) => ({ default: module.ArtifactPanel })))
 const DocPreviewPanel = lazy(() => import('./features/chat/components/DocPreviewPanel').then((module) => ({ default: module.DocPreviewPanel })))
@@ -853,8 +856,15 @@ function useAppContentViewModel() {
       4,
       (thread) => getLocalThreadSnapshot(thread.id, config),
     )
-    const projected = snapshots.map((snapshot) =>
-      projectRuntimeThread(snapshot, existing.get(snapshot.thread.id), t),
+    const projected = await mapWithConcurrency(
+      snapshots,
+      4,
+      (snapshot) => projectRuntimeThreadCache(
+        snapshot,
+        existing.get(snapshot.thread.id),
+        config,
+        t,
+      ),
     )
     const saved = await Promise.all(
       projected.map((conversation) => localData.saveRuntimeProjection(conversation)),
@@ -881,7 +891,8 @@ function useAppContentViewModel() {
       command.type === 'permission.resolve' ||
       command.type === 'plan.resolve' ||
       command.type === 'tool.reconcile' ||
-      command.type === 'run.cancel'
+      command.type === 'run.cancel' ||
+      command.type === 'run.inject'
     ) {
       await localData.deletePendingRuntimeCommand(command.commandId)
       const projected = await syncRuntimeThreadCache(config)
@@ -937,7 +948,7 @@ function useAppContentViewModel() {
       let projected: Conversation | undefined
       try {
         const snapshot = await getLocalThreadSnapshot(command.input.threadId, config)
-        projected = projectRuntimeThread(snapshot, existing, t)
+        projected = await projectRuntimeThreadCache(snapshot, existing, config, t)
       } catch {
         // A rejected command may refer to a thread that no longer exists.
       }
@@ -1166,8 +1177,15 @@ function useAppContentViewModel() {
           4,
           (threadID) => getLocalThreadSnapshot(threadID, runtimeConnection),
         )
-        const projected = snapshots.map((snapshot) =>
-          projectRuntimeThread(snapshot, existing.get(snapshot.thread.id), t),
+        const projected = await mapWithConcurrency(
+          snapshots,
+          4,
+          (snapshot) => projectRuntimeThreadCache(
+            snapshot,
+            existing.get(snapshot.thread.id),
+            runtimeConnection,
+            t,
+          ),
         )
         const saved = await Promise.all(
           projected.map((conversation) => localData.saveRuntimeProjection(conversation)),
@@ -1969,7 +1987,10 @@ function useAppContentViewModel() {
       if (keepConversation && await localData.get(conversation.id)) {
         try {
           const snapshot = await getLocalThreadSnapshot(conversation.id, runRuntimeConnection)
-          Object.assign(conversation, projectRuntimeThread(snapshot, conversation, t))
+          Object.assign(
+            conversation,
+            await projectRuntimeThreadCache(snapshot, conversation, runRuntimeConnection, t),
+          )
         } catch {
           conversation.updatedAt = new Date().toISOString()
         }
@@ -2074,9 +2095,29 @@ function useAppContentViewModel() {
     setNotice('')
     setDraft('')
     try {
-      await injectLocalRunInstruction(activeMessage.runId, content, runtimeConnection)
+      const existing = (await localData.listPendingRuntimeCommands()).find(
+        (command): command is PendingRunInjectCommand =>
+          command.type === 'run.inject' &&
+          command.input.runId === activeMessage.runId &&
+          command.input.content === content,
+      )
+      const command = existing ?? {
+        type: 'run.inject' as const,
+        commandId: createLocalID('inject'),
+        createdAt: new Date().toISOString(),
+        input: { runId: activeMessage.runId, threadId: activeConversation.id, content },
+      }
+      if (!existing) await localData.savePendingRuntimeCommand(command)
+      const result = await injectLocalRunInstruction(
+        command.commandId,
+        command.input.runId,
+        command.input.content,
+        runtimeConnection,
+      )
+      await settleDeliveredLocalRunCommand(command, result, runtimeConnection)
       toast.success(t('app.notice.steeringQueued'), { id: 'steering-queued', duration: 2200 })
     } catch (error) {
+      setPendingCommandDeliveryVersion((version) => version + 1)
       setDraft((current) => current || content)
       setNotice(error instanceof Error ? error.message : t('app.notice.steeringFailed'))
     }
@@ -3866,6 +3907,12 @@ function appendLocalRunEvent(
       }
     }
   }
+  if (!alreadySeen) {
+    const subagents = applySubagentLifecycleEvent(message.subagents, event)
+    if (subagents.length) {
+      message.subagents = subagents
+    }
+  }
   const item = timelineItem(event, t)
   if (item) {
     if (!alreadySeen) {
@@ -3952,6 +3999,37 @@ function recordLocalEventCursor(message: ChatMessage, event: AgentRunEvent) {
   if (Number.isSafeInteger(event.seq) && Number(event.seq) >= 0) {
     message.lastEventSeq = Math.max(message.lastEventSeq ?? 0, Number(event.seq))
   }
+}
+
+async function projectRuntimeThreadCache(
+  snapshot: LocalThreadSnapshot,
+  existing: Conversation | undefined,
+  config: RuntimeConnection,
+  t: Translator,
+): Promise<Conversation> {
+  const conversation = projectRuntimeThread(snapshot, existing, t)
+  if (!snapshot.events_truncated) return conversation
+
+  for (const message of conversation.messages) {
+    if (
+      message.role !== 'assistant'
+      || !message.runId
+      || (message.status !== 'waiting_permission' && message.status !== 'waiting_input')
+    ) {
+      continue
+    }
+    const events = await listLocalRunEvents(message.runId, message.lastEventSeq ?? 0, config)
+    const seenEventIDs = new Set(
+      (message.agentEvents ?? []).flatMap((event) => event.eventId ? [event.eventId] : []),
+    )
+    const toolArgsByCallId: ToolArgsByCallId = new Map()
+    for (const event of events) {
+      recordLocalEventCursor(message, event)
+      appendLocalRunEvent(message, event, seenEventIDs, toolArgsByCallId, t)
+    }
+    finalizeLocalRunStatus(message)
+  }
+  return conversation
 }
 
 async function streamLocalMessage(

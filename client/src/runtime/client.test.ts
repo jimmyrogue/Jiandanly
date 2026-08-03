@@ -1323,6 +1323,7 @@ describe('Client Runtime adapter', () => {
 
     await expect(
       injectLocalRunInstruction(
+        'inject-active-1',
         'run-active',
         'Focus on the failing tests before editing.',
         { baseURL: 'http://127.0.0.1:17371', token: 'local-token' },
@@ -1335,7 +1336,10 @@ describe('Client Runtime adapter', () => {
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({ Authorization: 'Bearer local-token' }),
-        body: JSON.stringify({ content: 'Focus on the failing tests before editing.' }),
+        body: JSON.stringify({
+          command_id: 'inject-active-1',
+          content: 'Focus on the failing tests before editing.',
+        }),
       }),
     )
   })

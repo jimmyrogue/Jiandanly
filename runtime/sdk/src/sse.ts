@@ -7,6 +7,108 @@ export interface AgentRunEvent {
   created_at?: string
 }
 
+export const SUBAGENT_LIFECYCLE_EVENT_TYPES = [
+  'subagent.spawned',
+  'subagent.started',
+  'subagent.waiting',
+  'subagent.completed',
+  'subagent.failed',
+  'subagent.canceled',
+  'subagent.outcome_unknown',
+  'child.spawned',
+  'child.started',
+  'child.waiting',
+  'child.completed',
+  'child.failed',
+  'child.canceled',
+  'child.cleanup_required',
+] as const
+
+export type SubagentLifecycleEventType = typeof SUBAGENT_LIFECYCLE_EVENT_TYPES[number]
+export type SubagentInvocationStatus =
+  | 'queued'
+  | 'running'
+  | 'waiting'
+  | 'completed'
+  | 'failed'
+  | 'canceled'
+  | 'unknown'
+export type SubagentReceiptStatus =
+  | 'prepared'
+  | 'running'
+  | 'paused'
+  | 'completed'
+  | 'failed'
+  | 'outcome_unknown'
+  | 'rejected'
+  | 'canceled'
+
+export interface SubagentUsage {
+  model_calls: number
+  input_tokens: number
+  output_tokens: number
+  unmetered_calls: number
+  outcome_unknown_calls: number
+}
+
+export interface SubagentLifecyclePayload extends Record<string, unknown> {
+  operation_id: string
+  parent_run_id: string
+  parent_operation_id: string | null
+  tool_call_id: string
+  subagent_type: string
+  description: string
+  status: SubagentInvocationStatus
+  receipt_status: SubagentReceiptStatus
+  attempt_count: number
+  usage: SubagentUsage
+  error_type: string | null
+  created_at: string
+  started_at: string | null
+  completed_at: string | null
+  updated_at: string
+}
+
+export interface SubagentLifecycleEvent extends AgentRunEvent {
+  event_type: SubagentLifecycleEventType
+  payload: SubagentLifecyclePayload
+}
+
+export function isSubagentLifecycleEvent(
+  event: AgentRunEvent,
+): event is SubagentLifecycleEvent {
+  if (!(SUBAGENT_LIFECYCLE_EVENT_TYPES as readonly string[]).includes(event.event_type)) {
+    return false
+  }
+  const payload = event.payload
+  if (!payload) return false
+  const usage = payload.usage
+  return typeof payload.operation_id === 'string'
+    && Boolean(payload.operation_id)
+    && typeof payload.parent_run_id === 'string'
+    && Boolean(payload.parent_run_id)
+    && (payload.parent_operation_id === null || typeof payload.parent_operation_id === 'string')
+    && typeof payload.tool_call_id === 'string'
+    && typeof payload.subagent_type === 'string'
+    && typeof payload.description === 'string'
+    && isSubagentInvocationStatus(payload.status)
+    && isSubagentReceiptStatus(payload.receipt_status)
+    && nonNegativeInteger(payload.attempt_count)
+    && typeof usage === 'object'
+    && usage !== null
+    && !Array.isArray(usage)
+    && nonNegativeInteger((usage as Record<string, unknown>).model_calls)
+    && nonNegativeInteger((usage as Record<string, unknown>).input_tokens)
+    && nonNegativeInteger((usage as Record<string, unknown>).output_tokens)
+    && nonNegativeInteger((usage as Record<string, unknown>).unmetered_calls)
+    && nonNegativeInteger((usage as Record<string, unknown>).outcome_unknown_calls)
+    && typeof payload.created_at === 'string'
+    && (payload.started_at === null || typeof payload.started_at === 'string')
+    && (payload.completed_at === null || typeof payload.completed_at === 'string')
+    && typeof payload.updated_at === 'string'
+    && (payload.error_type === null || typeof payload.error_type === 'string')
+}
+
 export type AgentSSEEvent =
   | { type: 'agent'; event: AgentRunEvent }
   | { type: 'done' }
@@ -113,4 +215,29 @@ function stringPayload(event: AgentRunEvent, key: string): string {
 function numberPayload(event: AgentRunEvent, key: string): number {
   const value = event.payload?.[key]
   return typeof value === 'number' ? value : 0
+}
+
+function nonNegativeInteger(value: unknown): boolean {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0
+}
+
+function isSubagentInvocationStatus(value: unknown): value is SubagentInvocationStatus {
+  return value === 'queued'
+    || value === 'running'
+    || value === 'waiting'
+    || value === 'completed'
+    || value === 'failed'
+    || value === 'canceled'
+    || value === 'unknown'
+}
+
+function isSubagentReceiptStatus(value: unknown): value is SubagentReceiptStatus {
+  return value === 'prepared'
+    || value === 'running'
+    || value === 'paused'
+    || value === 'completed'
+    || value === 'failed'
+    || value === 'outcome_unknown'
+    || value === 'rejected'
+    || value === 'canceled'
 }

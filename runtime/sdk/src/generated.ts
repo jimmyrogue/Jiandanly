@@ -632,6 +632,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/runs/{run_id}/children": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Child Runs */
+        get: operations["list_child_runs_v1_runs__run_id__children_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/runs/{run_id}/collaboration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Collaboration Snapshot */
+        get: operations["get_collaboration_snapshot_v1_runs__run_id__collaboration_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/runs/{run_id}/diagnostics": {
         parameters: {
             query?: never;
@@ -651,6 +685,23 @@ export interface paths {
          *     undefined) and the "latest checkpoint" tab was always missing.
          */
         get: operations["run_diagnostics_v1_runs__run_id__diagnostics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/runs/{run_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Run Events */
+        get: operations["list_run_events_v1_runs__run_id__events_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -725,6 +776,23 @@ export interface paths {
          * @description Return a deck outline from the immutable Runtime-owned input.
          */
         get: operations["get_run_input_pptx_outline_v1_runs__run_id__inputs__input_id__pptx_outline_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/runs/{run_id}/mailbox": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Agent Messages */
+        get: operations["list_agent_messages_v1_runs__run_id__mailbox_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1776,11 +1844,15 @@ export interface components {
         };
         /** InjectRunInstructionRequest */
         InjectRunInstructionRequest: {
+            /** Command Id */
+            command_id: string;
             /** Content */
             content: string;
         };
         /** InjectRunInstructionResponse */
         InjectRunInstructionResponse: {
+            /** Command Id */
+            command_id: string;
             /** Instruction Id */
             instruction_id: string;
             /**
@@ -1813,6 +1885,16 @@ export interface components {
             /** Step */
             step: number;
         };
+        /** ListAgentMessagesResponse */
+        ListAgentMessagesResponse: {
+            /** Messages */
+            messages: components["schemas"]["LocalAgentMessage"][];
+        };
+        /** ListChildRunsResponse */
+        ListChildRunsResponse: {
+            /** Children */
+            children: components["schemas"]["LocalChildRun"][];
+        };
         /** ListModelCapabilityBindingsResponse */
         ListModelCapabilityBindingsResponse: {
             /** Bindings */
@@ -1827,6 +1909,18 @@ export interface components {
         ListPluginsResponse: {
             /** Plugins */
             plugins: components["schemas"]["PluginSummary"][];
+        };
+        /** ListRunEventsResponse */
+        ListRunEventsResponse: {
+            /** Events */
+            events: components["schemas"]["LocalThreadEvent"][];
+            /**
+             * Has More
+             * @default false
+             */
+            has_more: boolean;
+            /** Next After */
+            next_after: number;
         };
         /** ListRunsResponse */
         ListRunsResponse: {
@@ -1867,6 +1961,58 @@ export interface components {
             workspaces: components["schemas"]["LocalWorkspaceAuthorization"][];
         };
         /**
+         * LocalAgentMessage
+         * @description Durable typed envelope exchanged inside one collaboration root.
+         */
+        LocalAgentMessage: {
+            /** Acknowledged At */
+            acknowledged_at?: string | null;
+            /** Artifact Refs */
+            artifact_refs: string[];
+            /** Correlation Id */
+            correlation_id: string;
+            /** Created At */
+            created_at: string;
+            /** Data */
+            data: {
+                [key: string]: unknown;
+            };
+            /** Deadline At */
+            deadline_at: string;
+            /** Delivered At */
+            delivered_at?: string | null;
+            /** Hop Count */
+            hop_count: number;
+            /** Id */
+            id: string;
+            /** In Reply To */
+            in_reply_to?: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "request" | "question" | "update" | "result" | "cancel";
+            /** Recipient Run Id */
+            recipient_run_id: string;
+            /** Root Run Id */
+            root_run_id: string;
+            /** Sender Operation Id */
+            sender_operation_id: string;
+            /** Sender Run Id */
+            sender_run_id: string;
+            /** Sequence */
+            sequence: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "delivered" | "acknowledged" | "expired";
+            /** Text */
+            text: string;
+            /** Ttl Seconds */
+            ttl_seconds: number;
+        };
+        /**
          * LocalArtifact
          * @description Authorized Artifact metadata; blob bodies use the separate content route.
          */
@@ -1894,6 +2040,303 @@ export interface components {
             tool_name?: string | null;
         };
         /**
+         * LocalChildRun
+         * @description Addressable Runtime-owned child with its own job and checkpoint.
+         */
+        LocalChildRun: {
+            /** Agent Definition Id */
+            agent_definition_id: string;
+            /** Agent Definition Version */
+            agent_definition_version: string;
+            /** Collaboration Depth */
+            collaboration_depth: number;
+            /** Collaboration Policy */
+            collaboration_policy: {
+                [key: string]: unknown;
+            };
+            /** Completed At */
+            completed_at?: string | null;
+            /**
+             * Completion Mode
+             * @default required
+             * @enum {string}
+             */
+            completion_mode: "required" | "best_effort" | "quorum";
+            /** Created At */
+            created_at: string;
+            /** Depends On */
+            depends_on?: string[];
+            /** Error */
+            error?: string | null;
+            /** Error Type */
+            error_type?: string | null;
+            /**
+             * Events Count
+             * @default 0
+             */
+            events_count: number;
+            /** Goal */
+            goal: string;
+            /** Graph Checkpoint Id */
+            graph_checkpoint_id?: string | null;
+            /** Graph Thread Id */
+            graph_thread_id: string;
+            /** Id */
+            id: string;
+            /**
+             * Input Tokens
+             * @default 0
+             */
+            input_tokens: number;
+            /**
+             * Model Calls
+             * @default 0
+             */
+            model_calls: number;
+            /**
+             * Output Tokens
+             * @default 0
+             */
+            output_tokens: number;
+            /** Parent Run Id */
+            parent_run_id: string;
+            /** Quorum Group */
+            quorum_group?: string | null;
+            /** Quorum Required */
+            quorum_required?: number | null;
+            /** Resource Claims */
+            resource_claims?: string[];
+            /** Result */
+            result?: string | null;
+            /** Retryable */
+            retryable?: boolean | null;
+            /** Root Run Id */
+            root_run_id: string;
+            /**
+             * Run Kind
+             * @default child
+             * @constant
+             */
+            run_kind: "child";
+            /** Spawn Operation Id */
+            spawn_operation_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "waiting_permission" | "waiting_input" | "cleanup_required" | "completed" | "canceled" | "failed";
+            /** Updated At */
+            updated_at: string;
+        };
+        /** LocalCollaborationArtifact */
+        LocalCollaborationArtifact: {
+            /** Bytes */
+            bytes: number;
+            /** Content Type */
+            content_type: string;
+            /** Created At */
+            created_at: string;
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Run Id */
+            run_id: string;
+            /** Sha256 */
+            sha256?: string | null;
+            /**
+             * Storage Kind
+             * @enum {string}
+             */
+            storage_kind: "inline_text" | "blob";
+            /** Title */
+            title: string;
+            /** Tool Name */
+            tool_name?: string | null;
+        };
+        /** LocalCollaborationCompletionSummary */
+        LocalCollaborationCompletionSummary: {
+            /** Best Effort Active */
+            best_effort_active: number;
+            /** Cancel */
+            cancel: string[];
+            /** Impossible */
+            impossible: boolean;
+            /** Quorum Groups */
+            quorum_groups: components["schemas"]["LocalCollaborationQuorumSummary"][];
+            required: components["schemas"]["LocalCollaborationRequiredSummary"];
+            /** Satisfied */
+            satisfied: boolean;
+            /** Wait For */
+            wait_for: string[];
+        };
+        /** LocalCollaborationDependency */
+        LocalCollaborationDependency: {
+            /** Child Run Id */
+            child_run_id: string;
+            /** Dependency Run Id */
+            dependency_run_id: string;
+        };
+        /** LocalCollaborationQuorumSummary */
+        LocalCollaborationQuorumSummary: {
+            /** Active */
+            active: number;
+            /** Completed */
+            completed: number;
+            /** Failed */
+            failed: number;
+            /** Group */
+            group: string;
+            /** Impossible */
+            impossible: boolean;
+            /** Required */
+            required: number;
+            /** Satisfied */
+            satisfied: boolean;
+        };
+        /** LocalCollaborationRequiredSummary */
+        LocalCollaborationRequiredSummary: {
+            /** Active */
+            active: number;
+            /** Completed */
+            completed: number;
+            /** Failed */
+            failed: string[];
+            /** Total */
+            total: number;
+        };
+        /** LocalCollaborationResourceOwner */
+        LocalCollaborationResourceOwner: {
+            /** Created At */
+            created_at: string;
+            /** Owner Run Id */
+            owner_run_id: string;
+            /** Resource Key */
+            resource_key: string;
+        };
+        /** LocalCollaborationRoot */
+        LocalCollaborationRoot: {
+            /** Agent Definition Id */
+            agent_definition_id: string;
+            /** Agent Definition Version */
+            agent_definition_version: string;
+            /** Completed At */
+            completed_at?: string | null;
+            /** Created At */
+            created_at: string;
+            /** Error */
+            error?: string | null;
+            /** Error Type */
+            error_type?: string | null;
+            /** Goal */
+            goal: string;
+            /** Graph Checkpoint Id */
+            graph_checkpoint_id?: string | null;
+            /** Graph Thread Id */
+            graph_thread_id: string;
+            /** Id */
+            id: string;
+            /**
+             * Input Tokens
+             * @default 0
+             */
+            input_tokens: number;
+            /**
+             * Model Calls
+             * @default 0
+             */
+            model_calls: number;
+            /**
+             * Output Tokens
+             * @default 0
+             */
+            output_tokens: number;
+            /** Parent Run Id */
+            parent_run_id?: string | null;
+            /** Result */
+            result?: string | null;
+            /** Retryable */
+            retryable?: boolean | null;
+            /** Root Run Id */
+            root_run_id: string;
+            /**
+             * Run Kind
+             * @enum {string}
+             */
+            run_kind: "turn" | "fork";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "waiting_permission" | "waiting_input" | "cleanup_required" | "completed" | "canceled" | "failed";
+            /** Updated At */
+            updated_at: string;
+        };
+        /** LocalCollaborationSnapshot */
+        LocalCollaborationSnapshot: {
+            /** Artifacts */
+            artifacts: components["schemas"]["LocalCollaborationArtifact"][];
+            /** Captured At */
+            captured_at: string;
+            /** Children */
+            children: components["schemas"]["LocalChildRun"][];
+            completion: components["schemas"]["LocalCollaborationCompletionSummary"];
+            /** Dependencies */
+            dependencies: components["schemas"]["LocalCollaborationDependency"][];
+            /** Event High Watermarks */
+            event_high_watermarks: {
+                [key: string]: number;
+            };
+            /** Messages */
+            messages: components["schemas"]["LocalAgentMessage"][];
+            /** Pending Waits */
+            pending_waits: components["schemas"]["LocalCollaborationWait"][];
+            /** Resource Owners */
+            resource_owners: components["schemas"]["LocalCollaborationResourceOwner"][];
+            root: components["schemas"]["LocalCollaborationRoot"];
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: 1;
+        };
+        /** LocalCollaborationWait */
+        LocalCollaborationWait: {
+            /** Created At */
+            created_at: string;
+            /** Decision */
+            decision?: {
+                [key: string]: unknown;
+            } | null;
+            /** Id */
+            id: string;
+            /** Interrupt Id */
+            interrupt_id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "tool_review" | "question" | "plan" | "tool_reconciliation";
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+            /** Position */
+            position: number;
+            /** Resolved At */
+            resolved_at?: string | null;
+            /** Run Id */
+            run_id: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "pending";
+            /** Wait Cycle Id */
+            wait_cycle_id: string;
+        };
+        /**
          * LocalRun
          * @description One row of the `local_runs` table, surfaced over HTTP.
          *
@@ -1902,12 +2345,34 @@ export interface components {
          *     as strings here (not dict) to keep the wire format honest.
          */
         LocalRun: {
+            /**
+             * Agent Definition Id
+             * @default shejane.default
+             */
+            agent_definition_id: string;
+            /**
+             * Agent Definition Version
+             * @default 1
+             */
+            agent_definition_version: string;
             /** Assistant Item Id */
             assistant_item_id?: string | null;
             /** Canceled At */
             canceled_at?: string | null;
+            /** Child Runs */
+            child_runs?: components["schemas"]["LocalChildRun"][];
             /** Client Message Id */
             client_message_id?: string | null;
+            /**
+             * Collaboration Depth
+             * @default 0
+             */
+            collaboration_depth: number;
+            /**
+             * Collaboration Policy Json
+             * @default {}
+             */
+            collaboration_policy_json: string;
             /** Command Id */
             command_id?: string | null;
             /** Completed At */
@@ -1938,16 +2403,28 @@ export interface components {
             metadata_json: string;
             /** Parent Run Id */
             parent_run_id?: string | null;
+            /** Root Run Id */
+            root_run_id: string;
+            /**
+             * Run Kind
+             * @default turn
+             * @enum {string}
+             */
+            run_kind: "turn" | "fork" | "child";
             /**
              * Settings Json
              * @default {}
              */
             settings_json: string;
+            /** Spawn Operation Id */
+            spawn_operation_id?: string | null;
             /**
              * Status
              * @enum {string}
              */
             status: "queued" | "running" | "waiting_permission" | "waiting_input" | "cleanup_required" | "completed" | "canceled" | "failed";
+            /** Subagent Invocations */
+            subagent_invocations?: components["schemas"]["LocalSubagentInvocation"][];
             /** Thread Id */
             thread_id?: string | null;
             /** Updated At */
@@ -2092,6 +2569,78 @@ export interface components {
             /** Workspace Path */
             workspace_path?: string | null;
         };
+        /**
+         * LocalSubagentInvocation
+         * @description Current projection of one synchronous ``task`` tool invocation.
+         *
+         *     This is not an independently addressable child Run. ``operation_id`` is
+         *     the durable tool-operation identity owned by Runtime.
+         */
+        LocalSubagentInvocation: {
+            /** Attempt Count */
+            attempt_count: number;
+            /** Completed At */
+            completed_at: string | null;
+            /** Created At */
+            created_at: string;
+            /** Description */
+            description: string;
+            /** Error Type */
+            error_type: string | null;
+            /** Operation Id */
+            operation_id: string;
+            /** Parent Operation Id */
+            parent_operation_id: string | null;
+            /** Parent Run Id */
+            parent_run_id: string;
+            /**
+             * Receipt Status
+             * @enum {string}
+             */
+            receipt_status: "prepared" | "running" | "paused" | "completed" | "failed" | "outcome_unknown" | "rejected" | "canceled";
+            /** Started At */
+            started_at: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "waiting" | "completed" | "failed" | "canceled" | "unknown";
+            /** Subagent Type */
+            subagent_type: string;
+            /** Tool Call Id */
+            tool_call_id: string;
+            /** Updated At */
+            updated_at: string;
+            usage: components["schemas"]["LocalSubagentUsage"];
+        };
+        /** LocalSubagentUsage */
+        LocalSubagentUsage: {
+            /**
+             * Input Tokens
+             * @default 0
+             */
+            input_tokens: number;
+            /**
+             * Model Calls
+             * @default 0
+             */
+            model_calls: number;
+            /**
+             * Outcome Unknown Calls
+             * @default 0
+             */
+            outcome_unknown_calls: number;
+            /**
+             * Output Tokens
+             * @default 0
+             */
+            output_tokens: number;
+            /**
+             * Unmetered Calls
+             * @default 0
+             */
+            unmetered_calls: number;
+        };
         /** LocalThread */
         LocalThread: {
             /** Archived At */
@@ -2180,7 +2729,10 @@ export interface components {
         LocalThreadSnapshot: {
             /** Cursor */
             cursor: number;
-            /** Event High Watermarks */
+            /**
+             * Event High Watermarks
+             * @description Highest event sequence included in this snapshot per Run; 0 means replay all.
+             */
             event_high_watermarks?: {
                 [key: string]: number;
             };
@@ -4746,6 +5298,68 @@ export interface operations {
             };
         };
     };
+    list_child_runs_v1_runs__run_id__children_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListChildRunsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_collaboration_snapshot_v1_runs__run_id__collaboration_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LocalCollaborationSnapshot"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     run_diagnostics_v1_runs__run_id__diagnostics_get: {
         parameters: {
             query?: never;
@@ -4764,6 +5378,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LocalRunDiagnostics"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_run_events_v1_runs__run_id__events_get: {
+        parameters: {
+            query?: {
+                after?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListRunEventsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4898,6 +5546,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PptxOutlineResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_agent_messages_v1_runs__run_id__mailbox_get: {
+        parameters: {
+            query?: {
+                box?: "inbox" | "outbox";
+            };
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListAgentMessagesResponse"];
                 };
             };
             /** @description Validation Error */

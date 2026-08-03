@@ -1,6 +1,18 @@
-import type { AgentRunEvent } from '@shejane/runtime-sdk'
+import {
+  isSubagentLifecycleEvent,
+  SUBAGENT_LIFECYCLE_EVENT_TYPES,
+  type AgentRunEvent,
+  type SubagentLifecycleEventType,
+  type SubagentLifecyclePayload,
+} from '@shejane/runtime-sdk'
 import { createTranslator, type TranslationKey, type Translator } from '../../shared/i18n/i18n'
-import type { AgentQuestionItem, AgentPlanTodo, AgentTimelineItem, AgentToolDetail } from '../../shared/local-data/types'
+import type {
+  AgentQuestionItem,
+  AgentPlanTodo,
+  AgentSubagentStatus,
+  AgentTimelineItem,
+  AgentToolDetail,
+} from '../../shared/local-data/types'
 
 export function projectTransientAssistantText(current: string, event: AgentRunEvent): string {
   if (event.event_type === 'llm.delta') {
@@ -23,6 +35,15 @@ export function timelineItem(event: AgentRunEvent, t: Translator = createTransla
   const payload = event.payload ?? {}
   const eventId = event.id
     ?? (event.run_id && event.seq !== undefined ? `${event.run_id}:${event.seq}` : undefined)
+  if (isSubagentLifecycleEvent(event)) {
+    return subagentTimelineItem(event.event_type, event.payload, eventId, t)
+  }
+  // Older Runtime builds emitted incomplete inferred lifecycle payloads. The
+  // state reducer correlates those with generic `task` events; do not surface
+  // a raw protocol name in the user-facing timeline.
+  if ((SUBAGENT_LIFECYCLE_EVENT_TYPES as readonly string[]).includes(event.event_type)) {
+    return null
+  }
   switch (event.event_type) {
     case 'llm.usage': {
       const input = Number(payload.input_tokens) || 0
@@ -330,6 +351,53 @@ export function timelineItem(event: AgentRunEvent, t: Translator = createTransla
       return { type: event.event_type, label: t('chat.timeline.runCanceled'), eventId }
     default:
       return { type: event.event_type, label: event.event_type, eventId }
+  }
+}
+
+function subagentTimelineItem(
+  eventType: SubagentLifecycleEventType,
+  payload: SubagentLifecyclePayload,
+  eventId: string | undefined,
+  t: Translator,
+): AgentTimelineItem {
+  const status: AgentSubagentStatus = payload.receipt_status === 'outcome_unknown'
+    ? 'unknown'
+    : payload.status
+  const subagentType = payload.subagent_type || t('agent.subagent.defaultType')
+  const description = payload.description
+  return {
+    type: eventType,
+    label: t(subagentTimelineLabelKey(status), { type: subagentType }),
+    eventId,
+    tool: 'task',
+    toolCallId: payload.tool_call_id,
+    subagentOperationId: payload.operation_id,
+    subagentStatus: status,
+    subagentReceiptStatus: payload.receipt_status,
+    subagentType,
+    subagentDescription: description,
+    subagentUsage: {
+      modelCalls: payload.usage.model_calls,
+      inputTokens: payload.usage.input_tokens,
+      outputTokens: payload.usage.output_tokens,
+      unmeteredCalls: payload.usage.unmetered_calls,
+      outcomeUnknownCalls: payload.usage.outcome_unknown_calls,
+    },
+    toolDetail: description
+      ? { kind: 'text', text: truncate(description, TOOL_TARGET_MAX), tooltip: description }
+      : undefined,
+  }
+}
+
+function subagentTimelineLabelKey(status: AgentSubagentStatus): TranslationKey {
+  if (status === 'unknown') return 'chat.timeline.subagentOutcomeUnknown'
+  switch (status) {
+    case 'queued': return 'chat.timeline.subagentSpawned'
+    case 'running': return 'chat.timeline.subagentStarted'
+    case 'waiting': return 'chat.timeline.subagentWaiting'
+    case 'completed': return 'chat.timeline.subagentCompleted'
+    case 'failed': return 'chat.timeline.subagentFailed'
+    case 'canceled': return 'chat.timeline.subagentCanceled'
   }
 }
 

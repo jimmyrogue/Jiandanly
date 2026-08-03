@@ -2,6 +2,73 @@ import { describe, expect, it } from 'vitest'
 import { projectTransientAssistantText, timelineItem, toolDetail } from './chatStore'
 
 describe('runtime timeline', () => {
+  it('renders durable subagent lifecycle events and keeps an unknown outcome distinct from failure', () => {
+    const base = {
+      operation_id: 'toolop-1',
+      parent_run_id: 'run-1',
+      parent_operation_id: null,
+      tool_call_id: 'call-1',
+      subagent_type: 'researcher',
+      description: 'Collect official sources',
+      attempt_count: 1,
+      usage: {
+        model_calls: 2,
+        input_tokens: 100,
+        output_tokens: 20,
+        unmetered_calls: 1,
+        outcome_unknown_calls: 0,
+      },
+      error_type: null,
+      created_at: '2026-08-02T00:00:00Z',
+      started_at: '2026-08-02T00:00:01Z',
+      completed_at: null,
+      updated_at: '2026-08-02T00:00:01Z',
+    }
+    expect(timelineItem({
+      event_type: 'subagent.started',
+      payload: {
+        ...base,
+        status: 'running',
+        receipt_status: 'running',
+      },
+    })).toMatchObject({
+      label: '子代理已开始：researcher',
+      tool: 'task',
+      toolCallId: 'call-1',
+      subagentOperationId: 'toolop-1',
+      subagentStatus: 'running',
+      subagentDescription: 'Collect official sources',
+      subagentUsage: {
+        modelCalls: 2,
+        inputTokens: 100,
+        outputTokens: 20,
+        unmeteredCalls: 1,
+        outcomeUnknownCalls: 0,
+      },
+    })
+
+    expect(timelineItem({
+      event_type: 'subagent.failed',
+      payload: {
+        ...base,
+        status: 'unknown',
+        receipt_status: 'outcome_unknown',
+        error_type: 'execution_lease_expired',
+        completed_at: '2026-08-02T00:00:02Z',
+        updated_at: '2026-08-02T00:00:02Z',
+      },
+    })).toMatchObject({
+      label: '子代理结果待确认：researcher',
+      subagentStatus: 'unknown',
+      subagentReceiptStatus: 'outcome_unknown',
+    })
+
+    expect(timelineItem({
+      event_type: 'subagent.completed',
+      payload: { tool_call_id: 'call-old-runtime', status: 'error' },
+    })).toBeNull()
+  })
+
   it('derives a stable event identity from the Runtime sequence when id is absent', () => {
     expect(timelineItem({
       event_type: 'tool.started',

@@ -5,8 +5,11 @@ import {
   deliverPendingRuntimeCommands,
   fetchRunInput,
   getLocalArtifactContent,
+  getLocalCollaborationSnapshot,
   getCentralDiagnostics,
+  getLocalRun,
   importModelService,
+  isSubagentLifecycleEvent,
   parseAgentSSEBuffer,
   parseRuntimeModelSpec,
   RuntimeHTTPError,
@@ -14,6 +17,9 @@ import {
   getSheJaneAuthorization,
   listModelServicePresets,
   listModelCapabilityBindings,
+  listLocalRunEvents,
+  listLocalChildRuns,
+  listLocalAgentMessages,
   reconnectModelService,
   startSheJaneAuthorization,
   streamLocalRun,
@@ -21,6 +27,147 @@ import {
   updateCentralDiagnostics,
   verifyModelServiceModel,
 } from './index'
+
+describe('durable child runs', () => {
+  const child = {
+    id: 'run_child',
+    parent_run_id: 'run_parent',
+    root_run_id: 'run_parent',
+    run_kind: 'child',
+    goal: 'Research',
+    status: 'running',
+    agent_definition_id: 'subagent:researcher',
+    agent_definition_version: 'sha256:abc',
+    collaboration_depth: 1,
+    collaboration_policy: { max_depth: 1, max_children: 8 },
+    spawn_operation_id: 'toolop_spawn',
+    graph_thread_id: 'thread_child',
+    input_tokens: 0,
+    output_tokens: 0,
+    model_calls: 0,
+    events_count: 1,
+    created_at: '2026-08-02T00:00:00Z',
+    updated_at: '2026-08-02T00:00:01Z',
+  }
+
+  it('gets an addressable Run and lists its direct children', async () => {
+    const parent = {
+      id: 'run_parent',
+      run_kind: 'turn',
+      root_run_id: 'run_parent',
+      agent_definition_id: 'shejane.default',
+      agent_definition_version: '1',
+      collaboration_depth: 0,
+      collaboration_policy_json: '{}',
+      goal: 'Coordinate',
+      status: 'running',
+      created_at: '2026-08-02T00:00:00Z',
+      updated_at: '2026-08-02T00:00:01Z',
+      inputs: [],
+      child_runs: [child],
+    }
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(parent), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ children: [child] }), { status: 200 }))
+    const config = { baseURL: 'http://127.0.0.1:17371/', token: 'runtime-token' }
+
+    await expect(getLocalRun('run/parent', config, fetcher)).resolves.toEqual(parent)
+    await expect(listLocalChildRuns('run/parent', config, fetcher)).resolves.toEqual([child])
+    expect(fetcher).toHaveBeenNthCalledWith(
+      1,
+      'http://127.0.0.1:17371/v1/runs/run%2Fparent',
+      { method: 'GET', headers: { Authorization: 'Bearer runtime-token' } },
+    )
+    expect(fetcher).toHaveBeenNthCalledWith(
+      2,
+      'http://127.0.0.1:17371/v1/runs/run%2Fparent/children',
+      { method: 'GET', headers: { Authorization: 'Bearer runtime-token' } },
+    )
+  })
+
+  it('gets one cursor-safe collaboration snapshot for remote clients', async () => {
+    const snapshot = {
+      schema_version: 1,
+      captured_at: '2026-08-02T00:00:02Z',
+      root: {
+        id: 'run_parent',
+        root_run_id: 'run_parent',
+        run_kind: 'turn',
+        goal: 'Coordinate',
+        status: 'running',
+        agent_definition_id: 'shejane.default',
+        agent_definition_version: '1',
+        graph_thread_id: 'thread_parent',
+        input_tokens: 0,
+        output_tokens: 0,
+        model_calls: 0,
+        created_at: '2026-08-02T00:00:00Z',
+        updated_at: '2026-08-02T00:00:01Z',
+      },
+      children: [],
+      messages: [],
+      pending_waits: [],
+      resource_owners: [],
+      dependencies: [],
+      artifacts: [],
+      event_high_watermarks: { run_parent: 3 },
+      completion: {
+        satisfied: true,
+        impossible: false,
+        required: { total: 0, completed: 0, failed: [], active: 0 },
+        quorum_groups: [],
+        best_effort_active: 0,
+        wait_for: [],
+        cancel: [],
+      },
+    }
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(snapshot), { status: 200 }),
+    )
+    const config = { baseURL: 'http://127.0.0.1:17371/', token: 'runtime-token' }
+
+    await expect(getLocalCollaborationSnapshot('run/root', config, fetcher))
+      .resolves.toEqual(snapshot)
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://127.0.0.1:17371/v1/runs/run%2Froot/collaboration',
+      { method: 'GET', headers: { Authorization: 'Bearer runtime-token' } },
+    )
+  })
+})
+
+describe('durable Agent mailbox', () => {
+  it('lists an encoded Run mailbox projection', async () => {
+    const message = {
+      id: 'agent_message_1',
+      root_run_id: 'run_parent',
+      sender_run_id: 'run_child_a',
+      recipient_run_id: 'run_child_b',
+      sender_operation_id: 'toolop_send',
+      kind: 'question',
+      text: 'What did you find?',
+      data: {},
+      artifact_refs: [],
+      correlation_id: 'agent_message_1',
+      sequence: 1,
+      hop_count: 0,
+      status: 'delivered',
+      ttl_seconds: 3600,
+      deadline_at: '2026-08-02T01:00:00Z',
+      created_at: '2026-08-02T00:00:00Z',
+    }
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ messages: [message] }), { status: 200 }),
+    )
+    const config = { baseURL: 'http://127.0.0.1:17371/', token: 'runtime-token' }
+
+    await expect(listLocalAgentMessages('run/child', 'outbox', config, fetcher))
+      .resolves.toEqual([message])
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://127.0.0.1:17371/v1/runs/run%2Fchild/mailbox?box=outbox',
+      { method: 'GET', headers: { Authorization: 'Bearer runtime-token' } },
+    )
+  })
+})
 
 describe('fetchRunInput', () => {
   it('downloads immutable Runtime-owned input bytes with encoded identifiers', async () => {
@@ -748,6 +895,70 @@ describe('SheJaneRuntimeClient', () => {
   it('rejects JSON events that do not satisfy the Runtime envelope', () => {
     expect(() => parseAgentSSEBuffer('data: {"payload":{"content":"lost"}}\n\n'))
       .toThrow(/event_type/)
+  })
+
+  it('recognizes the durable subagent lifecycle contract without accepting legacy chunks', () => {
+    const [parsed] = parseAgentSSEBuffer(
+      'data: {"event_type":"subagent.started","run_id":"run-1","seq":2,"payload":{"operation_id":"toolop-1","parent_run_id":"run-1","parent_operation_id":null,"tool_call_id":"call-1","subagent_type":"researcher","description":"Find sources","status":"running","receipt_status":"running","attempt_count":1,"usage":{"model_calls":0,"input_tokens":0,"output_tokens":0,"unmetered_calls":0,"outcome_unknown_calls":0},"created_at":"2026-08-02T00:00:00Z","started_at":"2026-08-02T00:00:01Z","completed_at":null,"updated_at":"2026-08-02T00:00:01Z","error_type":null}}\n\n',
+    ).events
+
+    expect(parsed?.type).toBe('agent')
+    if (parsed?.type !== 'agent') throw new Error('expected agent event')
+    expect(isSubagentLifecycleEvent(parsed.event)).toBe(true)
+    expect(parsed.event.payload?.operation_id).toBe('toolop-1')
+    expect(isSubagentLifecycleEvent({
+      event_type: 'subagent.spawned',
+      payload: { id: 'legacy-stream-chunk', args_delta: '{' },
+    })).toBe(false)
+  })
+})
+
+describe('listLocalRunEvents', () => {
+  it('reads every finite replay page from the supplied cursor', async () => {
+    const first = {
+      id: 'event-1',
+      run_id: 'run/replay',
+      seq: 4,
+      event_type: 'permission.required',
+      payload: { request_id: 'permission-1' },
+      created_at: '2026-08-02T00:00:01Z',
+    }
+    const second = {
+      id: 'event-2',
+      run_id: 'run/replay',
+      seq: 5,
+      event_type: 'subagent.started',
+      payload: { operation_id: 'toolop-1' },
+      created_at: '2026-08-02T00:00:02Z',
+    }
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        events: [first],
+        has_more: true,
+        next_after: 4,
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        events: [second],
+        has_more: false,
+        next_after: 5,
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+
+    await expect(listLocalRunEvents(
+      'run/replay',
+      3,
+      { baseURL: 'http://127.0.0.1:17371/', token: 'runtime-token' },
+      fetcher,
+    )).resolves.toEqual([first, second])
+    expect(fetcher).toHaveBeenNthCalledWith(
+      1,
+      'http://127.0.0.1:17371/v1/runs/run%2Freplay/events?after=3&limit=1000',
+      { method: 'GET', headers: { Authorization: 'Bearer runtime-token' } },
+    )
+    expect(fetcher).toHaveBeenNthCalledWith(
+      2,
+      'http://127.0.0.1:17371/v1/runs/run%2Freplay/events?after=4&limit=1000',
+      { method: 'GET', headers: { Authorization: 'Bearer runtime-token' } },
+    )
   })
 })
 

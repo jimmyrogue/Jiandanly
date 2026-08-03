@@ -5,6 +5,99 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
 import { LocalConversationStore } from './shared/local-data/localConversations'
 
+function truncatedPermissionSnapshot(input: {
+  threadID: string
+  title: string
+  runID: string
+  assistantClientID: string
+  userClientID?: string
+}) {
+  const createdAt = '2026-08-02T00:00:00Z'
+  return {
+    thread: {
+      id: input.threadID,
+      title: input.title,
+      metadata: {},
+      version: 2,
+      created_at: createdAt,
+      updated_at: '2026-08-02T00:00:02Z',
+    },
+    items: [
+      ...(input.userClientID ? [{
+        id: `item-user-${input.runID}`,
+        thread_id: input.threadID,
+        run_id: input.runID,
+        client_id: input.userClientID,
+        item_type: 'user_message',
+        status: 'completed',
+        content: 'Run a command',
+        metadata: {},
+        position: 1,
+        version: 1,
+        created_at: createdAt,
+        updated_at: createdAt,
+      }] : []),
+      {
+        id: `item-assistant-${input.runID}`,
+        thread_id: input.threadID,
+        run_id: input.runID,
+        client_id: input.assistantClientID,
+        item_type: 'assistant_message',
+        status: 'in_progress',
+        content: '',
+        metadata: {},
+        position: input.userClientID ? 2 : 1,
+        version: 2,
+        created_at: createdAt,
+        updated_at: '2026-08-02T00:00:02Z',
+      },
+    ],
+    runs: [{
+      id: input.runID,
+      goal: 'Run a command',
+      status: 'waiting_permission',
+      thread_id: input.threadID,
+      assistant_item_id: `item-assistant-${input.runID}`,
+      history_json: '[]',
+      settings_json: '{}',
+      metadata_json: '{}',
+      inputs: [],
+      subagent_invocations: [],
+      created_at: createdAt,
+      updated_at: '2026-08-02T00:00:02Z',
+    }],
+    events: [{
+      id: `event-started-${input.runID}`,
+      run_id: input.runID,
+      seq: 1,
+      event_type: 'run.started',
+      payload: {},
+      created_at: createdAt,
+    }],
+    event_high_watermarks: { [input.runID]: 1 },
+    cursor: 2,
+    has_more_items: false,
+    next_before_position: null,
+    events_truncated: true,
+  }
+}
+
+function permissionReplayEvent(runID: string) {
+  return {
+    id: `event-permission-${runID}`,
+    run_id: runID,
+    seq: 2,
+    event_type: 'permission.required',
+    payload: {
+      request_id: `permission-${runID}`,
+      tool: 'execute',
+      arguments: { command: 'echo replay' },
+      allow_run_scope: true,
+    },
+    created_at: '2026-08-02T00:00:01Z',
+  }
+}
+
 describe('desktop shell', () => {
   beforeEach(() => {
     window.localStorage.clear()
@@ -89,6 +182,324 @@ describe('desktop shell', () => {
       expect(screen.getByLabelText(/Runtime 已连接/)).toBeInTheDocument()
     })
     vi.useRealTimers()
+  })
+
+  it('replays an approval event omitted by a truncated Runtime snapshot', async () => {
+    Object.defineProperty(window, 'shejaneClient', {
+      configurable: true,
+      value: {
+        platform: 'darwin',
+        runtime: { baseURL: 'http://127.0.0.1:17371', session: 'client', ready: true },
+      },
+    })
+    const snapshot = {
+      thread: {
+        id: 'conversation-replay',
+        title: 'Permission replay',
+        metadata: {},
+        version: 2,
+        created_at: '2026-08-02T00:00:00Z',
+        updated_at: '2026-08-02T00:00:02Z',
+      },
+      items: [{
+        id: 'assistant-replay',
+        thread_id: 'conversation-replay',
+        run_id: 'run-replay',
+        client_id: 'assistant-replay-client',
+        item_type: 'assistant_message',
+        status: 'in_progress',
+        content: '',
+        metadata: {},
+        position: 1,
+        version: 2,
+        created_at: '2026-08-02T00:00:00Z',
+        updated_at: '2026-08-02T00:00:02Z',
+      }],
+      runs: [{
+        id: 'run-replay',
+        goal: 'Run a command',
+        status: 'waiting_permission',
+        thread_id: 'conversation-replay',
+        assistant_item_id: 'assistant-replay',
+        history_json: '[]',
+        settings_json: '{}',
+        metadata_json: '{}',
+        inputs: [],
+        subagent_invocations: [],
+        created_at: '2026-08-02T00:00:00Z',
+        updated_at: '2026-08-02T00:00:02Z',
+      }],
+      events: [],
+      event_high_watermarks: { 'run-replay': 0 },
+      cursor: 2,
+      has_more_items: false,
+      next_before_position: null,
+      events_truncated: true,
+    }
+    const permissionEvent = {
+      id: 'event-permission-replay',
+      run_id: 'run-replay',
+      seq: 1,
+      event_type: 'permission.required',
+      payload: {
+        request_id: 'permission-replay',
+        tool: 'execute',
+        arguments: { command: 'echo replay' },
+        allow_run_scope: true,
+      },
+      created_at: '2026-08-02T00:00:01Z',
+    }
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/v1/health')) {
+        return new Response(JSON.stringify({ status: 'ok', mode: 'runtime', worker: 'user' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (url.endsWith('/v1/threads')) {
+        return new Response(JSON.stringify({
+          threads: [snapshot.thread],
+          cursor: 2,
+          has_more: false,
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith('/v1/threads/conversation-replay')) {
+        return new Response(JSON.stringify(snapshot), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (url.endsWith('/v1/runs/run-replay/events?after=0&limit=1000')) {
+        return new Response(JSON.stringify({
+          events: [permissionEvent],
+          has_more: false,
+          next_after: 1,
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({ detail: 'not needed by this test' }), {
+        status: 404,
+        headers: { 'content-type': 'application/json' },
+      })
+    }))
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        'http://127.0.0.1:17371/v1/runs/run-replay/events?after=0&limit=1000',
+        expect.objectContaining({ method: 'GET' }),
+      )
+    })
+    fireEvent.click((await screen.findAllByText('Permission replay'))[0])
+    expect(await screen.findByText('等待批准：运行命令')).toBeInTheDocument()
+  })
+
+  it('replays a truncated approval when a rejected command refreshes the cache', async () => {
+    const threadID = 'conversation-rejected-replay'
+    const runID = 'run-rejected-replay'
+    const assistantClientID = 'assistant-rejected-replay'
+    const store = new LocalConversationStore('shejane-local:runtime:local-owner')
+    await store.saveWithPendingRuntimeCommand({
+      id: threadID,
+      title: 'Rejected replay',
+      archived: false,
+      createdAt: '2026-08-02T00:00:00Z',
+      updatedAt: '2026-08-02T00:00:01Z',
+      messages: [{
+        id: assistantClientID,
+        role: 'assistant',
+        content: '',
+        createdAt: '2026-08-02T00:00:00Z',
+        status: 'waiting_permission',
+        runId: runID,
+        lastEventSeq: 9,
+      }],
+    }, {
+      type: 'permission.resolve',
+      commandId: 'cmd-rejected-replay',
+      createdAt: '2026-08-02T00:00:01Z',
+      input: {
+        permissionId: 'permission-old',
+        decision: 'approve',
+        scope: 'once',
+        runId: runID,
+        threadId: threadID,
+      },
+    })
+    Object.defineProperty(window, 'shejaneClient', {
+      configurable: true,
+      value: {
+        platform: 'darwin',
+        runtime: { baseURL: 'http://127.0.0.1:17371', session: 'client', ready: true },
+      },
+    })
+    const snapshot = truncatedPermissionSnapshot({
+      threadID,
+      title: 'Rejected replay',
+      runID,
+      assistantClientID,
+    })
+    const permissionEvent = permissionReplayEvent(runID)
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/v1/health')) {
+        return new Response(JSON.stringify({ status: 'ok', mode: 'runtime', worker: 'user' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (url.endsWith('/v1/models')) {
+        return new Response(JSON.stringify({ models: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (url.endsWith('/v1/threads')) {
+        return new Response(JSON.stringify({ threads: [], cursor: 0, has_more: false }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (url.endsWith('/v1/commands') && init?.method === 'POST') {
+        return new Response(JSON.stringify({ detail: 'permission no longer exists' }), {
+          status: 409,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (url.endsWith(`/v1/threads/${threadID}`)) {
+        return new Response(JSON.stringify(snapshot), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (url.endsWith(`/v1/runs/${runID}/events?after=1&limit=1000`)) {
+        return new Response(JSON.stringify({
+          events: [permissionEvent],
+          has_more: false,
+          next_after: 2,
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({ detail: 'not needed by this test' }), {
+        status: 404,
+        headers: { 'content-type': 'application/json' },
+      })
+    }))
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        `http://127.0.0.1:17371/v1/runs/${runID}/events?after=1&limit=1000`,
+        expect.objectContaining({ method: 'GET' }),
+      )
+    })
+    fireEvent.click((await screen.findAllByText('Rejected replay'))[0])
+    expect(await screen.findByText('等待批准：运行命令')).toBeInTheDocument()
+  })
+
+  it('replays a truncated approval before the post-stream cache save', async () => {
+    Object.defineProperty(window, 'shejaneClient', {
+      configurable: true,
+      value: {
+        platform: 'darwin',
+        runtime: { baseURL: 'http://127.0.0.1:17371', session: 'client', ready: true },
+      },
+    })
+    window.localStorage.setItem('shejane.chatMode.v2', 'local:test:model')
+    const runID = 'run-post-stream-replay'
+    let commandBody: Record<string, unknown> | undefined
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/v1/health')) {
+        return new Response(JSON.stringify({ status: 'ok', mode: 'runtime', worker: 'user' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (url.endsWith('/v1/models')) {
+        return new Response(JSON.stringify({ models: [{
+          spec: 'local:test:model',
+          model_id: 'model',
+          display_name: 'Test Model',
+          connection_id: 'test',
+          service_name: 'Test',
+          available: true,
+          tool_calling: true,
+          streaming: true,
+          image_inputs: false,
+          verification: 'verified',
+          recommended: true,
+        }] }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith('/v1/threads')) {
+        return new Response(JSON.stringify({ threads: [], cursor: 0, has_more: false }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (url.endsWith('/v1/runs') && init?.method === 'POST') {
+        commandBody = JSON.parse(String(init.body)) as Record<string, unknown>
+        return new Response(JSON.stringify({
+          id: runID,
+          goal: 'Run a command',
+          status: 'running',
+          thread_id: commandBody.thread_id,
+          assistant_item_id: `item-assistant-${runID}`,
+          history_json: '[]',
+          settings_json: '{}',
+          metadata_json: '{}',
+          inputs: [],
+          subagent_invocations: [],
+          created_at: '2026-08-02T00:00:00Z',
+          updated_at: '2026-08-02T00:00:00Z',
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith(`/v1/runs/${runID}/stream`)) {
+        return new Response(
+          `data: ${JSON.stringify(permissionReplayEvent(runID))}\n\ndata: [DONE]\n\n`,
+          { status: 200, headers: { 'content-type': 'text/event-stream' } },
+        )
+      }
+      if (commandBody && url.endsWith(`/v1/threads/${String(commandBody.thread_id)}`)) {
+        return new Response(JSON.stringify(truncatedPermissionSnapshot({
+          threadID: String(commandBody.thread_id),
+          title: 'Post-stream replay',
+          runID,
+          assistantClientID: String(commandBody.assistant_message_id),
+          userClientID: String(commandBody.client_message_id),
+        })), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith(`/v1/runs/${runID}/events?after=1&limit=1000`)) {
+        return new Response(JSON.stringify({
+          events: [permissionReplayEvent(runID)],
+          has_more: false,
+          next_after: 2,
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({ detail: 'not needed by this test' }), {
+        status: 404,
+        headers: { 'content-type': 'application/json' },
+      })
+    }))
+
+    render(<App />)
+
+    await waitFor(() => expect(screen.getByRole('button', { name: '选择模型' })).toHaveTextContent('Test Model'))
+    const editor = screen.getByRole('textbox')
+    editor.textContent = 'Run a command'
+    fireEvent.input(editor, { inputType: 'insertText', data: 'Run a command' })
+    const send = screen.getByRole('button', { name: '发送' })
+    await waitFor(() => expect(send).toBeEnabled())
+    fireEvent.click(send)
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        `http://127.0.0.1:17371/v1/runs/${runID}/events?after=1&limit=1000`,
+        expect.objectContaining({ method: 'GET' }),
+      )
+    })
+    expect(await screen.findByText('等待批准：运行命令')).toBeInTheDocument()
   })
 
   it('does not recheck large Runtime Assets when settings rerenders', async () => {

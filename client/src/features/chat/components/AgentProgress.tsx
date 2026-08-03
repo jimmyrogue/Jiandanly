@@ -3,7 +3,7 @@ import { IconAlertCircle, IconChevronDown, IconChevronRight, IconFolderPlus, Ico
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { createTranslator, useI18n, type Translator } from '@/shared/i18n/i18n'
-import type { AgentTimelineItem, AgentToolDetail, ChatMessage } from '@/shared/local-data/types'
+import type { AgentSubagentProjection, AgentTimelineItem, AgentToolDetail, ChatMessage } from '@/shared/local-data/types'
 import { withStableTimelineKeys } from '../timelineKeys'
 import { failureRecoveryAction, type AgentFailureAction } from '../recovery'
 
@@ -72,9 +72,10 @@ export function AgentProgress({
   }
 
   const events = message.agentEvents ?? []
+  const subagents = message.subagents ?? []
   // Only surface the phase timeline for real tool/operation activity; a plain
   // direct answer needs no progress chrome.
-  if (!events.some((event) => OPERATION_TYPES.has(event.type))) {
+  if (!subagents.length && !events.some((event) => OPERATION_TYPES.has(event.type))) {
     return null
   }
   const stageHistory = historicalProgressStages(events, message, t)
@@ -92,16 +93,20 @@ export function AgentProgress({
   // gets a special path when 2+ dispatches are in flight — the headline
   // detail shows only the count ("4 个子任务进行中") and the descriptions
   // render as a per-task list below the header (see inFlightTasks).
-  const detail = deriveProgressDetail(headline.source, events, message, t)
-  // In-flight subagent dispatches. Rendered as a small list under the
-  // header when there are ≥2; a single dispatch keeps the simple
-  // single-line headline so we don't add chrome around the common
-  // "one delegation" case.
+  const activeSubagents = subagents.filter(
+    (item) => item.status === 'queued' || item.status === 'running' || item.status === 'waiting',
+  )
+  const detail = activeSubagents.length
+    ? { kind: 'text' as const, text: t('agent.task.inFlight', { count: activeSubagents.length }) }
+    : deriveProgressDetail(headline.source, events, message, t)
+  // Durable lifecycle rows are always shown so status and usage survive a
+  // reconnect. The task-event heuristic remains only for older Runtime
+  // versions and keeps its previous ≥2 threshold.
   const inFlightTasks =
     headline.source?.tool === 'task' && ACTIVE_RUN_STATUSES.has(message.status)
       ? collectInFlightTaskRequests(events)
       : []
-  const showTaskList = inFlightTasks.length >= 2
+  const showTaskList = subagents.length > 0 || inFlightTasks.length >= 2
   const failureAction = progress.failureAction?.action === 'diagnostics' ? undefined : progress.failureAction
   const isHandoffWarning = Boolean(latestHandoffWarningEvent(events) && ACTIVE_RUN_STATUSES.has(message.status))
   const isNoticeCard = isHandoffWarning || progress.tone === 'failed'
@@ -202,24 +207,42 @@ export function AgentProgress({
         </div>
       ) : null}
 
-      {/* Per-subagent list, shown whenever ≥2 `task` dispatches are
-       *  in flight. The header above carries "派发 · 4 个子任务进行中";
-       *  this list shows each subtask on its own line with a short
-       *  ~20-char description of what it's currently doing. Hover any
-       *  row to see the full description via title="". Always visible
-       *  during an active run — does NOT depend on the expand button,
-       *  because the user wanted at-a-glance visibility of progress
-       *  across parallel subagents. */}
+      {/* Runtime-owned lifecycle rows show identity-safe status and usage.
+       * Older Runtime versions fall back to unmatched task tool requests.
+       * The list stays outside the disclosure so parallel work remains
+       * visible at a glance; there are intentionally no child controls. */}
       {!isNoticeCard && showTaskList ? (
         <ul
           className="agent-progress-tasks"
-          aria-label={t('agent.task.inFlight', { count: inFlightTasks.length })}
+          aria-label={subagents.length
+            ? t('agent.subagent.list')
+            : t('agent.task.inFlight', { count: inFlightTasks.length })}
         >
-          {inFlightTasks.map((task, idx) => {
+          {subagents.length ? subagents.map((subagent) => {
+            const usage = subagentUsageLabel(subagent, t)
+            return (
+              <li
+                key={subagent.operationId}
+                className="agent-progress-task-item"
+                data-status={subagent.status}
+              >
+                <span className="agent-progress-task-label">
+                  {subagent.subagentType || t('agent.subagent.defaultType')}
+                </span>
+                <span className="agent-progress-task-desc" title={subagent.description}>
+                  {truncateTaskDesc(subagent.description)}
+                </span>
+                <span className="agent-progress-task-status">
+                  {subagentStatusLabel(subagent, t)}
+                </span>
+                <span className="agent-progress-task-usage">{usage}</span>
+              </li>
+            )
+          }) : inFlightTasks.map((task, idx) => {
             const fullText = task.toolDetail?.text ?? task.target ?? ''
             const tooltip = task.toolDetail?.tooltip ?? fullText
             return (
-              <li key={task.toolCallId} className="agent-progress-task-item">
+              <li key={task.toolCallId} className="agent-progress-task-item" data-status="running">
                 <span className="agent-progress-task-label">
                   {t('agent.task.itemLabel', { index: idx + 1 })}
                 </span>
@@ -359,6 +382,13 @@ const OPERATION_TYPES = new Set([
   'run.waiting',
   'run.failed',
   'run.cleanup_required',
+  'subagent.spawned',
+  'subagent.started',
+  'subagent.waiting',
+  'subagent.completed',
+  'subagent.failed',
+  'subagent.canceled',
+  'subagent.outcome_unknown',
 ])
 
 const ACTIVITY_TYPES = new Set([
@@ -375,6 +405,13 @@ const ACTIVITY_TYPES = new Set([
   'run.waiting',
   'run.failed',
   'run.cleanup_required',
+  'subagent.spawned',
+  'subagent.started',
+  'subagent.waiting',
+  'subagent.completed',
+  'subagent.failed',
+  'subagent.canceled',
+  'subagent.outcome_unknown',
 ])
 
 const ACTIVE_RUN_STATUSES = new Set<ChatMessage['status']>([
@@ -1118,6 +1155,12 @@ function deriveProgressDetail(
   const base: AgentToolDetail | undefined =
     source?.toolDetail ?? (source?.target ? { kind: 'text', text: source.target } : undefined)
 
+  // Once Runtime supplies lifecycle state, it is authoritative. Generic task
+  // requests may remain in the timeline for audit but cannot keep a terminal
+  // operation visually active.
+  if (message.subagents?.length) {
+    return base
+  }
   if (source?.tool !== 'task' || !ACTIVE_RUN_STATUSES.has(message.status)) {
     return base
   }
@@ -1150,6 +1193,32 @@ function truncateTaskDesc(value: string): string {
     return ''
   }
   return value.length > TASK_DESC_MAX ? value.slice(0, TASK_DESC_MAX) : value
+}
+
+function subagentStatusLabel(item: AgentSubagentProjection, t: Translator): string {
+  switch (item.status) {
+    case 'queued': return t('agent.subagent.status.queued')
+    case 'running': return t('agent.subagent.status.running')
+    case 'waiting': return t('agent.subagent.status.waiting')
+    case 'completed': return t('agent.subagent.status.completed')
+    case 'failed': return t('agent.subagent.status.failed')
+    case 'canceled': return t('agent.subagent.status.canceled')
+    case 'unknown': return t('agent.subagent.status.unknown')
+  }
+}
+
+function subagentUsageLabel(item: AgentSubagentProjection, t: Translator): string {
+  const parts = [t('agent.subagent.usage', {
+    calls: item.usage.modelCalls,
+    tokens: item.usage.inputTokens + item.usage.outputTokens,
+  })]
+  if (item.usage.unmeteredCalls > 0) {
+    parts.push(t('agent.subagent.usageUnmetered', { count: item.usage.unmeteredCalls }))
+  }
+  if (item.usage.outcomeUnknownCalls > 0) {
+    parts.push(t('agent.subagent.usageUnknown', { count: item.usage.outcomeUnknownCalls }))
+  }
+  return parts.join(' · ')
 }
 
 /** Return the list of `tool.requested` events for the `task` tool that

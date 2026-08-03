@@ -5448,11 +5448,9 @@ button.agent-progress-summary:focus-visible {
   transform: rotate(180deg);
 }
 
-/* Per-subagent progress list shown under the header when ≥2 `task`
- * dispatches are in flight. The header line carries
- * "派发 · N 个子任务进行中"; each <li> here adds a single line of
- * "子任务 N — short description" so the user can see at-a-glance what
- * each parallel subagent is doing.
+/* Per-subagent lifecycle list shown under the header. Runtime-owned rows
+ * include type, description, status, and usage; older Runtime versions use
+ * the simpler numbered task-request fallback.
  *
  * Left-aligns under the verb (11px indent matches `.tool-card-results`
  * so the visual rhythm of the card stays consistent). Each row is
@@ -5488,13 +5486,12 @@ button.agent-progress-summary:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Animated trailing dots on each subtask row — same `./../...` cycle
- * as the headline's `.name::after`, reusing the agent-progress-dots
- * keyframes. The row only exists while the dispatch is in flight, so
- * the dots naturally stop animating when the subagent completes (the
- * <li> unmounts). Fixed `width: 1.6ch` prevents layout shift as the
- * dot count cycles. */
-.agent-progress-task-desc::after {
+/* Lifecycle rows remain visible long enough to show their terminal status.
+ * Animate dots only while work is actually non-terminal; a completed,
+ * failed, canceled, or outcome-unknown row must look settled. */
+.agent-progress-task-item[data-status="queued"] .agent-progress-task-desc::after,
+.agent-progress-task-item[data-status="running"] .agent-progress-task-desc::after,
+.agent-progress-task-item[data-status="waiting"] .agent-progress-task-desc::after {
   content: '.';
   display: inline-block;
   margin-left: 1px;
@@ -5502,6 +5499,31 @@ button.agent-progress-summary:focus-visible {
   text-align: left;
   white-space: pre;
   animation: agent-progress-dots 1.2s steps(3, end) infinite;
+}
+.agent-progress-task-status {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+.agent-progress-task-item[data-status="queued"] .agent-progress-task-status,
+.agent-progress-task-item[data-status="running"] .agent-progress-task-status,
+.agent-progress-task-item[data-status="waiting"] .agent-progress-task-status {
+  color: var(--sj-seal, #B3532F);
+}
+.agent-progress-task-item[data-status="completed"] .agent-progress-task-status {
+  color: var(--sj-moss, #5E7A6E);
+}
+.agent-progress-task-item[data-status="failed"] .agent-progress-task-status {
+  color: var(--accent-danger-text, #B3532F);
+}
+.agent-progress-task-usage {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tool-card-results {
@@ -5563,7 +5585,9 @@ button.agent-progress-summary:focus-visible {
   .agent-progress-status-dot,
   .agent-progress-working .agent-progress-summary .name::after,
   .agent-progress-permission .agent-progress-summary .name::after,
-  .agent-progress-task-desc::after {
+  .agent-progress-task-item[data-status="queued"] .agent-progress-task-desc::after,
+  .agent-progress-task-item[data-status="running"] .agent-progress-task-desc::after,
+  .agent-progress-task-item[data-status="waiting"] .agent-progress-task-desc::after {
     transition: none;
     animation: none;
   }

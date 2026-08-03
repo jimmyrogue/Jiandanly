@@ -630,6 +630,171 @@ describe('AgentProgress', () => {
     expect(screen.getByText('搜索成都必吃美食')).toBeInTheDocument()
   })
 
+  it('renders authoritative subagent status and usage while only non-terminal rows count as active', () => {
+    renderAgentProgress(
+      <AgentProgress
+        message={message({
+          status: 'streaming',
+          agentEvents: [],
+          subagents: [
+            {
+              operationId: 'toolop-running',
+              parentRunId: 'run-local',
+              toolCallId: 'call-running',
+              subagentType: 'researcher',
+              description: '收集官方资料',
+              status: 'running',
+              receiptStatus: 'running',
+              attemptCount: 1,
+              usage: {
+                modelCalls: 2,
+                inputTokens: 120,
+                outputTokens: 40,
+                unmeteredCalls: 0,
+                outcomeUnknownCalls: 0,
+              },
+              createdAt: '2026-08-02T00:00:00Z',
+              startedAt: '2026-08-02T00:00:01Z',
+              updatedAt: '2026-08-02T00:00:02Z',
+            },
+            {
+              operationId: 'toolop-waiting',
+              parentRunId: 'run-local',
+              toolCallId: 'call-waiting',
+              subagentType: 'writer',
+              description: '等待研究结果',
+              status: 'waiting',
+              receiptStatus: 'paused',
+              attemptCount: 1,
+              usage: {
+                modelCalls: 1,
+                inputTokens: 80,
+                outputTokens: 10,
+                unmeteredCalls: 0,
+                outcomeUnknownCalls: 0,
+              },
+              createdAt: '2026-08-02T00:00:00Z',
+              startedAt: '2026-08-02T00:00:01Z',
+              updatedAt: '2026-08-02T00:00:02Z',
+            },
+            {
+              operationId: 'toolop-queued',
+              parentRunId: 'run-local',
+              toolCallId: 'call-queued',
+              subagentType: 'planner',
+              description: '等待调度',
+              status: 'queued',
+              receiptStatus: 'prepared',
+              attemptCount: 0,
+              usage: {
+                modelCalls: 0,
+                inputTokens: 0,
+                outputTokens: 0,
+                unmeteredCalls: 0,
+                outcomeUnknownCalls: 0,
+              },
+              createdAt: '2026-08-02T00:00:00Z',
+              updatedAt: '2026-08-02T00:00:00Z',
+            },
+            {
+              operationId: 'toolop-completed',
+              parentRunId: 'run-local',
+              toolCallId: 'call-completed',
+              subagentType: 'reviewer',
+              description: '检查事实',
+              status: 'completed',
+              receiptStatus: 'completed',
+              attemptCount: 1,
+              usage: {
+                modelCalls: 1,
+                inputTokens: 50,
+                outputTokens: 20,
+                unmeteredCalls: 0,
+                outcomeUnknownCalls: 0,
+              },
+              createdAt: '2026-08-02T00:00:00Z',
+              startedAt: '2026-08-02T00:00:01Z',
+              completedAt: '2026-08-02T00:00:02Z',
+              updatedAt: '2026-08-02T00:00:02Z',
+            },
+            {
+              operationId: 'toolop-unknown',
+              parentRunId: 'run-local',
+              toolCallId: 'call-unknown',
+              subagentType: 'analyst',
+              description: '核对执行结果',
+              status: 'unknown',
+              receiptStatus: 'outcome_unknown',
+              attemptCount: 1,
+              usage: {
+                modelCalls: 1,
+                inputTokens: 30,
+                outputTokens: 5,
+                unmeteredCalls: 0,
+                outcomeUnknownCalls: 1,
+              },
+              errorType: 'execution_lease_expired',
+              createdAt: '2026-08-02T00:00:00Z',
+              startedAt: '2026-08-02T00:00:01Z',
+              completedAt: '2026-08-02T00:00:02Z',
+              updatedAt: '2026-08-02T00:00:02Z',
+            },
+          ],
+        })}
+      />,
+    )
+
+    expect(screen.getByText('3 个子任务进行中')).toBeInTheDocument()
+    expect(screen.getByText('researcher')).toBeInTheDocument()
+    expect(screen.getByText('收集官方资料')).toBeInTheDocument()
+    expect(screen.getByText('进行中')).toBeInTheDocument()
+    expect(screen.getByText('等待中')).toBeInTheDocument()
+    expect(screen.getByText('等待开始')).toBeInTheDocument()
+    expect(screen.getByText('已完成')).toBeInTheDocument()
+    expect(screen.getByText('结果待确认')).toBeInTheDocument()
+    expect(screen.getByText('2 次模型调用 · 160 token')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '取消子代理' })).not.toBeInTheDocument()
+  })
+
+  it('does not let the old task heuristic keep terminal durable subagents active', () => {
+    const completedSubagents: NonNullable<ChatMessage['subagents']> = ['a', 'b'].map((suffix) => ({
+      operationId: `toolop-${suffix}`,
+      parentRunId: 'run-local',
+      toolCallId: `call-${suffix}`,
+      subagentType: 'researcher',
+      description: `已结束 ${suffix}`,
+      status: 'completed',
+      receiptStatus: 'completed',
+      attemptCount: 1,
+      usage: {
+        modelCalls: 1,
+        inputTokens: 10,
+        outputTokens: 5,
+        unmeteredCalls: 0,
+        outcomeUnknownCalls: 0,
+      },
+      createdAt: '2026-08-02T00:00:00Z',
+      startedAt: '2026-08-02T00:00:01Z',
+      completedAt: '2026-08-02T00:00:02Z',
+      updatedAt: '2026-08-02T00:00:02Z',
+    }))
+    renderAgentProgress(
+      <AgentProgress
+        message={message({
+          status: 'streaming',
+          subagents: completedSubagents,
+          agentEvents: [
+            { type: 'tool.requested', label: '调用工具：派发子任务', tool: 'task', toolCallId: 'call-a' },
+            { type: 'tool.requested', label: '调用工具：派发子任务', tool: 'task', toolCallId: 'call-b' },
+          ],
+        })}
+      />,
+    )
+
+    expect(screen.queryByText('2 个子任务进行中')).not.toBeInTheDocument()
+    expect(screen.getAllByText('已完成')).toHaveLength(2)
+  })
+
   it('hides active task progress once the assistant answer appears', () => {
     const { container } = renderAgentProgress(
       <AgentProgress
