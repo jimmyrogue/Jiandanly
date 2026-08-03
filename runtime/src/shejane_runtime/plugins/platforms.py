@@ -19,6 +19,7 @@ _MACHINES = {
     "amd64": "amd64",
     "x86_64": "amd64",
 }
+_SUPPORTS_EXECUTABLE_MODE = os.name != "nt"
 
 
 def current_managed_worker_platform(
@@ -58,7 +59,7 @@ def current_managed_worker_execution_platform(
 
 
 def prepare_managed_worker_entrypoint(package_root: Path, relative_path: str) -> Path:
-    """Set a deterministic executable mode on the one manifest-selected entrypoint."""
+    """Validate the selected entrypoint and set its executable mode where supported."""
 
     from .package import InvalidPluginPackage
 
@@ -75,8 +76,9 @@ def prepare_managed_worker_entrypoint(package_root: Path, relative_path: str) ->
         raise InvalidPluginPackage("managed worker entrypoint is invalid") from exc
     if not stat.S_ISREG(mode):
         raise InvalidPluginPackage("managed worker entrypoint must be a regular file")
-    try:
-        os.chmod(entrypoint, 0o500, follow_symlinks=False)
-    except OSError as exc:
-        raise InvalidPluginPackage("managed worker entrypoint cannot be prepared") from exc
+    if _SUPPORTS_EXECUTABLE_MODE:
+        try:
+            os.chmod(entrypoint, 0o500, follow_symlinks=False)
+        except OSError as exc:
+            raise InvalidPluginPackage("managed worker entrypoint cannot be prepared") from exc
     return entrypoint

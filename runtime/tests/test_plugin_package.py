@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from shejane_runtime.plugins import platforms as plugin_platforms
 from shejane_runtime.plugins.package import (
     InvalidPluginPackage,
     InvalidPluginSignature,
@@ -171,3 +172,21 @@ def test_runtime_sets_only_the_declared_worker_entrypoint_executable(tmp_path: P
 
     assert stat.S_IMODE(entrypoint.stat().st_mode) == 0o500
     assert stat.S_IMODE(sibling.stat().st_mode) == 0o644
+
+
+def test_runtime_skips_posix_mode_on_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = tmp_path / "package"
+    entrypoint = package / "payload" / "worker.exe"
+    entrypoint.parent.mkdir(parents=True)
+    entrypoint.write_bytes(b"worker")
+
+    monkeypatch.setattr(plugin_platforms, "_SUPPORTS_EXECUTABLE_MODE", False)
+
+    def unexpected_chmod(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("Windows entrypoints must not use POSIX chmod")
+
+    monkeypatch.setattr(plugin_platforms.os, "chmod", unexpected_chmod)
+
+    assert prepare_managed_worker_entrypoint(package, "payload/worker.exe") == entrypoint
