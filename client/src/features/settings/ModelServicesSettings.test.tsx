@@ -107,7 +107,7 @@ describe('ModelServicesSettings', () => {
     api.setModelCapabilityBinding.mockResolvedValue({})
   })
 
-  it('opens the system browser and uses official-service model capabilities automatically', async () => {
+  it('opens the system browser and connects the official service without credential editing', async () => {
     const connection = {
       ...tuziConnection,
       id: `conn_${'a'.repeat(32)}`,
@@ -119,18 +119,19 @@ describe('ModelServicesSettings', () => {
         ...tuziConnection.models[0],
         model_id: 'official-flash',
         display_name: 'official-flash',
-        verification: 'verified',
+        verification: 'unverified',
+        recommended: true,
       }, {
         ...tuziConnection.models[0],
         model_id: 'official-pro',
         display_name: 'official-pro',
-        verification: 'verified',
+        verification: 'unverified',
       }],
     }
     api.listModelServicePresets.mockResolvedValue([shejaneOfficial, deepseek])
     api.listModelServices
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([connection])
+      .mockResolvedValue([connection])
     api.startSheJaneAuthorization.mockResolvedValue({
       authorization_id: `auth_${'b'.repeat(32)}`,
       authorization_url: 'https://cloud.example.test/shejane/authorize?state=safe',
@@ -189,51 +190,22 @@ describe('ModelServicesSettings', () => {
       connection_id: connection.id,
       success_sample_rate: 0,
     }, config)
-    const modelInfo = await screen.findByRole('button', {
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(screen.getByRole('switch', { name: '共享运行诊断' })).toBeChecked()
+    expect(api.verifyModelServiceModel).not.toHaveBeenCalled()
+    const modelInfo = screen.getByRole('button', {
       name: '查看 SheJane 官方服务（推荐） 的模型',
     })
-    expect(screen.queryByText('official-flash')).not.toBeInTheDocument()
     fireEvent.click(modelInfo)
     expect(await screen.findByText('official-flash')).toBeInTheDocument()
     expect(screen.getByText('official-pro')).toBeInTheDocument()
+    expect(screen.getByText('共 2 个模型')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
-    expect(screen.getByRole('switch', { name: '共享运行诊断' })).toBeChecked()
-    expect(screen.queryByRole('heading', { name: '选择要使用的模型' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '选择模型' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '测试模型' }))
+    expect(await screen.findByRole('heading', { name: '手动测试模型兼容性' })).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: '选择 official-flash' })).toBeInTheDocument()
     expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument()
-  })
-
-  it('shows an official model declared purpose without manual testing', async () => {
-    api.listModelServices.mockResolvedValue([{
-      ...tuziConnection,
-      preset_id: 'shejane-official',
-      name: 'SheJane 官方服务（推荐）',
-      region: 'official',
-      base_url: 'https://cloud.example.test',
-      models: [{
-        ...tuziConnection.models[1],
-        capabilities: [{
-          capability: 'image_generation',
-          protocol: 'openai_images_generations',
-          verification: 'verified',
-        }],
-        recommended: true,
-      }],
-    }])
-
-    render(
-      <I18nProvider>
-        <ModelServicesSettings config={config} />
-      </I18nProvider>,
-    )
-
-    fireEvent.click(await screen.findByRole('button', {
-      name: '查看 SheJane 官方服务（推荐） 的模型',
-    }))
-    expect(await screen.findByText('gpt-image-2')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '选择模型' })).not.toBeInTheDocument()
-    expect(api.verifyModelServiceModel).not.toHaveBeenCalled()
   })
 
   it('keeps visible progress and preserves the connection if default diagnostics fail', async () => {
@@ -329,6 +301,7 @@ describe('ModelServicesSettings', () => {
     fireEvent.click(screen.getByRole('button', { name: /SheJane 官方服务/ }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(message)
+    expect(screen.queryByText('授权未完成，可以重新打开浏览器。')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: '重新授权' })).toBeInTheDocument()
   })
 
@@ -465,7 +438,7 @@ describe('ModelServicesSettings', () => {
     fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'secret' } })
     fireEvent.click(screen.getByRole('button', { name: '连接' }))
 
-    expect(await screen.findByRole('status')).toHaveTextContent('正在配置并验证模型兼容性')
+    expect(await screen.findByRole('status')).toHaveTextContent('正在连接服务并读取模型列表')
     expect(screen.getByRole('button', { name: '配置中…' })).toHaveAttribute('aria-busy', 'true')
 
     finishConnect()
@@ -601,7 +574,7 @@ describe('ModelServicesSettings', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     expect(screen.getByText('中国站 · 可用')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '选择模型' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '测试模型' })).toBeInTheDocument()
     const actions = container.querySelector('.settings-model-service-actions')
     expect(actions?.querySelectorAll('button')).toHaveLength(2)
     expect(actions?.lastElementChild).toHaveAttribute('aria-label', 'DeepSeek 更多操作')
@@ -610,6 +583,20 @@ describe('ModelServicesSettings', () => {
     fireEvent.keyDown(actionsTrigger, { key: 'Enter', code: 'Enter' })
     expect(await screen.findByRole('menuitem', { name: '打开 DeepSeek 控制台' })).toBeInTheDocument()
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('offers manual compatibility testing without running it automatically', async () => {
+    api.listModelServices.mockResolvedValue([tuziConnection])
+
+    render(
+      <I18nProvider>
+        <ModelServicesSettings config={config} />
+      </I18nProvider>,
+    )
+
+    fireEvent.click(await screen.findByRole('button', { name: '测试模型' }))
+    expect(screen.getByText('连接成功后，Agent 对话模型即可使用；请选择需要手动测试兼容性的模型。')).toBeInTheDocument()
+    expect(api.verifyModelServiceModel).not.toHaveBeenCalled()
   })
 
   it('shows persistent progress on the service card while models refresh', async () => {
@@ -715,11 +702,11 @@ describe('ModelServicesSettings', () => {
       </I18nProvider>,
     )
 
-    fireEvent.click(await screen.findByRole('button', { name: '选择模型' }))
+    fireEvent.click(await screen.findByRole('button', { name: '测试模型' }))
     fireEvent.click(screen.getByRole('checkbox', { name: '选择 GPT Image 1' }))
     fireEvent.click(screen.getByRole('combobox', { name: 'GPT Image 1 用途' }))
     fireEvent.click(screen.getByRole('option', { name: '图片生成' }))
-    fireEvent.click(screen.getByRole('button', { name: '测试并启用 1 个模型' }))
+    fireEvent.click(screen.getByRole('button', { name: '测试 1 个模型' }))
 
     await waitFor(() => expect(api.verifyModelServiceModel).toHaveBeenCalledWith(
       'conn_1',
@@ -760,7 +747,7 @@ describe('ModelServicesSettings', () => {
     fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'secret' } })
     fireEvent.click(screen.getByRole('button', { name: '连接' }))
 
-    expect(await screen.findByRole('heading', { name: '选择要使用的模型' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '手动测试模型兼容性' })).toBeInTheDocument()
     const search = screen.getByRole('searchbox', { name: '筛选模型' })
     fireEvent.change(search, { target: { value: 'image' } })
     expect(screen.getByText('gpt-image-2')).toBeInTheDocument()
@@ -777,15 +764,15 @@ describe('ModelServicesSettings', () => {
     )
 
     fireEvent.click(await screen.findByRole('button', { name: '查看 兔子 的模型' }))
-    expect(await screen.findByText('尚未启用模型')).toBeInTheDocument()
-    expect(screen.queryByText('gpt-image-2')).not.toBeInTheDocument()
+    expect(await screen.findByText('共 2 个模型')).toBeInTheDocument()
+    expect(screen.getByText('gpt-image-2')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
-    fireEvent.click(screen.getByRole('button', { name: '选择模型' }))
+    fireEvent.click(screen.getByRole('button', { name: '测试模型' }))
     fireEvent.click(screen.getByRole('checkbox', { name: '选择 gpt-image-2' }))
     fireEvent.click(screen.getByRole('combobox', { name: 'gpt-image-2 用途' }))
     fireEvent.click(screen.getByRole('option', { name: '图片生成' }))
-    fireEvent.click(screen.getByRole('button', { name: '测试并启用 1 个模型' }))
+    fireEvent.click(screen.getByRole('button', { name: '测试 1 个模型' }))
 
     await waitFor(() => expect(api.verifyModelServiceModel).toHaveBeenCalledWith(
       'conn_1',

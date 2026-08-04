@@ -185,7 +185,6 @@ def test_runtime_authorization_persists_only_the_official_connection(
                 {
                     "id": "gpt-image-2",
                     "capabilities": ["image_generation"],
-                    "recommended_for": ["image_generation"],
                 },
                 {
                     "id": "gpt-image-2-vip",
@@ -258,7 +257,20 @@ def test_runtime_authorization_persists_only_the_official_connection(
             "/v1/model-services",
             headers={"Authorization": "Bearer tok"},
         )
+        default_bindings = client.get(
+            "/v1/model-capability-bindings",
+            headers={"Authorization": "Bearer tok"},
+        )
         connection_id = status.json()["connection"]["id"]
+        selected_binding = client.put(
+            "/v1/model-capability-bindings/image_generation",
+            headers={"Authorization": "Bearer tok"},
+            json={"model_spec": f"local:{connection_id}:gpt-image-2"},
+        )
+        preserved_bindings = client.get(
+            "/v1/model-capability-bindings",
+            headers={"Authorization": "Bearer tok"},
+        )
         replaced = client.put(
             f"/v1/model-services/{connection_id}/credential",
             headers={"Authorization": "Bearer tok"},
@@ -277,8 +289,15 @@ def test_runtime_authorization_persists_only_the_official_connection(
                 "models": [],
             },
         )
-
-    assert verified_models == ["official-flash", "official-pro"]
+        verified_before_manual_test = list(verified_models)
+        manual = client.post(
+            f"/v1/model-services/{connection_id}/models/official-flash/verify",
+            headers={"Authorization": "Bearer tok"},
+            json={
+                "capability": "agent_chat",
+                "protocol": "openai_chat_completions",
+            },
+        )
 
     with TestClient(create_app(settings)) as restarted:
         restarted_services = restarted.get(
@@ -296,32 +315,76 @@ def test_runtime_authorization_persists_only_the_official_connection(
     assert payload["connection"]["preset_id"] == "shejane-official"
     assert payload["connection"]["region"] == "official"
     assert payload["connection"]["base_url"] == "https://cloud.example.test/v1"
-    assert verified_models == [
-        "official-flash",
-        "official-pro",
-        "official-flash",
-        "official-pro",
-    ]
+    assert verified_before_manual_test == []
+    assert verified_models == ["official-flash"]
     assert {
         model["model_id"]: model["verification"] for model in payload["connection"]["models"]
     } == {
-        "official-flash": "verified",
-        "official-pro": "verified",
+        "official-flash": "unverified",
+        "official-pro": "unverified",
         "gpt-image-2": "verified",
         "gpt-image-2-vip": "verified",
     }
+    assert {
+        model["model_id"]: model["capabilities"]
+        for model in payload["connection"]["models"]
+        if model["model_id"].startswith("gpt-image")
+    } == {
+        "gpt-image-2": [
+            {
+                "capability": "image_generation",
+                "protocol": "openai_images_generations",
+                "verification": "verified",
+            }
+        ],
+        "gpt-image-2-vip": [
+            {
+                "capability": "image_generation",
+                "protocol": "openai_images_generations",
+                "verification": "verified",
+            }
+        ],
+    }
+    assert manual.status_code == 200
+    assert manual.json()["verification"] == "verified"
     assert repeated.json() == payload
     assert services.json()["services"] == [payload["connection"]]
+    assert [
+        {
+            key: binding[key]
+            for key in ("capability", "model_spec", "model_id", "status", "revision")
+        }
+        for binding in default_bindings.json()["bindings"]
+    ] == [
+        {
+            "capability": "image_generation",
+            "model_spec": f"local:{connection_id}:gpt-image-2-vip",
+            "model_id": "gpt-image-2-vip",
+            "status": "ready",
+            "revision": 1,
+        }
+    ]
+    assert selected_binding.status_code == 200
+    assert preserved_bindings.json()["bindings"][0]["model_id"] == "gpt-image-2"
+    assert preserved_bindings.json()["bindings"][0]["revision"] == 2
     assert list(credential_vault.values()) == ["inference-secret"]
     assert replaced.status_code == 400
     assert imported.status_code == 400
-    assert restarted_services.json()["services"] == [payload["connection"]]
+    assert {
+        model["model_id"]: model["verification"]
+        for model in restarted_services.json()["services"][0]["models"]
+    } == {
+        "official-flash": "verified",
+        "official-pro": "unverified",
+        "gpt-image-2": "verified",
+        "gpt-image-2-vip": "verified",
+    }
     assert restarted_refresh.status_code == 200
     assert {
         model["model_id"]: model["verification"] for model in restarted_refresh.json()["models"]
     } == {
         "official-flash": "verified",
-        "official-pro": "verified",
+        "official-pro": "unverified",
         "future-image-model": "verified",
     }
     assert "inference-secret" not in repr(payload)

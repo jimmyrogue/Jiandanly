@@ -888,18 +888,10 @@ class RunCoordinator:
             adapter_id=str(connection.get("adapter_id") or "openai_chat"),
         )
         agent_capability = model_capability(profile, "agent_chat")
-        if agent_capability is None or agent_capability.get("verification") != "verified":
-            return {}, RunAdmissionError(
-                "model_unverified",
-                "model Agent capability has not been verified",
-            )
-        missing = [
-            capability for capability in required_capabilities if not bool(profile.get(capability))
-        ]
-        if missing:
+        if agent_capability is None:
             return {}, RunAdmissionError(
                 "model_capability_unavailable",
-                f"model must support {', '.join(missing)}",
+                "model does not declare Agent chat capability",
             )
         try:
             if not await get_model_api_key(

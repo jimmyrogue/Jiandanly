@@ -9123,7 +9123,10 @@ button.settings-row-button:focus-visible,
 }
 
 .settings-model-service-models {
+  display: inline-flex;
   min-height: 30px;
+  align-items: center;
+  gap: 5px;
   border: 0.5px solid var(--sj-line-strong, #D9D5CC);
   border-radius: 6px;
   background: transparent;

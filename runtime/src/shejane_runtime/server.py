@@ -319,6 +319,21 @@ def _model_connection_models(row: dict[str, Any]) -> list[dict[str, Any]]:
             normalized,
             adapter_id=str(row.get("adapter_id") or "openai_chat"),
         )
+        if not normalized["capabilities"] and normalized.get("source") == "discovered":
+            normalized["capabilities"] = [
+                {
+                    "capability": "agent_chat",
+                    "protocol": default_model_protocol(
+                        str(row.get("adapter_id") or "openai_chat"),
+                        "agent_chat",
+                    ),
+                    "verification": "unverified",
+                }
+            ]
+        if row.get("preset_id") == "shejane-official":
+            for capability in normalized["capabilities"]:
+                if capability["capability"] != "agent_chat":
+                    capability["verification"] = "verified"
         normalized.pop("purpose", None)
         normalized.pop("protocol", None)
         normalized["verification"] = (
@@ -341,10 +356,29 @@ def _merge_refreshed_model_catalog(
         model_id = str(model["model_id"])
         previous = current_by_id.get(model_id)
         if previous and previous.get("capabilities"):
+            capabilities = {
+                str(item["capability"]): dict(item)
+                for item in model.get("capabilities", [])
+                if isinstance(item, dict) and item.get("capability")
+            }
+            for item in previous.get("capabilities", []):
+                if not isinstance(item, dict) or not item.get("capability"):
+                    continue
+                capability = str(item["capability"])
+                if capability not in capabilities or item.get("verification") == "verified":
+                    capabilities[capability] = dict(item)
+            merged_capabilities = sorted(
+                capabilities.values(),
+                key=lambda item: MODEL_CAPABILITY_ORDER[str(item["capability"])],
+            )
             model = {
                 **model,
-                "capabilities": list(previous.get("capabilities") or []),
-                "verification": previous.get("verification", "unverified"),
+                "capabilities": merged_capabilities,
+                "verification": (
+                    "verified"
+                    if any(item.get("verification") == "verified" for item in merged_capabilities)
+                    else "unverified"
+                ),
                 "streaming": bool(previous.get("streaming")),
                 "tool_calling": bool(previous.get("tool_calling")),
                 "image_inputs": bool(previous.get("image_inputs")),
@@ -432,6 +466,49 @@ async def _model_capability_binding_response(
         "revision": row["revision"],
         "updated_at": row["updated_at"],
     }
+
+
+async def _ensure_default_image_generation_binding(
+    store: LocalStore,
+    *,
+    principal_id: str,
+) -> None:
+    if (
+        await store.get_model_capability_binding(
+            principal_id=principal_id,
+            capability="image_generation",
+        )
+        is not None
+    ):
+        return
+    candidates = []
+    for connection in await store.list_model_connections(principal_id=principal_id):
+        for model in _model_connection_models(connection):
+            capability = model_capability(model, "image_generation")
+            if capability is not None and capability.get("verification") == "verified":
+                candidates.append((connection, model, capability))
+    if not candidates:
+        return
+    connection, model, capability = next(
+        (candidate for candidate in candidates if candidate[1].get("recommended")),
+        candidates[0],
+    )
+    if (
+        await store.get_model_capability_binding(
+            principal_id=principal_id,
+            capability="image_generation",
+        )
+        is not None
+    ):
+        return
+    await store.set_model_capability_binding(
+        principal_id=principal_id,
+        capability="image_generation",
+        connection_id=str(connection["id"]),
+        connection_version=int(connection.get("version") or 1),
+        model_id=str(model["model_id"]),
+        protocol=str(capability["protocol"]),
+    )
 
 
 async def _refresh_model_service_models(
@@ -554,7 +631,9 @@ async def _refresh_model_service_models(
                             {
                                 "capability": capability,
                                 "protocol": default_model_protocol(adapter_id, capability),
-                                "verification": "verified",
+                                "verification": (
+                                    "unverified" if capability == "agent_chat" else "verified"
+                                ),
                             }
                             for capability in declared_capabilities
                             if isinstance(capability, str) and capability in MODEL_CAPABILITY_ORDER
@@ -587,8 +666,9 @@ async def _verify_model_service_compatibility(
     api_key: str,
     model_id: str,
 ) -> None:
-    # ponytail: bound this paid probe; use per-model budgets if 4K truncates real tool calls.
-    probe_max_tokens = 4_096
+    # ponytail: this probe needs one tool call and one short acknowledgement.
+    probe_max_tokens = 512
+    probe_timeout_seconds = min(30.0, settings.model_request_timeout_seconds)
     success_signal = "SHEJANE_MODEL_TOOL_LOOP_OK"
     ping = StructuredTool.from_function(
         lambda: success_signal,
@@ -596,59 +676,60 @@ async def _verify_model_service_compatibility(
         description="Return a compatibility signal.",
     )
     try:
-        model = _build_byok_chat_model(
-            settings=settings,
-            model_binding={
-                "adapter_id": adapter_id,
-                "protocol": protocol or default_model_protocol(adapter_id, "agent_chat"),
-                "base_url": base_url,
-                "model_id": model_id,
-                "profile": {
-                    "tool_calling": True,
-                    "image_inputs": False,
-                    "max_output_tokens": probe_max_tokens,
+        async with asyncio.timeout(probe_timeout_seconds):
+            model = _build_byok_chat_model(
+                settings=settings,
+                model_binding={
+                    "adapter_id": adapter_id,
+                    "protocol": protocol or default_model_protocol(adapter_id, "agent_chat"),
+                    "base_url": base_url,
+                    "model_id": model_id,
+                    "profile": {
+                        "tool_calling": True,
+                        "image_inputs": False,
+                        "max_output_tokens": probe_max_tokens,
+                    },
                 },
-            },
-            model_api_key=api_key,
-        ).bind(max_tokens=probe_max_tokens)
-        prompt = HumanMessage(
-            content=(
-                "Call the ping tool exactly once. After receiving its result, "
-                f"answer exactly {success_signal}."
+                model_api_key=api_key,
+            ).bind(max_tokens=probe_max_tokens)
+            prompt = HumanMessage(
+                content=(
+                    "Call the ping tool exactly once. After receiving its result, "
+                    f"answer exactly {success_signal}."
+                )
             )
-        )
-        provider_tools, aliases, choices = _provider_tools([ping])
-        bound = model.bind_tools(provider_tools)
-        tool_request = _rewrite_tool_names(await bound.ainvoke([prompt]), aliases)
-        calls = list(getattr(tool_request, "tool_calls", ()) or ())
-        if len(calls) != 1 or calls[0].get("name") != "shejane.ping" or not calls[0].get("id"):
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "incompatible_model",
-                    "message": "模型没有完成工具调用，无法用于 Agent 任务。",
-                },
+            provider_tools, aliases, choices = _provider_tools([ping])
+            bound = model.bind_tools(provider_tools)
+            tool_request = _rewrite_tool_names(await bound.ainvoke([prompt]), aliases)
+            calls = list(getattr(tool_request, "tool_calls", ()) or ())
+            if len(calls) != 1 or calls[0].get("name") != "shejane.ping" or not calls[0].get("id"):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "incompatible_model",
+                        "message": "模型没有完成工具调用，无法用于 Agent 任务。",
+                    },
+                )
+            result = ping.invoke(calls[0].get("args") or {})
+            provider_tool_request = _rewrite_tool_names(tool_request, choices)
+            provider_result = _rewrite_tool_names(
+                ToolMessage(
+                    content=result,
+                    name="shejane.ping",
+                    tool_call_id=str(calls[0]["id"]),
+                ),
+                choices,
             )
-        result = ping.invoke(calls[0].get("args") or {})
-        provider_tool_request = _rewrite_tool_names(tool_request, choices)
-        provider_result = _rewrite_tool_names(
-            ToolMessage(
-                content=result,
-                name="shejane.ping",
-                tool_call_id=str(calls[0]["id"]),
-            ),
-            choices,
-        )
-        final = _rewrite_tool_names(
-            await bound.ainvoke(
-                [
-                    prompt,
-                    provider_tool_request,
-                    provider_result,
-                ]
-            ),
-            aliases,
-        )
+            final = _rewrite_tool_names(
+                await bound.ainvoke(
+                    [
+                        prompt,
+                        provider_tool_request,
+                        provider_result,
+                    ]
+                ),
+                aliases,
+            )
     except HTTPException:
         raise
     except Exception as exc:
@@ -676,7 +757,11 @@ async def _verify_model_service_compatibility(
                 status_code=429,
                 detail={"code": "rate_limited", "message": "模型服务请求过于频繁，请稍后重试。"},
             ) from exc
-        if status_code == 408 or (isinstance(status_code, int) and status_code >= 500):
+        if (
+            isinstance(exc, TimeoutError)
+            or status_code == 408
+            or (isinstance(status_code, int) and status_code >= 500)
+        ):
             raise HTTPException(
                 status_code=503,
                 detail={
@@ -1036,53 +1121,6 @@ async def _verify_model_service_capability(
     )
 
 
-async def _verify_bundled_model_catalog(
-    *,
-    settings: Settings,
-    base_url: str,
-    adapter_id: str,
-    api_key: str,
-    models: list[dict[str, Any]],
-    include_discovered: bool = False,
-) -> list[dict[str, Any]]:
-    verified_models: list[dict[str, Any]] = []
-    for raw_model in models:
-        model = {**raw_model, "verification": "unverified"}
-        if model.get("source") == "bundled" or (
-            include_discovered and model.get("source") == "discovered"
-        ):
-            model["capabilities"] = normalized_model_capabilities(
-                model,
-                adapter_id=adapter_id,
-            )
-            if model["capabilities"] and model_capability(model, "agent_chat") is None:
-                verified_models.append(model)
-                continue
-            try:
-                await _verify_model_service_compatibility(
-                    settings=settings,
-                    base_url=base_url,
-                    adapter_id=adapter_id,
-                    api_key=api_key,
-                    model_id=str(model["model_id"]),
-                )
-            except HTTPException as exc:
-                if exc.status_code in {401, 402, 403}:
-                    raise
-                log.info(
-                    "bundled model compatibility probe failed model=%s status=%s",
-                    model["model_id"],
-                    exc.status_code,
-                )
-            else:
-                for item in model["capabilities"]:
-                    if item["capability"] in {"agent_chat", "image_understanding"}:
-                        item["verification"] = "verified"
-                model.update({"verification": "verified", "tool_calling": True, "streaming": True})
-        verified_models.append(model)
-    return verified_models
-
-
 async def _complete_shejane_authorization(
     app: FastAPI,
     principal_id: str,
@@ -1109,14 +1147,6 @@ async def _complete_shejane_authorization(
             base_url=official_api_base_url,
             adapter_id="openai_chat",
             api_key=token,
-        )
-        models = await _verify_bundled_model_catalog(
-            settings=app.state.settings,
-            base_url=official_api_base_url,
-            adapter_id="openai_chat",
-            api_key=token,
-            models=models,
-            include_discovered=True,
         )
         row = await app.state.store.create_model_connection(
             principal_id=principal_id,
@@ -1851,6 +1881,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def list_model_capability_bindings(request: Request) -> dict[str, Any]:
         principal_id = request.state.principal_id
         store: LocalStore = app.state.store
+        await _ensure_default_image_generation_binding(
+            store,
+            principal_id=principal_id,
+        )
         rows = await store.list_model_capability_bindings(principal_id=principal_id)
         return {
             "bindings": [
@@ -2042,13 +2076,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 adapter_id=adapter_id,
                 api_key=api_key,
             )
-            models = await _verify_bundled_model_catalog(
-                settings=app.state.settings,
-                base_url=base_url,
-                adapter_id=adapter_id,
-                api_key=api_key,
-                models=models,
-            )
         connection_id = f"conn_{uuid.uuid4().hex}"
         next_credential_ref = credential_ref(connection_id)
         principal_id = request.state.principal_id
@@ -2183,13 +2210,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "message": "暂时无法验证新的 API Key，旧 Key 已保留。",
                 },
             )
-        models = await _verify_bundled_model_catalog(
-            settings=app.state.settings,
-            base_url=base_url,
-            adapter_id=str(row["adapter_id"]),
-            api_key=api_key,
-            models=models,
-        )
         next_credential_ref = new_credential_ref(connection_id)
         credential_swapped = False
         try:
@@ -2281,15 +2301,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             adapter_id=str(row["adapter_id"]),
             api_key=api_key,
         )
-        if row["preset_id"] == "shejane-official":
-            models = await _verify_bundled_model_catalog(
-                settings=app.state.settings,
-                base_url=str(row["base_url"]),
-                adapter_id=str(row["adapter_id"]),
-                api_key=api_key,
-                models=models,
-                include_discovered=True,
-            )
         async with app.state.coordinator.model_connection_catalog_update(
             principal_id=principal_id,
             connection_id=connection_id,
@@ -2302,9 +2313,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(status_code=404, detail="model service not found")
             cached = _model_connection_models(current)
             models = (
-                models
-                if catalog_status == "ready" and row["preset_id"] == "shejane-official"
-                else _merge_refreshed_model_catalog(cached, models)
+                _merge_refreshed_model_catalog(cached, models)
                 if catalog_status == "ready"
                 else cached or models
             )
@@ -2587,11 +2596,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             "recommended": bool(model.get("recommended")),
                             "max_input_tokens": model.get("max_input_tokens"),
                             "max_output_tokens": model.get("max_output_tokens"),
-                            "available": configured
-                            and agent_capability is not None
-                            and agent_capability.get("verification") == "verified"
-                            and bool(model.get("tool_calling"))
-                            and bool(model.get("streaming")),
+                            "available": configured and agent_capability is not None,
                         }
                     )
         except CredentialStoreError as exc:

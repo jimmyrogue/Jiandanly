@@ -62,9 +62,9 @@ Runtime 已拥有固定 origin、PKCE、动态 IPv4 loopback callback、一次�
 - 明确区分网络/鉴权、账户权限、参数不兼容、SSE 解析、工具调用缺失和第二轮模型失败。
 - BYOK 预置目录只决定 bundled/recommended，`verified` 来自真实探测；固定 Cloud origin 返回的 SheJane 官方能力声明由 Runtime 直接信任。
 
-完成标准：新增或编辑模型后无需人工猜测“测试兼容性”为何失败；失败原因可操作，成功模型可直接进入 Agent Run。
+完成标准：连接成功后 Agent 对话模型可直接进入 Run；兼容性测试只由用户手动触发并保留可操作结果，不作为可用性门禁。
 
-实现结果：BYOK 预置模型不再凭静态目录标记 `verified`。连接或更新这些服务时，Runtime 会让每个 bundled model 使用正式 Agent 共用的 Provider 适配器，完整执行两轮流式 `模型 → shejane.ping 工具 → 工具结果 → 最终标记`；点号内部名称在工具定义、历史调用和工具结果上使用同一可逆别名。国内 OpenAI-compatible 服务、OpenAI Chat/Responses、Anthropic Messages 与 Google GenerateContent 共用该边界，Run 会冻结明确协议；reasoning/thinking/thought signature、call ID 和并行顺序保持不变。DeepSeek 等 thinking 模型不再被强制 `tool_choice` 误判，GLM 的 `tool_stream` 同时作用于探测和正式 Agent；Gemini 的协议级 finish reason 也会 fail closed。鉴权、权限、余额、限流、临时不可用和格式不兼容分别返回可操作错误。SheJane 官方服务只信任固定 Cloud origin 返回的结构化能力声明，仍由用户明确选择具体模型，不做静默切换。
+实现结果：BYOK 预置模型不再凭静态目录标记 `verified`。连接或更新服务只尝试读取模型目录，不批量调用目录中的模型；凭据可读且属于 Agent 对话目录的模型立即可用于 Run。用户明确点击“测试模型”后，Runtime 才使用正式 Agent 共用的 Provider 适配器完整执行两轮流式 `模型 → shejane.ping 工具 → 工具结果 → 最终标记`，测试结果只记录兼容性，不启用或禁用模型。探针限制为 512 tokens 和 30 秒总时限；点号内部名称在工具定义、历史调用和工具结果上使用同一可逆别名。国内 OpenAI-compatible 服务、OpenAI Chat/Responses、Anthropic Messages 与 Google GenerateContent 共用该边界，Run 会冻结明确协议；reasoning/thinking/thought signature、call ID 和并行顺序保持不变。DeepSeek 等 thinking 模型不再被强制 `tool_choice` 误判，GLM 的 `tool_stream` 同时作用于探测和正式 Agent；Gemini 的协议级 finish reason 也会 fail closed。鉴权、权限、余额、限流、临时不可用和格式不兼容分别返回可操作错误。SheJane 官方服务只信任固定 Cloud origin 返回的结构化用途声明，不做静默切换。
 
 ### 2. Agent Eval 发布门禁（已完成）
 

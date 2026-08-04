@@ -534,10 +534,7 @@ export function ModelServicesSettings({
     return capability === 'image_generation' || capability === 'image_editing'
   }) ?? false
   const modelPickerBusy = Boolean(managingService && busy === `verify:${managingService.id}`)
-  const viewingModels = viewingService?.models.filter((model) => (
-    model.verification === 'verified'
-    || (model.capabilities ?? []).some((item) => item.verification === 'verified')
-  )) ?? []
+  const viewingModels = viewingService?.models ?? []
 
   return (
     <section id="settings-models" className="settings-section">
@@ -610,16 +607,14 @@ export function ModelServicesSettings({
                     : `${regionLabel} · ${statusLabel}`}
                 </span>
                 <div className="settings-model-service-actions">
-                  {service.preset_id !== 'shejane-official' && (
-                    <button
-                      type="button"
-                      className="settings-model-service-models"
-                      disabled={busy === service.id || refreshing}
-                      onClick={() => openModelPicker(service)}
-                    >
-                      {t('settings.modelServices.manageModels')}
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    className="settings-model-service-models"
+                    disabled={busy === service.id || refreshing}
+                    onClick={() => openModelPicker(service)}
+                  >
+                    {t('settings.modelServices.manageModels')}
+                  </button>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <button
@@ -760,20 +755,22 @@ export function ModelServicesSettings({
           )}
           {selected?.connection_method === 'browser_authorization' && (
             <div className="settings-model-service-form">
-              <p
-                className="flex items-center justify-center gap-2 text-center text-sm text-muted-foreground"
-                role="status"
-                aria-busy={busy.startsWith('authorize')}
-              >
-                {busy.startsWith('authorize') && (
-                  <IconLoader2 className="animate-spin" size={16} aria-hidden="true" />
-                )}
-                {busy === 'authorize:syncing'
-                  ? t('settings.modelServices.authorization.syncing')
-                  : busy.startsWith('authorize')
-                    ? t('settings.modelServices.authorization.pending')
-                    : t('settings.modelServices.authorization.ready')}
-              </p>
+              {!error && (
+                <p
+                  className="flex items-center justify-center gap-2 text-center text-sm text-muted-foreground"
+                  role="status"
+                  aria-busy={busy.startsWith('authorize')}
+                >
+                  {busy.startsWith('authorize') && (
+                    <IconLoader2 className="animate-spin" size={16} aria-hidden="true" />
+                  )}
+                  {busy === 'authorize:syncing'
+                    ? t('settings.modelServices.authorization.syncing')
+                    : busy.startsWith('authorize')
+                      ? t('settings.modelServices.authorization.pending')
+                      : t('settings.modelServices.authorization.ready')}
+                </p>
+              )}
               {error && <div className="settings-model-service-error" role="alert">{error}</div>}
               {!busy && (
                 <Button

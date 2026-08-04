@@ -23,6 +23,7 @@ from shejane_runtime.model_services import (
 from shejane_runtime.runs import RunCoordinator
 from shejane_runtime.server import create_app
 from shejane_runtime.store.sqlite import LocalStore
+from tests.helpers import run_command
 
 
 def test_model_service_presets_prioritize_china_and_expose_editable_addresses() -> None:
@@ -120,7 +121,7 @@ async def test_google_catalog_discovery_uses_native_models_endpoint(monkeypatch)
     ("preset_id", "trust_declarations"),
     [("shejane-official", True), ("custom", False)],
 )
-async def test_model_catalog_purposes_are_trusted_only_for_official_service(
+async def test_model_catalog_purposes_are_declared_only_for_official_service(
     monkeypatch,
     preset_id: str,
     trust_declarations: bool,
@@ -343,6 +344,36 @@ def test_legacy_verified_models_remain_agent_models() -> None:
     ]
 
 
+def test_official_image_capabilities_created_before_the_fix_are_restored() -> None:
+    models = server_module._model_connection_models(
+        {
+            "preset_id": "shejane-official",
+            "adapter_id": "openai_chat",
+            "base_url": "https://cloud.example.test/v1",
+            "models_json": json.dumps(
+                [
+                    {
+                        "model_id": "gpt-image-2",
+                        "display_name": "GPT Image 2",
+                        "source": "discovered",
+                        "verification": "unverified",
+                        "capabilities": [
+                            {
+                                "capability": "image_generation",
+                                "protocol": "openai_images_generations",
+                                "verification": "unverified",
+                            }
+                        ],
+                    }
+                ]
+            ),
+        }
+    )
+
+    assert models[0]["verification"] == "verified"
+    assert models[0]["capabilities"][0]["verification"] == "verified"
+
+
 def test_bundled_models_are_recommendations_not_preverified_connections() -> None:
     deepseek = model_service_preset("deepseek")
 
@@ -351,62 +382,6 @@ def test_bundled_models_are_recommendations_not_preverified_connections() -> Non
         "unverified",
         "unverified",
     ]
-
-
-@pytest.mark.asyncio
-async def test_bundled_models_are_verified_individually(monkeypatch) -> None:
-    attempted: list[str] = []
-
-    async def verify(**kwargs):
-        attempted.append(kwargs["model_id"])
-        if kwargs["model_id"] == "model-b":
-            raise server_module.HTTPException(status_code=409, detail="incompatible")
-
-    monkeypatch.setattr(server_module, "_verify_model_service_compatibility", verify)
-
-    models = await server_module._verify_bundled_model_catalog(
-        settings=reset_settings_for_tests(),
-        base_url="https://provider.example/v1",
-        adapter_id="openai_chat",
-        api_key="secret",
-        models=[
-            {
-                "model_id": "model-a",
-                "source": "bundled",
-                "verification": "unverified",
-            },
-            {"model_id": "model-b", "source": "bundled", "verification": "unverified"},
-            {"model_id": "model-c", "source": "discovered", "verification": "unverified"},
-            {
-                "model_id": "image-model",
-                "source": "bundled",
-                "verification": "unverified",
-                "capabilities": [
-                    {
-                        "capability": "image_generation",
-                        "protocol": "openai_images_generations",
-                        "verification": "unverified",
-                    }
-                ],
-            },
-        ],
-    )
-
-    assert attempted == ["model-a", "model-b"]
-    assert [model["verification"] for model in models] == [
-        "verified",
-        "unverified",
-        "unverified",
-        "unverified",
-    ]
-    assert models[0]["capabilities"] == [
-        {
-            "capability": "agent_chat",
-            "protocol": "openai_chat_completions",
-            "verification": "verified",
-        }
-    ]
-    assert models[3]["capabilities"][0]["capability"] == "image_generation"
 
 
 def test_catalog_refresh_preserves_manual_and_verified_models() -> None:
@@ -432,6 +407,20 @@ def test_catalog_refresh_preserves_manual_and_verified_models() -> None:
             "tool_calling": True,
             "source": "manual",
         },
+        {
+            "model_id": "image",
+            "verification": "unverified",
+            "streaming": False,
+            "tool_calling": False,
+            "source": "discovered",
+            "capabilities": [
+                {
+                    "capability": "image_generation",
+                    "protocol": "openai_images_generations",
+                    "verification": "unverified",
+                }
+            ],
+        },
     ]
     refreshed = [
         {
@@ -441,14 +430,29 @@ def test_catalog_refresh_preserves_manual_and_verified_models() -> None:
             "tool_calling": False,
             "source": "discovered",
         },
+        {
+            "model_id": "image",
+            "verification": "verified",
+            "streaming": False,
+            "tool_calling": False,
+            "source": "discovered",
+            "capabilities": [
+                {
+                    "capability": "image_generation",
+                    "protocol": "openai_images_generations",
+                    "verification": "verified",
+                }
+            ],
+        },
     ]
 
     merged = server_module._merge_refreshed_model_catalog(current, refreshed)
 
-    assert [model["model_id"] for model in merged] == ["verified", "manual"]
+    assert [model["model_id"] for model in merged] == ["verified", "image", "manual"]
     assert merged[0]["verification"] == "verified"
     assert merged[0]["streaming"] is True
     assert merged[0]["tool_calling"] is True
+    assert merged[1]["capabilities"][0]["verification"] == "verified"
 
 
 def test_model_service_presets_are_runtime_owned(
@@ -565,20 +569,10 @@ def credential_vault(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
         lambda _service, account: values.pop(account, None),
     )
 
-    async def verify_bundled(**kwargs):
-        return [
-            {
-                **model,
-                "verification": "verified" if model.get("source") == "bundled" else "unverified",
-            }
-            for model in kwargs["models"]
-        ]
-
-    monkeypatch.setattr(server_module, "_verify_bundled_model_catalog", verify_bundled)
     return values
 
 
-def test_official_model_service_connects_with_bundled_catalog_when_refresh_fails(
+def test_model_service_connection_makes_catalog_models_available_without_probe(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     credential_vault: dict[str, str],
@@ -593,6 +587,15 @@ def test_official_model_service_connects_with_bundled_catalog_when_refresh_fails
         return [dict(model) for model in kwargs["preset"]["models"]], "stale"
 
     monkeypatch.setattr(server_module, "_refresh_model_service_models", fail_refresh)
+
+    async def reject_compatibility_probe(**_kwargs):
+        pytest.fail("connecting a service must not run the model compatibility probe")
+
+    monkeypatch.setattr(
+        server_module,
+        "_verify_model_service_compatibility",
+        reject_compatibility_probe,
+    )
 
     with TestClient(create_app(settings)) as client:
         response = client.post(
@@ -615,6 +618,14 @@ def test_official_model_service_connects_with_bundled_catalog_when_refresh_fails
             "/v1/models",
             headers={"Authorization": "Bearer tok"},
         )
+        run = client.post(
+            "/v1/runs",
+            headers={"Authorization": "Bearer tok"},
+            json=run_command(
+                "say hi",
+                model=f"local:{connected['id']}:deepseek-v4-flash",
+            ),
+        )
 
     assert connected["preset_id"] == "deepseek"
     assert connected["name"] == "DeepSeek"
@@ -628,17 +639,15 @@ def test_official_model_service_connects_with_bundled_catalog_when_refresh_fails
         "deepseek-v4-pro",
     ]
     assert [model["verification"] for model in connected["models"]] == [
-        "verified",
-        "verified",
+        "unverified",
+        "unverified",
     ]
     assert connected["models"][0]["recommended"] is True
     assert connected["models"][1]["recommended"] is False
     assert "api_key" not in connected
     assert listed.json()["services"] == [connected]
-    assert [model["spec"] for model in models.json()["models"]] == [
-        f"local:{connected['id']}:deepseek-v4-flash",
-        f"local:{connected['id']}:deepseek-v4-pro",
-    ]
+    assert [model["available"] for model in models.json()["models"]] == [True, True]
+    assert run.status_code == 200
     assert list(credential_vault.values()) == ["deepseek-secret"]
 
 
@@ -662,8 +671,8 @@ def test_custom_model_service_detects_adapter_and_allows_manual_models(
                     "source": "discovered",
                     "verification": "unverified",
                     "recommended": False,
-                    "tool_calling": True,
-                    "streaming": True,
+                    "tool_calling": False,
+                    "streaming": False,
                     "image_inputs": False,
                 }
             ], "ready"
@@ -699,8 +708,19 @@ def test_custom_model_service_detects_adapter_and_allows_manual_models(
             "/v1/models",
             headers={"Authorization": "Bearer tok"},
         ).json()["models"]
+        gateway = next(model for model in catalog if model["model_id"] == "gateway-model")
         private = next(model for model in catalog if model["model_id"] == "private-model")
+        run = client.post(
+            "/v1/runs",
+            headers={"Authorization": "Bearer tok"},
+            json=run_command(
+                "say hi",
+                model=f"local:{connection['id']}:gateway-model",
+            ),
+        )
+        assert gateway["available"] is True
         assert private["available"] is False
+        assert run.status_code == 200
 
 
 def test_custom_model_service_reports_invalid_api_key_before_protocol_fallback(
@@ -804,6 +824,15 @@ def test_model_service_can_replace_its_api_key(
 
     monkeypatch.setattr(server_module, "_refresh_model_service_models", refresh)
 
+    async def reject_compatibility_probe(**_kwargs):
+        pytest.fail("reconnecting a service must not run the model compatibility probe")
+
+    monkeypatch.setattr(
+        server_module,
+        "_verify_model_service_compatibility",
+        reject_compatibility_probe,
+    )
+
     with TestClient(create_app(settings)) as client:
         connection = client.post(
             "/v1/model-services",
@@ -823,6 +852,10 @@ def test_model_service_can_replace_its_api_key(
     assert replaced.json()["credential_configured"] is True
     assert replaced.json()["base_url"] == "https://gateway.example/v1"
     assert replaced.json()["version"] == connection["version"] + 1
+    assert [model["verification"] for model in replaced.json()["models"]] == [
+        "unverified",
+        "unverified",
+    ]
     assert seen_keys == ["old-secret", "new-secret"]
     assert seen_base_urls == [
         "https://api.deepseek.com/v1",
@@ -1146,9 +1179,11 @@ async def test_compatibility_verification_completes_model_tool_model_loop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     rounds: list[list] = []
+    bound_options: list[dict] = []
 
     class ProbeModel:
-        def bind(self, **_kwargs):
+        def bind(self, **kwargs):
+            bound_options.append(kwargs)
             return self
 
         def bind_tools(self, tools, **_kwargs):
@@ -1176,6 +1211,7 @@ async def test_compatibility_verification_completes_model_tool_model_loop(
     )
 
     assert len(rounds) == 2
+    assert bound_options == [{"max_tokens": 512}]
     assert rounds[1][1].additional_kwargs["reasoning_content"] == "keep me"
     assert rounds[1][1].tool_calls[0]["name"] == "shejane_ping"
     assert isinstance(rounds[1][2], ToolMessage)
@@ -1295,6 +1331,35 @@ async def test_compatibility_verification_classifies_provider_failures(
 
     assert exc_info.value.status_code == expected_status
     assert exc_info.value.detail["code"] == expected_code
+
+
+@pytest.mark.asyncio
+async def test_compatibility_verification_reports_timeout_as_provider_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ProbeModel:
+        def bind(self, **_kwargs):
+            return self
+
+        def bind_tools(self, _tools, **_kwargs):
+            return self
+
+        async def ainvoke(self, _messages):
+            raise TimeoutError
+
+    monkeypatch.setattr(server_module, "_build_byok_chat_model", lambda **_kwargs: ProbeModel())
+
+    with pytest.raises(server_module.HTTPException) as exc_info:
+        await server_module._verify_model_service_compatibility(
+            settings=reset_settings_for_tests(),
+            base_url="https://gateway.example/v1",
+            adapter_id="openai_chat",
+            api_key="secret",
+            model_id="model",
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail["code"] == "provider_unavailable"
 
 
 def test_deepseek_v4_verification_does_not_force_tool_choice(
@@ -1495,7 +1560,7 @@ def test_google_generate_content_protocol_uses_native_google_adapter(monkeypatch
     assert captured["output_version"] == "v1"
 
 
-def test_manual_model_becomes_available_only_after_compatibility_verification(
+def test_manual_compatibility_test_records_result_without_gating_availability(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     credential_vault: dict[str, str],
@@ -1507,7 +1572,20 @@ def test_manual_model_becomes_available_only_after_compatibility_verification(
     monkeypatch.setattr(RunCoordinator, "start", lambda _self: None)
 
     async def detected(**kwargs):
-        return [], "ready" if kwargs["adapter_id"] == "openai_chat" else "unavailable"
+        if kwargs["adapter_id"] != "openai_chat":
+            return [], "unavailable"
+        return [
+            {
+                "model_id": "private-model",
+                "display_name": "Private Model",
+                "source": "discovered",
+                "verification": "unverified",
+                "recommended": False,
+                "tool_calling": False,
+                "streaming": False,
+                "image_inputs": False,
+            }
+        ], "ready"
 
     async def compatible(**_kwargs):
         return None
@@ -1526,11 +1604,10 @@ def test_manual_model_becomes_available_only_after_compatibility_verification(
                 "api_key": "secret",
             },
         ).json()
-        client.post(
-            f"/v1/model-services/{connection['id']}/models",
+        before = client.get(
+            "/v1/models",
             headers={"Authorization": "Bearer tok"},
-            json={"model_id": "private-model"},
-        )
+        ).json()["models"]
 
         verified = client.post(
             f"/v1/model-services/{connection['id']}/models/private-model/verify",
@@ -1545,6 +1622,8 @@ def test_manual_model_becomes_available_only_after_compatibility_verification(
             headers={"Authorization": "Bearer tok"},
         ).json()["models"]
 
+    assert before[0]["available"] is True
+    assert before[0]["verification"] == "unverified"
     assert verified.status_code == 200
     assert verified.json()["verification"] == "verified"
     assert verified.json()["capabilities"] == [
@@ -1555,6 +1634,7 @@ def test_manual_model_becomes_available_only_after_compatibility_verification(
         }
     ]
     assert catalog[0]["available"] is True
+    assert catalog[0]["verification"] == "verified"
 
 
 def test_image_generation_model_uses_images_endpoint_and_stays_out_of_agent_catalog(
