@@ -54,6 +54,7 @@ async def test_accepting_a_command_atomically_creates_one_pending_job(tmp_path: 
 
 async def test_terminal_diagnostics_runs_after_commit_and_cannot_fail_the_run(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     store = await LocalStore.open(tmp_path / "local.db")
     started = asyncio.Event()
@@ -90,12 +91,17 @@ async def test_terminal_diagnostics_runs_after_commit_and_cannot_fail_the_run(
         committed = await store.get_run(str(run["id"]))
         assert committed is not None
         assert committed["status"] == "completed"
+
+        stopping = asyncio.create_task(coordinator.stop())
+        await asyncio.sleep(0)
+        assert stopping.done() is False
         release.set()
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
+        await asyncio.wait_for(stopping, timeout=1)
+
         persisted = await store.get_run(str(run["id"]))
         assert persisted is not None
         assert persisted["status"] == "completed"
+        assert f"run_id={run['id']}" in caplog.text
     finally:
         release.set()
         await store.close()

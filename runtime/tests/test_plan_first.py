@@ -55,6 +55,13 @@ def test_looks_complex_short_simple_message() -> None:
     assert _looks_complex([HumanMessage(content="what time is it?")]) is False
 
 
+def test_informational_how_to_question_is_not_complex_execution() -> None:
+    assert (
+        _looks_complex([HumanMessage(content="帮我搜索一下 swift 如何实现 view 的内阴影？")])
+        is False
+    )
+
+
 def test_looks_complex_no_user_message() -> None:
     assert _looks_complex([]) is False
 

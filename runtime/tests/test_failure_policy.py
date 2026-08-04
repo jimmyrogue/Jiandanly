@@ -40,6 +40,18 @@ def test_transient_failures_remain_retryable() -> None:
     assert should_retry_failure_payload("run.failed", failure) is True
 
 
+def test_api_connection_error_is_a_retryable_transient_failure() -> None:
+    failure = classify_failure_payload(
+        "run.failed",
+        {"error_code": "APIConnectionError", "error": "Connection error."},
+    )
+
+    assert failure["category"] == "transient"
+    assert failure["recoverable"] is True
+    assert failure["retryable"] is True
+    assert failure["action_kind"] == "retry"
+
+
 def test_model_call_budget_exhaustion_is_an_operator_failure() -> None:
     failure = classify_failure_payload(
         "run.failed",

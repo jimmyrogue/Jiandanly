@@ -94,6 +94,8 @@ def classify_failure_payload(event_type: str, payload: dict[str, Any]) -> dict[s
         "502",
         "503",
         "504",
+        "apiconnectionerror",
+        "connection error",
         "connection reset",
         "network",
         "unreachable",

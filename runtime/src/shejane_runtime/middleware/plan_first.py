@@ -65,6 +65,11 @@ _EXPLICIT_TOOL_DIRECTIVE = re.compile(
     re.IGNORECASE,
 )
 _NEGATED_DIRECTIVE = re.compile(r"(?:do\s+not|don't|never)\s*$", re.IGNORECASE)
+_INFORMATIONAL_HOW_TO = re.compile(
+    r"\bhow\s+to\s+(?:write|build|implement|design)\b"
+    r"|(?:如何|怎么|怎样)[^，。！？?\n]{0,48}(?:创建|编写|实现|设计|构建)",
+    re.IGNORECASE,
+)
 
 
 class PlanFirstState(AgentState):
@@ -142,7 +147,7 @@ def _looks_complex(messages: list[Any]) -> bool:
         return False
     if len(text) >= AUTO_COMPLEX_CHARS:
         return True
-    lower = text.lower()
+    lower = _INFORMATIONAL_HOW_TO.sub("", text.lower())
     return any(hint in lower for hint in COMPLEXITY_HINTS)
 
 

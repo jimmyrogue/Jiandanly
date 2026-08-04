@@ -372,6 +372,8 @@ make package-runtime
 工具名称和脱敏失败分类，不含 prompt、输出、工具参数/结果、文件名/路径、模型 ID 或任一凭据。
 Runtime 跟踪诊断凭据过期时间，过期时从固定官方连接续签，ingestion `401` 只立即续签重试一次；
 这不是离线重试队列。Cloud 和 LangSmith 不可用不得改变或延迟 Agent Run。
+Runtime 正常关闭时会在现有关闭期限内等待已启动的终态上报；失败日志只记录本地 Run ID、
+终态和错误类型，不记录远端响应正文或用户内容。
 
 Electron crash reporter 与 Agent 诊断完全分离。当前只在操作系统 crash 目录本地收集 dump，
 `uploadToServer=false`；Runtime native fault 写入同一私有目录，Launcher 和更新器只追加固定枚举

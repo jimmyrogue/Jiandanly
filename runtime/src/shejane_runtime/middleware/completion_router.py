@@ -837,10 +837,14 @@ _PROSE_CLARIFICATION = re.compile(
     r"|\bplease\s+(?:provide|choose|confirm|specify|tell)\b",
     re.IGNORECASE,
 )
+_NON_BLOCKING_OFFER = re.compile(
+    r"\b(?:how|what)\s+can\s+i\s+(?:help|assist)(?:\s+you)?(?:\s+with)?\b",
+    re.IGNORECASE,
+)
 
 
 def _is_prose_clarification(text: str) -> bool:
-    value = " ".join(text.split())
+    value = _NON_BLOCKING_OFFER.sub("", " ".join(text.split()))
     return ("?" in value or "？" in value) and _PROSE_CLARIFICATION.search(value) is not None
 
 

@@ -670,6 +670,7 @@ class RunCoordinator:
         self.plugin_catalog = plugin_catalog or PluginCatalog(self.settings.data_dir)
         self._terminal_callback = terminal_callback
         self._tasks: dict[str, asyncio.Task[Any]] = {}
+        self._terminal_callback_tasks: set[asyncio.Task[None]] = set()
         self._wakeups: dict[str, asyncio.Event] = {}
         self._live_subscribers: dict[str, set[asyncio.Queue[dict[str, Any]]]] = {}
         self._stream_locks: dict[str, asyncio.Lock] = {}
@@ -720,16 +721,26 @@ class RunCoordinator:
                 pass
             self._dispatcher_task = None
         tasks = list(self._tasks.values())
-        if not tasks:
-            return
-        for task in tasks:
-            task.cancel()
-        _done, pending = await asyncio.wait(tasks, timeout=RUN_SHUTDOWN_TIMEOUT_SECONDS)
-        if pending:
-            raise RuntimeError(
-                "runtime shutdown could not confirm cleanup for "
-                f"{len(pending)} execution attempt(s)"
+        if tasks:
+            for task in tasks:
+                task.cancel()
+            _done, pending = await asyncio.wait(tasks, timeout=RUN_SHUTDOWN_TIMEOUT_SECONDS)
+            if pending:
+                raise RuntimeError(
+                    "runtime shutdown could not confirm cleanup for "
+                    f"{len(pending)} execution attempt(s)"
+                )
+        callbacks = set(self._terminal_callback_tasks)
+        if callbacks:
+            _done, pending = await asyncio.wait(
+                callbacks,
+                timeout=RUN_SHUTDOWN_TIMEOUT_SECONDS,
             )
+            if pending:
+                log.warning("central diagnostics shutdown timed out pending=%s", len(pending))
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
 
     async def emit_for_run(
         self,
@@ -3603,7 +3614,14 @@ class RunCoordinator:
                 self._terminal_callback(run_id, status, payload),
                 name=f"central-diagnostics:{run_id}",
             )
-            task.add_done_callback(self._terminal_callback_finished)
+            self._terminal_callback_tasks.add(task)
+            task.add_done_callback(
+                lambda completed: self._terminal_callback_finished(
+                    completed,
+                    run_id=run_id,
+                    status=status,
+                )
+            )
         if status in {"waiting_permission", "waiting_input"}:
             resume_payload = await self.store.latest_resolved_wait_cycle_payload(run_id)
             if resume_payload is not None:
@@ -3617,14 +3635,25 @@ class RunCoordinator:
         if wakeup is not None:
             wakeup.set()
 
-    @staticmethod
-    def _terminal_callback_finished(task: asyncio.Task[None]) -> None:
+    def _terminal_callback_finished(
+        self,
+        task: asyncio.Task[None],
+        *,
+        run_id: str,
+        status: str,
+    ) -> None:
+        self._terminal_callback_tasks.discard(task)
         try:
             task.result()
         except asyncio.CancelledError:
             pass
         except Exception as exc:
-            log.warning("central diagnostics upload failed: %s", type(exc).__name__)
+            log.warning(
+                "central diagnostics upload failed run_id=%s status=%s error_type=%s",
+                run_id,
+                status,
+                type(exc).__name__,
+            )
 
     @staticmethod
     def _stored_event_envelope(event: dict[str, Any]) -> dict[str, Any]:

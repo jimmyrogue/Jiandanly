@@ -490,6 +490,24 @@ async def test_completion_router_does_not_review_a_plain_chat_answer() -> None:
     assert reviewer.calls == 0
 
 
+async def test_completion_router_accepts_a_courtesy_greeting_question() -> None:
+    from shejane_runtime.middleware.completion_router import CompletionRouterMiddleware
+
+    state = {
+        "messages": [
+            HumanMessage(
+                content="hello",
+                additional_kwargs={"runtime_kind": "task_input", "runtime_run_id": "run-chat"},
+            ),
+            AIMessage(content="Hello! How can I help you today?"),
+        ]
+    }
+
+    result = await CompletionRouterMiddleware().aafter_model(state, runtime=None)
+
+    assert result["completion_route"]["decision"] == "final"
+
+
 async def test_completion_router_does_not_repair_a_truthfully_reported_tool_failure() -> None:
     from shejane_runtime.middleware.completion_router import CompletionRouterMiddleware
 

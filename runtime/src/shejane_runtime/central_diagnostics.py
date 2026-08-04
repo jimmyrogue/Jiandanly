@@ -447,7 +447,9 @@ class CentralDiagnosticsManager:
             "output_tokens": _bounded_tokens(usage.get("output_tokens")),
         }
         if status in {"failed", "cleanup_required"}:
-            category = str(payload.get("category") or "unknown_failure")
+            category = str(
+                payload.get("failure_category") or payload.get("category") or "unknown_failure"
+            )
             event["failure_category"] = (
                 category if category in _FAILURE_CATEGORIES else "unknown_failure"
             )

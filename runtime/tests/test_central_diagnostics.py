@@ -197,7 +197,8 @@ async def test_terminal_upload_contains_only_allowlisted_metadata(
         status="failed",
         payload={
             "error": "private prompt and provider response",
-            "category": "provider_unavailable",
+            "category": "unknown",
+            "failure_category": "model_output",
             "final_text": "private output",
             "execution": {"attempt_id": "job-id:1"},
         },
@@ -223,7 +224,7 @@ async def test_terminal_upload_contains_only_allowlisted_metadata(
         "tool_names": ["read_file"],
         "input_tokens": 120,
         "output_tokens": 30,
-        "failure_category": "provider_unavailable",
+        "failure_category": "model_output",
     }
     serialized = request.content.decode()
     for secret in (
