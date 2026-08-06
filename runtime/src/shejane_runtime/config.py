@@ -191,7 +191,7 @@ class Settings(BaseSettings):
     #   input_guard_mode: observe | block
     #   plan_first_mode:  off | auto | always
     input_guard_mode: str = Field(default="observe", alias="SHEJANE_RUNTIME_INPUT_GUARD")
-    plan_first_mode: str = Field(default="auto", alias="SHEJANE_PLAN_FIRST")
+    plan_first_mode: str = Field(default="off", alias="SHEJANE_PLAN_FIRST")
 
     # Compatibility deployment policy. Applied only to the outbound request
     # copy for external providers; it never rewrites LangGraph state.

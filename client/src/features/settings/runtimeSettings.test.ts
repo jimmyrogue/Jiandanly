@@ -32,10 +32,10 @@ describe('Runtime settings projection', () => {
   it('updates only changed fields and restores cleared fields to Runtime defaults', () => {
     expect(advancedSettingsPatchToRuntime(
       { maxModelCalls: 9, planFirst: 'always', subagents: true },
-      { planFirst: 'auto', subagents: true },
+      { subagents: true },
     )).toEqual({
       max_model_calls: 100,
-      plan_first: 'auto',
+      plan_first: 'off',
     })
   })
 })

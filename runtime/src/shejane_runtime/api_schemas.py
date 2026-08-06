@@ -88,7 +88,7 @@ class RuntimeSettingsResponse(BaseModel):
     browser_headless: bool = True
     subagents: bool = True
     input_guard: Literal["off", "observe", "block"] = "observe"
-    plan_first: Literal["off", "auto", "always"] = "auto"
+    plan_first: Literal["off", "auto", "always"] = "off"
     verification_repair_max: int = Field(default=1, ge=0, le=3)
     repair_workflow_max: int = Field(default=3, ge=0, le=5)
     pii_redact: str = Field(default="", max_length=200)

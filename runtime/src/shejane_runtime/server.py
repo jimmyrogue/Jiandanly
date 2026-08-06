@@ -4773,9 +4773,9 @@ def _diagnostics_execution_policy(run: dict[str, Any]) -> dict[str, Any]:
         and stored_policy.get("complexity") in {"simple", "complex"}
         else execution_policy_for_task(str(run.get("goal") or ""))
     )
-    plan_mode = str(settings.get("plan_first") or "auto")
+    plan_mode = str(settings.get("plan_first") or "off")
     if plan_mode not in {"off", "auto", "always"}:
-        plan_mode = "auto"
+        plan_mode = "off"
     configured_model_calls = settings.get("max_model_calls")
     max_model_calls = (
         int(configured_model_calls)

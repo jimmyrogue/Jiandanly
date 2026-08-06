@@ -14,10 +14,10 @@ from shejane_runtime.middleware.plan_first import (
 # --- mode parsing ---
 
 
-def test_mode_auto_by_default(monkeypatch) -> None:
+def test_mode_off_by_default(monkeypatch) -> None:
     monkeypatch.delenv("SHEJANE_PLAN_FIRST", raising=False)
     mw = PlanFirstMiddleware()
-    assert mw.mode == "auto"
+    assert mw.mode == "off"
 
 
 def test_mode_always_synonyms(monkeypatch) -> None:

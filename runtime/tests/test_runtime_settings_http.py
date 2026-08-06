@@ -42,6 +42,7 @@ def test_old_persisted_default_budgets_migrate_without_user_action(
     assert response.status_code == 200
     assert response.json()["max_model_calls"] == 100
     assert response.json()["research_search_limit"] == 10
+    assert response.json()["plan_first"] == "off"
 
 
 def test_runtime_settings_persist_and_freeze_into_new_runs(

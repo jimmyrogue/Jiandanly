@@ -7,7 +7,7 @@ or finalization; no injected prose is treated as a control boundary.
 Modes (env SHEJANE_PLAN_FIRST):
   off / 0           — disabled
   on / always / 1   — every run requires incremental execution
-  auto              — only complex tasks require it (default)
+  auto              — only complex tasks require it
                       (heuristic: user message length / word count)
 
 TodoListMiddleware still exposes ``write_todos``. This module decides when
@@ -85,7 +85,7 @@ class PlanFirstMiddleware(AgentMiddleware):
         super().__init__()
         # Lock the mode at construction time so a single run sees a
         # consistent decision — env reads at before_agent could race.
-        resolved = (mode or os.environ.get("SHEJANE_PLAN_FIRST", "auto")).lower().strip()
+        resolved = (mode or os.environ.get("SHEJANE_PLAN_FIRST", "off")).lower().strip()
         if resolved in {"1", "true", "yes", "on", "always"}:
             self.mode = "always"
         elif resolved == "auto":

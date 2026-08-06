@@ -11,7 +11,7 @@ const runtimeDefaults = {
   subagents: true,
   browserHeadless: true,
   inputGuard: 'observe' as const,
-  planFirst: 'auto' as const,
+  planFirst: 'off' as const,
 }
 
 /** Project Runtime-owned persisted defaults into the Client settings form. */

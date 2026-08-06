@@ -4266,7 +4266,7 @@ export interface components {
             pii_redact: string;
             /**
              * Plan First
-             * @default auto
+             * @default off
              * @enum {string}
              */
             plan_first: "off" | "auto" | "always";

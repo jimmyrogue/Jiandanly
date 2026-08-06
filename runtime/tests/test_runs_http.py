@@ -2584,7 +2584,7 @@ def test_run_diagnostics_include_handoff_summary(client: TestClient) -> None:
     assert body["build"]["protocol_version"] == 1
     assert body["execution_policy"] == {
         "complexity": "simple",
-        "plan_mode": "auto",
+        "plan_mode": "off",
         "plan_required": False,
         "subagent_allowed": False,
         "reason": "simple_task",
