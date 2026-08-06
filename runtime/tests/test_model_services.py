@@ -177,6 +177,62 @@ async def test_model_catalog_purposes_are_declared_only_for_official_service(
 
 
 @pytest.mark.asyncio
+async def test_official_catalog_keeps_known_agent_capabilities_and_limits(monkeypatch) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://cloud.example.test/v1/models"
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "id": "deepseek-v4-flash",
+                        "capabilities": ["agent_chat"],
+                        "recommended_for": ["agent_chat"],
+                    }
+                ]
+            },
+        )
+
+    class PatchedClient(httpx.AsyncClient):
+        def __init__(self, **kwargs) -> None:
+            super().__init__(transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(server_module.httpx, "AsyncClient", PatchedClient)
+    preset = model_service_preset("shejane-official")
+    assert preset is not None
+
+    models, status = await server_module._refresh_model_service_models(
+        preset=preset,
+        base_url="https://cloud.example.test/v1",
+        adapter_id="openai_chat",
+        api_key="inference-token",
+    )
+
+    assert status == "ready"
+    assert models == [
+        {
+            "model_id": "deepseek-v4-flash",
+            "display_name": "deepseek-v4-flash",
+            "capabilities": [
+                {
+                    "capability": "agent_chat",
+                    "protocol": "openai_chat_completions",
+                    "verification": "unverified",
+                }
+            ],
+            "tool_calling": True,
+            "streaming": True,
+            "image_inputs": False,
+            "max_input_tokens": 1_000_000,
+            "max_output_tokens": 384_000,
+            "source": "discovered",
+            "verification": "unverified",
+            "recommended": True,
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_model_connection_store_accepts_native_google_adapter(tmp_path: Path) -> None:
     store = await LocalStore.open(tmp_path / "runtime.db")
     try:
@@ -372,6 +428,40 @@ def test_official_image_capabilities_created_before_the_fix_are_restored() -> No
 
     assert models[0]["verification"] == "verified"
     assert models[0]["capabilities"][0]["verification"] == "verified"
+
+
+def test_official_deepseek_agent_capabilities_created_before_the_fix_are_restored() -> None:
+    models = server_module._model_connection_models(
+        {
+            "preset_id": "shejane-official",
+            "adapter_id": "openai_chat",
+            "base_url": "https://cloud.example.test/v1",
+            "models_json": json.dumps(
+                [
+                    {
+                        "model_id": "deepseek-v4-flash",
+                        "display_name": "DeepSeek V4 Flash",
+                        "source": "discovered",
+                        "verification": "unverified",
+                        "tool_calling": False,
+                        "streaming": False,
+                        "capabilities": [
+                            {
+                                "capability": "agent_chat",
+                                "protocol": "openai_chat_completions",
+                                "verification": "unverified",
+                            }
+                        ],
+                    }
+                ]
+            ),
+        }
+    )
+
+    assert models[0]["tool_calling"] is True
+    assert models[0]["streaming"] is True
+    assert models[0]["max_input_tokens"] == 1_000_000
+    assert models[0]["max_output_tokens"] == 384_000
 
 
 def test_bundled_models_are_recommendations_not_preverified_connections() -> None:

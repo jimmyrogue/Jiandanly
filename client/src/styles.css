@@ -4725,38 +4725,6 @@ button:active {
   padding: 0;
 }
 
-.message-reasoning {
-  margin: 0 0 10px;
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-.message-reasoning summary {
-  width: fit-content;
-  cursor: pointer;
-  color: var(--text-secondary);
-  font-weight: 500;
-  user-select: none;
-}
-
-.message-reasoning summary:hover {
-  color: var(--text-primary);
-}
-
-.message-reasoning-body {
-  max-height: 320px;
-  margin-top: 8px;
-  overflow: auto;
-  padding: 0 4px 0 16px;
-  color: var(--text-secondary);
-  font-family: inherit;
-  font-size: 12px;
-  line-height: 1.65;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
 /* Per-message footer: copy, usage, and relative time. It stays in normal
  * flow so the next message can never cover it. */
 .message-meta {
@@ -9812,6 +9780,158 @@ button.settings-row-button:focus-visible,
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ring) 42%, transparent);
 }
 
+.run-process {
+  width: min(520px, 100%);
+  margin-top: 14px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.run-process-title,
+.run-process-summary,
+.run-process-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.run-process-title {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.run-process-summary {
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  padding: 2px 0;
+  cursor: pointer;
+  font: inherit;
+}
+
+.run-process-summary:hover {
+  color: var(--text-secondary);
+}
+
+.run-process-summary:focus-visible {
+  border-radius: 4px;
+  box-shadow: var(--focus-ring);
+  outline: none;
+}
+
+.run-process-items {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 9px;
+  border-left: 0.5px solid var(--border-hairline);
+  padding-left: 12px;
+}
+
+.run-process-completed .run-process-items {
+  max-height: min(320px, 48vh);
+  overflow-y: auto;
+}
+
+.run-process-item {
+  min-width: 0;
+  content-visibility: auto;
+  contain-intrinsic-size: 0 24px;
+}
+
+.run-process-narrative {
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.run-process-item-marker {
+  width: 4px;
+  height: 4px;
+  flex: 0 0 4px;
+  border-radius: 999px;
+  background: var(--text-tertiary);
+}
+
+.run-process-narrative.is-active .run-process-item-marker {
+  background: var(--accent-success);
+}
+
+.run-process-activity {
+  color: var(--text-tertiary);
+}
+
+.run-process-decision {
+  color: var(--text-secondary);
+}
+
+.run-process-decision[data-status='waiting'] {
+  color: var(--sj-seal);
+}
+
+.run-process-notice {
+  color: var(--accent-danger-text);
+}
+
+.run-process-artifact {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.run-process-artifact:hover .run-process-tool-name {
+  color: var(--text-primary);
+}
+
+.run-process-artifact:focus-visible {
+  border-radius: 4px;
+  box-shadow: var(--focus-ring);
+  outline: none;
+}
+
+.run-process-reasoning {
+  color: var(--text-tertiary);
+}
+
+.run-process-reasoning summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.run-process-reasoning p {
+  margin: 7px 0 0;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.run-process-activity[data-status='failed'],
+.run-process-activity[data-status='unknown'] {
+  color: var(--accent-danger-text);
+}
+
+.run-process-tool-name {
+  overflow: hidden;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-process-status {
+  margin-left: auto;
+  color: inherit;
+}
+
+.run-process-spinner {
+  animation: run-process-spin 900ms linear infinite;
+}
+
+@keyframes run-process-spin {
+  to { transform: rotate(360deg); }
+}
+
 .agent-progress-expanded-body {
   max-height: min(260px, 46vh);
   overflow-y: auto;
@@ -10553,6 +10673,10 @@ button.settings-row-button:focus-visible,
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .run-process-spinner {
+    animation: none !important;
+  }
+
   .sj-motion-overlay,
   .sj-motion-dialog,
   .sj-motion-popover,

@@ -1,14 +1,18 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
+  applyRunPresentationChange,
   createLocalRun,
+  createRunPresentationState,
   deliverPendingRuntimeCommands,
   fetchRunInput,
   getLocalArtifactContent,
+  getLocalThreadSnapshot,
   getLocalCollaborationSnapshot,
   getCentralDiagnostics,
   getLocalRun,
   importModelService,
+  isRunPresentationChange,
   isSubagentLifecycleEvent,
   parseAgentSSEBuffer,
   parseRuntimeModelSpec,
@@ -27,6 +31,7 @@ import {
   updateCentralDiagnostics,
   verifyModelServiceModel,
 } from './index'
+import type { RunPresentationSnapshot } from './index'
 
 describe('durable child runs', () => {
   const child = {
@@ -910,6 +915,192 @@ describe('SheJaneRuntimeClient', () => {
       event_type: 'subagent.spawned',
       payload: { id: 'legacy-stream-chunk', args_delta: '{' },
     })).toBe(false)
+  })
+})
+
+describe('run presentation adapter', () => {
+  const progress = {
+    id: 'round:model-call-1:progress',
+    kind: 'progress',
+    status: 'completed',
+    order: { event_seq: 2, slot: 0 },
+    revision: 2,
+    source: { kind: 'run_event', id: 'event-2' },
+    text: 'Inspecting files.',
+    created_at: '2026-08-04T00:00:00Z',
+  } as const
+  const snapshot = {
+    schema_version: 1,
+    run_id: 'run-1',
+    items: [progress],
+    event_high_watermark: 2,
+  } as RunPresentationSnapshot
+
+  it('upserts replay and live items without duplicates or order drift', () => {
+    let state = createRunPresentationState(snapshot)
+    state = applyRunPresentationChange(state, { kind: 'item.upsert', item: progress })
+    state = applyRunPresentationChange(state, {
+      kind: 'item.upsert',
+      item: {
+        id: 'receipt:tool-1',
+        kind: 'tool',
+        status: 'in_progress',
+        order: { event_seq: 3, slot: 0 },
+        revision: 3,
+        source: { kind: 'tool_receipt', id: 'tool-1' },
+        tool_call_id: 'call-1',
+        tool_name: 'read_file',
+        risk: 'read_only',
+        created_at: '2026-08-04T00:00:01Z',
+        updated_at: '2026-08-04T00:00:01Z',
+        completed_at: null,
+      },
+    })
+    state = applyRunPresentationChange(state, {
+      kind: 'item.upsert',
+      item: {
+        ...state.snapshot.items[1],
+        status: 'completed',
+        revision: 4,
+        updated_at: '2026-08-04T00:00:02Z',
+        completed_at: '2026-08-04T00:00:02Z',
+      },
+    })
+
+    expect(state.snapshot.items.map(item => item.id)).toEqual([
+      'round:model-call-1:progress',
+      'receipt:tool-1',
+    ])
+    expect(state.snapshot.items[1]?.status).toBe('completed')
+    expect(state.snapshot.event_high_watermark).toBe(4)
+  })
+
+  it('tracks disposable draft deltas and closes them on commit', () => {
+    let state = createRunPresentationState(snapshot)
+    state = applyRunPresentationChange(state, {
+      kind: 'draft.delta',
+      round_id: 'model-call-2',
+      content: 'Inspect',
+    })
+    state = applyRunPresentationChange(state, {
+      kind: 'draft.closed',
+      round_id: 'model-call-2',
+      committed_item_ids: ['round:model-call-2:progress'],
+    })
+
+    expect(state.drafts).toEqual({})
+  })
+
+  it('rejects malformed presentation changes at the SSE boundary', () => {
+    expect(isRunPresentationChange({ kind: 'item.upsert', item: progress })).toBe(true)
+    expect(isRunPresentationChange({ kind: 'item.upsert', item: { id: 'missing-fields' } }))
+      .toBe(false)
+    expect(isRunPresentationChange({ kind: 'draft.delta', round_id: '', content: 'x' }))
+      .toBe(false)
+    expect(isRunPresentationChange({
+      kind: 'item.upsert',
+      item: {
+        id: 'answer-missing-content',
+        kind: 'final_answer',
+        status: 'completed',
+        order: { event_seq: 1, slot: 0 },
+        revision: 1,
+        source: { kind: 'thread_item', id: 'assistant-1' },
+        created_at: '2026-08-04T00:00:00Z',
+        completed_at: '2026-08-04T00:00:01Z',
+      },
+    })).toBe(false)
+    expect(isRunPresentationChange({
+      kind: 'item.upsert',
+      item: { ...progress, revision: 0 },
+    })).toBe(false)
+    expect(isRunPresentationChange({
+      kind: 'item.upsert',
+      item: {
+        id: 'tool-with-optional-time-omitted',
+        kind: 'tool',
+        status: 'in_progress',
+        order: { event_seq: 1, slot: 0 },
+        revision: 1,
+        source: { kind: 'tool_receipt', id: 'toolop-1' },
+        tool_call_id: 'call-1',
+        tool_name: 'read_file',
+        risk: 'read_only',
+        created_at: '2026-08-04T00:00:00Z',
+        updated_at: '2026-08-04T00:00:00Z',
+      },
+    })).toBe(true)
+  })
+
+  it('validates multiple presentation changes on one event', () => {
+    const [parsed] = parseAgentSSEBuffer(
+      `data: ${JSON.stringify({
+        event_type: 'assistant.round.committed',
+        presentation_changes: [
+          { kind: 'item.upsert', item: progress },
+          { kind: 'draft.closed', round_id: 'model-call-1', committed_item_ids: [progress.id] },
+        ],
+      })}\n\n`,
+    ).events
+
+    expect(parsed?.type).toBe('agent')
+    expect(() => parseAgentSSEBuffer(
+      'data: {"event_type":"assistant.round.committed","presentation_changes":[]}\n\n',
+    )).toThrow(/presentation_changes/)
+  })
+
+  it('keeps the newest complete presentation when a run spans snapshot pages', async () => {
+    const finalAnswer = {
+      id: 'answer:assistant-1',
+      kind: 'final_answer',
+      status: 'completed',
+      order: { event_seq: 2, slot: 0 },
+      revision: 2,
+      source: { kind: 'thread_item', id: 'assistant-1' },
+      content: 'Complete answer.',
+      created_at: '2026-08-04T00:00:00Z',
+      completed_at: '2026-08-04T00:00:01Z',
+    }
+    const base = {
+      thread: { id: 'thread-1', version: 1 },
+      runs: [],
+      events: [],
+      event_high_watermarks: { 'run-1': 2 },
+      cursor: 1,
+      events_truncated: false,
+    }
+    const pages = [
+      {
+        ...base,
+        items: [{ id: 'assistant-1', position: 2 }],
+        presentations: {
+          'run-1': { schema_version: 1, run_id: 'run-1', items: [finalAnswer], event_high_watermark: 2 },
+        },
+        has_more_items: true,
+        next_before_position: 2,
+      },
+      {
+        ...base,
+        items: [{ id: 'user-1', position: 1 }],
+        presentations: {
+          'run-1': { schema_version: 1, run_id: 'run-1', items: [], event_high_watermark: 2 },
+        },
+        has_more_items: false,
+        next_before_position: null,
+      },
+    ]
+    const fetcher = vi.fn(async () => new Response(JSON.stringify(pages.shift()), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+
+    const snapshot = await getLocalThreadSnapshot(
+      'thread-1',
+      { baseURL: 'http://runtime.test', token: 'token' },
+      fetcher,
+    )
+
+    expect(snapshot.presentations?.['run-1']?.items).toEqual([finalAnswer])
   })
 })
 

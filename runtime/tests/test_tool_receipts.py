@@ -1407,6 +1407,64 @@ async def test_task_failure_is_not_misclassified_as_unknown_external_outcome(
 
 
 @pytest.mark.asyncio
+async def test_child_lookup_error_returns_a_replayable_tool_failure(tmp_path: Path) -> None:
+    store, run = await _store_and_run(tmp_path)
+
+    async def handler(_request: ToolCallRequest) -> ToolMessage:
+        raise KeyError("child run not found: invented-id")
+
+    try:
+        request = _request(
+            store,
+            str(run["id"]),
+            tool_name="child.check",
+            arguments={"run_ids": ["invented-id"]},
+        )
+        middleware = ToolExecutionMiddleware()
+
+        first = await middleware.awrap_tool_call(request, handler)
+        replayed = await middleware.awrap_tool_call(request, handler)
+
+        assert isinstance(first, ToolMessage)
+        assert first.status == "error"
+        assert json.loads(str(first.content)) == {
+            "ok": False,
+            "error_code": "child_run_not_found",
+            "message": "child run not found",
+            "retryable": False,
+        }
+        assert replayed == first
+        receipt = (await store.list_tool_receipts_for_run(str(run["id"])))[0]
+        assert receipt["status"] == "failed"
+        assert receipt["error_type"] == "KeyError"
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_child_internal_key_error_is_not_misclassified_as_missing_run(
+    tmp_path: Path,
+) -> None:
+    store, run = await _store_and_run(tmp_path)
+
+    async def handler(_request: ToolCallRequest) -> ToolMessage:
+        raise KeyError("unexpected implementation bug")
+
+    try:
+        request = _request(
+            store,
+            str(run["id"]),
+            tool_name="child.check",
+            arguments={"run_ids": ["child-1"]},
+        )
+
+        with pytest.raises(KeyError, match="unexpected implementation bug"):
+            await ToolExecutionMiddleware().awrap_tool_call(request, handler)
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
 async def test_artifact_store_enforces_item_quota(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

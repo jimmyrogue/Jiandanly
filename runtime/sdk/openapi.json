@@ -4416,6 +4416,13 @@
             ],
             "title": "Next Before Position"
           },
+          "presentations": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/RunPresentationSnapshot"
+            },
+            "title": "Presentations",
+            "type": "object"
+          },
           "runs": {
             "items": {
               "$ref": "#/components/schemas/LocalRun"
@@ -6921,6 +6928,725 @@
           "decision"
         ],
         "title": "ResolvePlanApprovalRequest",
+        "type": "object"
+      },
+      "RunPresentationArtifactItem": {
+        "properties": {
+          "artifact_id": {
+            "title": "Artifact Id",
+            "type": "string"
+          },
+          "content_type": {
+            "title": "Content Type",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "artifact",
+            "default": "artifact",
+            "title": "Kind",
+            "type": "string"
+          },
+          "order": {
+            "$ref": "#/components/schemas/RunPresentationOrder"
+          },
+          "revision": {
+            "minimum": 1.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "source": {
+            "$ref": "#/components/schemas/RunPresentationSource"
+          },
+          "status": {
+            "const": "completed",
+            "default": "completed",
+            "title": "Status",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "order",
+          "revision",
+          "source",
+          "artifact_id",
+          "title",
+          "content_type",
+          "created_at"
+        ],
+        "title": "RunPresentationArtifactItem",
+        "type": "object"
+      },
+      "RunPresentationDecisionItem": {
+        "properties": {
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "approval",
+              "question",
+              "plan",
+              "reconciliation"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "order": {
+            "$ref": "#/components/schemas/RunPresentationOrder"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 1.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "source": {
+            "$ref": "#/components/schemas/RunPresentationSource"
+          },
+          "status": {
+            "enum": [
+              "waiting",
+              "completed",
+              "failed",
+              "canceled"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "order",
+          "revision",
+          "source",
+          "request_id",
+          "summary",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "RunPresentationDecisionItem",
+        "type": "object"
+      },
+      "RunPresentationFinalAnswerItem": {
+        "properties": {
+          "completed_at": {
+            "title": "Completed At",
+            "type": "string"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "final_answer",
+            "default": "final_answer",
+            "title": "Kind",
+            "type": "string"
+          },
+          "order": {
+            "$ref": "#/components/schemas/RunPresentationOrder"
+          },
+          "revision": {
+            "minimum": 1.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "source": {
+            "$ref": "#/components/schemas/RunPresentationSource"
+          },
+          "status": {
+            "const": "completed",
+            "default": "completed",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "order",
+          "revision",
+          "source",
+          "content",
+          "created_at",
+          "completed_at"
+        ],
+        "title": "RunPresentationFinalAnswerItem",
+        "type": "object"
+      },
+      "RunPresentationNoticeItem": {
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "notice",
+            "default": "notice",
+            "title": "Kind",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "order": {
+            "$ref": "#/components/schemas/RunPresentationOrder"
+          },
+          "revision": {
+            "minimum": 1.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "severity": {
+            "enum": [
+              "warning",
+              "error"
+            ],
+            "title": "Severity",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/RunPresentationSource"
+          },
+          "status": {
+            "enum": [
+              "failed",
+              "canceled",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "order",
+          "revision",
+          "source",
+          "severity",
+          "message",
+          "created_at"
+        ],
+        "title": "RunPresentationNoticeItem",
+        "type": "object"
+      },
+      "RunPresentationOrder": {
+        "properties": {
+          "event_seq": {
+            "minimum": 1.0,
+            "title": "Event Seq",
+            "type": "integer"
+          },
+          "slot": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Slot",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "event_seq"
+        ],
+        "title": "RunPresentationOrder",
+        "type": "object"
+      },
+      "RunPresentationProgressItem": {
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "progress",
+            "default": "progress",
+            "title": "Kind",
+            "type": "string"
+          },
+          "order": {
+            "$ref": "#/components/schemas/RunPresentationOrder"
+          },
+          "revision": {
+            "minimum": 1.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "source": {
+            "$ref": "#/components/schemas/RunPresentationSource"
+          },
+          "status": {
+            "const": "completed",
+            "default": "completed",
+            "title": "Status",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "order",
+          "revision",
+          "source",
+          "text",
+          "created_at"
+        ],
+        "title": "RunPresentationProgressItem",
+        "type": "object"
+      },
+      "RunPresentationReasoningSummaryItem": {
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "reasoning_summary",
+            "default": "reasoning_summary",
+            "title": "Kind",
+            "type": "string"
+          },
+          "order": {
+            "$ref": "#/components/schemas/RunPresentationOrder"
+          },
+          "revision": {
+            "minimum": 1.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "source": {
+            "$ref": "#/components/schemas/RunPresentationSource"
+          },
+          "status": {
+            "const": "completed",
+            "default": "completed",
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "order",
+          "revision",
+          "source",
+          "summary",
+          "created_at"
+        ],
+        "title": "RunPresentationReasoningSummaryItem",
+        "type": "object"
+      },
+      "RunPresentationSnapshot": {
+        "properties": {
+          "event_high_watermark": {
+            "minimum": 0.0,
+            "title": "Event High Watermark",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "approval": "#/components/schemas/RunPresentationDecisionItem",
+                  "artifact": "#/components/schemas/RunPresentationArtifactItem",
+                  "final_answer": "#/components/schemas/RunPresentationFinalAnswerItem",
+                  "notice": "#/components/schemas/RunPresentationNoticeItem",
+                  "plan": "#/components/schemas/RunPresentationDecisionItem",
+                  "progress": "#/components/schemas/RunPresentationProgressItem",
+                  "question": "#/components/schemas/RunPresentationDecisionItem",
+                  "reasoning_summary": "#/components/schemas/RunPresentationReasoningSummaryItem",
+                  "reconciliation": "#/components/schemas/RunPresentationDecisionItem",
+                  "subagent": "#/components/schemas/RunPresentationSubagentItem",
+                  "tool": "#/components/schemas/RunPresentationToolItem",
+                  "verification": "#/components/schemas/RunPresentationVerificationItem"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/RunPresentationProgressItem"
+                },
+                {
+                  "$ref": "#/components/schemas/RunPresentationReasoningSummaryItem"
+                },
+                {
+                  "$ref": "#/components/schemas/RunPresentationToolItem"
+                },
+                {
+                  "$ref": "#/components/schemas/RunPresentationSubagentItem"
+                },
+                {
+                  "$ref": "#/components/schemas/RunPresentationVerificationItem"
+                },
+                {
+                  "$ref": "#/components/schemas/RunPresentationArtifactItem"
+                },
+                {
+                  "$ref": "#/components/schemas/RunPresentationDecisionItem"
+                },
+                {
+                  "$ref": "#/components/schemas/RunPresentationNoticeItem"
+                },
+                {
+                  "$ref": "#/components/schemas/RunPresentationFinalAnswerItem"
+                }
+              ]
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "run_id",
+          "event_high_watermark"
+        ],
+        "title": "RunPresentationSnapshot",
+        "type": "object"
+      },
+      "RunPresentationSource": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "run_event",
+              "tool_receipt",
+              "wait_candidate",
+              "artifact",
+              "thread_item"
+            ],
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "id"
+        ],
+        "title": "RunPresentationSource",
+        "type": "object"
+      },
+      "RunPresentationSubagentItem": {
+        "properties": {
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "subagent",
+            "default": "subagent",
+            "title": "Kind",
+            "type": "string"
+          },
+          "operation_id": {
+            "title": "Operation Id",
+            "type": "string"
+          },
+          "order": {
+            "$ref": "#/components/schemas/RunPresentationOrder"
+          },
+          "revision": {
+            "minimum": 1.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "source": {
+            "$ref": "#/components/schemas/RunPresentationSource"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "in_progress",
+              "waiting",
+              "completed",
+              "failed",
+              "canceled",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "subagent_type": {
+            "title": "Subagent Type",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "order",
+          "revision",
+          "source",
+          "operation_id",
+          "subagent_type",
+          "description",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "RunPresentationSubagentItem",
+        "type": "object"
+      },
+      "RunPresentationToolItem": {
+        "properties": {
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "tool",
+            "default": "tool",
+            "title": "Kind",
+            "type": "string"
+          },
+          "order": {
+            "$ref": "#/components/schemas/RunPresentationOrder"
+          },
+          "revision": {
+            "minimum": 1.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "risk": {
+            "title": "Risk",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/RunPresentationSource"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "in_progress",
+              "waiting",
+              "completed",
+              "failed",
+              "canceled",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tool_call_id": {
+            "title": "Tool Call Id",
+            "type": "string"
+          },
+          "tool_name": {
+            "title": "Tool Name",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "order",
+          "revision",
+          "source",
+          "tool_call_id",
+          "tool_name",
+          "risk",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "RunPresentationToolItem",
+        "type": "object"
+      },
+      "RunPresentationVerificationItem": {
+        "properties": {
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "verification",
+            "default": "verification",
+            "title": "Kind",
+            "type": "string"
+          },
+          "operation_id": {
+            "title": "Operation Id",
+            "type": "string"
+          },
+          "order": {
+            "$ref": "#/components/schemas/RunPresentationOrder"
+          },
+          "revision": {
+            "minimum": 1.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "source": {
+            "$ref": "#/components/schemas/RunPresentationSource"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "in_progress",
+              "waiting",
+              "completed",
+              "failed",
+              "canceled",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tool_name": {
+            "title": "Tool Name",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "order",
+          "revision",
+          "source",
+          "operation_id",
+          "tool_name",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "RunPresentationVerificationItem",
         "type": "object"
       },
       "RuntimeAssetCleanupResult": {

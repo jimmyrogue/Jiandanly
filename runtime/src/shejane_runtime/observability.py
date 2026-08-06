@@ -181,7 +181,6 @@ class RuntimeObserver(AsyncCallbackHandler):
             run_id=str(run_id),
             parent_run_id=str(parent_run_id) if parent_run_id else None,
             error_type=type(error).__name__,
-            error_message=str(error),
         )
 
     # --- tool lifecycle ---

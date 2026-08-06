@@ -108,10 +108,11 @@ def apply_known_model_profile_defaults(
     profile: dict[str, Any],
     *,
     service_base_url: str,
+    trusted_model_catalog: bool = False,
 ) -> dict[str, Any]:
-    """Fill published limits without overriding explicit model-service settings."""
+    """Fill published limits and repair stale trusted-catalog agent flags."""
     normalized = dict(profile)
-    if urlparse(service_base_url).hostname != "api.deepseek.com":
+    if not trusted_model_catalog and urlparse(service_base_url).hostname != "api.deepseek.com":
         return normalized
     limits = _DEEPSEEK_V4_LIMITS.get(str(normalized.get("model_id")))
     if limits is None:
@@ -121,6 +122,9 @@ def apply_known_model_profile_defaults(
         normalized["max_input_tokens"] = max_input_tokens
     if normalized.get("max_output_tokens") is None:
         normalized["max_output_tokens"] = max_output_tokens
+    if trusted_model_catalog:
+        normalized["tool_calling"] = True
+        normalized["streaming"] = True
     return normalized
 
 
@@ -131,6 +135,7 @@ def discovered_model_profile(
     display_name: str,
     service_base_url: str,
     catalog_model: dict[str, Any] | None = None,
+    trusted_model_catalog: bool = False,
 ) -> dict[str, Any]:
     """Normalize optional capability metadata exposed by model-list APIs."""
     architecture = candidate.get("architecture")
@@ -199,4 +204,5 @@ def discovered_model_profile(
     return apply_known_model_profile_defaults(
         profile,
         service_base_url=service_base_url,
+        trusted_model_catalog=trusted_model_catalog,
     )

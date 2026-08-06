@@ -217,6 +217,120 @@ def test_replay_after_run_completion_has_same_envelope(client: TestClient) -> No
     }.intersection(event["event_type"] for event in events)
 
 
+def test_terminal_event_carries_replayable_presentation_upsert(client: TestClient) -> None:
+    store = client.app.state.store
+
+    async def seed_completed_run() -> str:
+        run, _created = await store.accept_run_command(
+            principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+            command_id="cmd_sse_presentation",
+            client_message_id="msg_sse_presentation",
+            thread_id="conversation_sse_presentation",
+            assistant_message_id="msg_assistant_sse_presentation",
+            user_input="presentation replay",
+            thread_title="SSE presentation",
+            thread_metadata={},
+            command_payload={"type": "run.start", "goal": "presentation replay"},
+            goal="presentation replay",
+            workspace_path=None,
+            mode="auto",
+        )
+        job = await store.claim_run_job(worker_id="worker-sse-presentation")
+        assert job is not None
+        with store.bind_execution_lease(
+            job_id=job["id"],
+            run_id=run["id"],
+            lease_owner="worker-sse-presentation",
+            lease_generation=int(job["lease_generation"]),
+        ):
+            await store.append_event(
+                run["id"],
+                "assistant.round.committed",
+                {
+                    "round_id": "model-call-sse",
+                    "text": "Inspecting the file.",
+                    "reasoning_summary": "The repository structure determines the next read.",
+                    "tool_call_ids": ["call-sse"],
+                },
+            )
+            await store.append_event(
+                run["id"],
+                "tool.requested",
+                {
+                    "tool_call_id": "call-sse",
+                    "name": "read_file",
+                    "tool": "read_file",
+                    "arguments": {},
+                },
+            )
+            await store.prepare_tool_receipt(
+                operation_id="toolop_sse",
+                run_id=run["id"],
+                execution_attempt_id=f"{job['id']}:{job['lease_generation']}",
+                execution_namespace="main",
+                tool_call_id="call-sse",
+                tool_name="read_file",
+                tool_version="builtin-v1",
+                arguments_hash="sse-args",
+                arguments_json="{}",
+                risk="read_only",
+            )
+            await store.begin_tool_receipt(
+                operation_id="toolop_sse",
+                run_id=run["id"],
+                execution_attempt_id=f"{job['id']}:{job['lease_generation']}",
+            )
+            await store.settle_tool_receipt(
+                operation_id="toolop_sse",
+                run_id=run["id"],
+                status="completed",
+                result_json='{"content":"done"}',
+                result_hash="sse-result",
+            )
+            await store.append_event(
+                run["id"],
+                "tool.completed",
+                {"tool_call_id": "call-sse", "name": "read_file", "tool": "read_file"},
+            )
+            await store.commit_run_result(
+                run["id"],
+                status="completed",
+                event_type="run.completed",
+                payload={"final_text": "Presentation result."},
+            )
+        return str(run["id"])
+
+    run_id = asyncio.run(seed_completed_run())
+
+    replayed, _done = _parse_sse(client.get(f"/v1/runs/{run_id}/stream", headers=HEADERS).text)
+    terminal = next(event for event in replayed if event["event_type"] == "run.completed")
+
+    assert terminal["presentation_change"]["kind"] == "item.upsert"
+    item = terminal["presentation_change"]["item"]
+    assert item["kind"] == "final_answer"
+    assert item["status"] == "completed"
+    assert item["content"]
+    assert item["revision"] == terminal["seq"]
+    changes = [event["presentation_change"] for event in replayed if "presentation_change" in event]
+    assert any(
+        change["kind"] == "item.upsert" and change["item"]["kind"] == "progress"
+        for change in changes
+    )
+    round_event = next(
+        event for event in replayed if event["event_type"] == "assistant.round.committed"
+    )
+    assert [change["item"]["kind"] for change in round_event["presentation_changes"]] == [
+        "reasoning_summary",
+        "progress",
+    ]
+    assert any(
+        change["kind"] == "item.upsert"
+        and change["item"]["kind"] == "tool"
+        and change["item"]["status"] == "completed"
+        for change in changes
+    )
+
+
 @pytest.mark.asyncio
 async def test_live_llm_delta_is_streamed_without_becoming_a_durable_event(
     tmp_path: Path,
@@ -233,15 +347,99 @@ async def test_live_llm_delta_is_streamed_without_becoming_a_durable_event(
         next_event = asyncio.create_task(anext(stream))
         await asyncio.sleep(0)
 
-        await coordinator.emit_for_run(run["id"], "llm.delta", {"content": "temporary"})
+        await coordinator.emit_for_run(
+            run["id"],
+            "llm.delta",
+            {"content": "temporary", "round_id": "model-call-live"},
+        )
 
         event = await asyncio.wait_for(next_event, timeout=1)
         assert event["event_type"] == "llm.delta"
-        assert event["payload"] == {"content": "temporary"}
+        assert event["payload"] == {"content": "temporary", "round_id": "model-call-live"}
+        assert event["presentation_change"] == {
+            "kind": "draft.delta",
+            "round_id": "model-call-live",
+            "content": "temporary",
+        }
         assert await store.events_since(run["id"]) == []
         await stream.aclose()
     finally:
         await store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("terminal_event_type", "run_status", "expected_kinds"),
+    [
+        ("run.cleanup_required", "cleanup_required", {"tool", "notice"}),
+        ("run.completed", "completed", {"tool"}),
+    ],
+)
+async def test_terminal_replay_projects_completed_receipt_without_a_tool_event(
+    terminal_event_type: str,
+    run_status: str,
+    expected_kinds: set[str],
+) -> None:
+    events = [
+        {
+            "id": "event-1",
+            "run_id": "run-terminal",
+            "seq": 1,
+            "event_type": "tool.requested",
+            "payload_json": '{"tool_call_id":"call-1","tool":"read_file"}',
+            "created_at": "2026-08-04T00:00:01Z",
+        },
+        {
+            "id": "event-2",
+            "run_id": "run-terminal",
+            "seq": 2,
+            "event_type": terminal_event_type,
+            "payload_json": "{}",
+            "created_at": "2026-08-04T00:00:02Z",
+        },
+    ]
+
+    class FactsStore:
+        calls = 0
+
+        async def get_run_presentation_facts(self, run_id: str) -> dict:
+            assert run_id == "run-terminal"
+            self.calls += 1
+            return {
+                "run": {"id": run_id, "status": run_status},
+                "assistant_item": None,
+                "events": events,
+                "tool_receipts": [
+                    {
+                        "operation_id": "toolop-1",
+                        "tool_call_id": "call-1",
+                        "tool_name": "read_file",
+                        "status": "completed",
+                        "risk": "read_only",
+                        "arguments_json": "{}",
+                        "created_at": "2026-08-04T00:00:01Z",
+                        "updated_at": "2026-08-04T00:00:02Z",
+                        "completed_at": "2026-08-04T00:00:02Z",
+                    }
+                ],
+                "wait_candidates": [],
+                "artifacts": [],
+                "event_high_watermark": 2,
+            }
+
+    store = FactsStore()
+    coordinator = RunCoordinator(store, None)  # type: ignore[arg-type]
+
+    envelopes = await coordinator._stream_event_envelopes(events)
+
+    assert store.calls == 1
+    terminal_changes = envelopes[1].get("presentation_changes") or [
+        envelopes[1]["presentation_change"]
+    ]
+    assert {change["item"]["kind"] for change in terminal_changes} == expected_kinds
+    tool = next(change["item"] for change in terminal_changes if change["item"]["kind"] == "tool")
+    assert tool["id"] == "tool-call:call-1"
+    assert tool["status"] == "completed"
 
 
 def test_stream_replays_only_events_after_the_client_cursor(client: TestClient) -> None:

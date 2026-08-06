@@ -34,6 +34,8 @@ export type LocalThreadItem = Schemas['LocalThreadItem']
 export type LocalThreadChange = Schemas['LocalThreadChange']
 export type LocalThreadEvent = Schemas['LocalThreadEvent']
 export type LocalThreadSnapshot = Schemas['LocalThreadSnapshot']
+export type RunPresentationSnapshot = Schemas['RunPresentationSnapshot']
+export type RunPresentationItem = NonNullable<RunPresentationSnapshot['items']>[number]
 export type RuntimeInfo = Schemas['RuntimeInfo']
 export type RuntimeSettings = Schemas['RuntimeSettingsResponse']
 export type UpdateRuntimeSettingsRequest = Schemas['UpdateRuntimeSettingsRequest']
@@ -1330,6 +1332,7 @@ export async function getLocalThreadSnapshot(
     const runs = new Map<string, LocalRun>()
     const events = new Map<string, LocalThreadSnapshot['events'][number]>()
     const eventHighWatermarks = new Map<string, number>()
+    const presentations = new Map<string, RunPresentationSnapshot>()
     let firstPage: LocalThreadSnapshot | undefined
     let beforePosition: number | undefined
     let eventsTruncated = false
@@ -1353,6 +1356,12 @@ export async function getLocalThreadSnapshot(
       for (const item of page.items) items.set(item.id, item)
       for (const run of page.runs) runs.set(run.id, run)
       for (const event of page.events ?? []) events.set(event.id, event)
+      for (const [runID, presentation] of Object.entries(page.presentations ?? {})) {
+        // Pages are fetched newest first. Keep the first projection so an
+        // older page containing only the Run's user item cannot overwrite a
+        // projection that already included its later final answer.
+        if (!presentations.has(runID)) presentations.set(runID, presentation)
+      }
       for (const [runID, highWatermark] of Object.entries(page.event_high_watermarks ?? {})) {
         eventHighWatermarks.set(runID, Math.max(eventHighWatermarks.get(runID) ?? 0, highWatermark))
       }
@@ -1364,6 +1373,7 @@ export async function getLocalThreadSnapshot(
           runs: [...runs.values()],
           events: [...events.values()],
           event_high_watermarks: Object.fromEntries(eventHighWatermarks),
+          presentations: Object.fromEntries(presentations),
           has_more_items: false,
           next_before_position: null,
           events_truncated: eventsTruncated,

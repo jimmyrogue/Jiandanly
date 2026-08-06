@@ -19,7 +19,6 @@ client/src/features/chat/chatStore.ts):
                          `llm.token` pre-Block-3 — client looks for
                          `llm.delta`)
   llm.tool_call_chunk  — partial JSON args for a tool call being assembled
-  llm.reasoning        — DeepSeek-style reasoning content chunk
   tool.requested       — tool about to run (emitted when the model's
                          tool_call_chunk finalizes with a name)
   tool.completed       — tool result observed (was `tool.end` pre-Block-3
@@ -84,10 +83,6 @@ def _translate_messages(payload: Any) -> list[dict[str, Any]]:
             # client's streamAgentSSE() reads `payload.content` to
             # append to the in-flight assistant message bubble.
             out.append({"event": "llm.delta", "data": {"content": content}})
-
-        reasoning = chunk.additional_kwargs.get("reasoning_content")
-        if reasoning:
-            out.append({"event": "llm.reasoning", "data": {"content": reasoning}})
 
         usage = chunk.additional_kwargs.get("usage")
         if not isinstance(usage, dict):

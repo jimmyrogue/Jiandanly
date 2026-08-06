@@ -194,26 +194,19 @@ describe('MessageBubble meta', () => {
     expect(container.querySelector('.message-content')?.textContent).toBe('E2E_COMPLETION_REPAIRED')
   })
 
-  it('keeps reasoning collapsed and renders it as plain text', () => {
+  it('does not render legacy raw reasoning', () => {
+    const legacyMessage = {
+      ...message({ content: '处理完成。' }),
+      reasoning: '# SESSION INTENT\n用户要求整理文件。',
+    }
     const { container } = render(
       <I18nProvider>
-        <MessageBubble
-          message={message({
-            reasoning: '# SESSION INTENT\n用户要求整理文件。',
-            content: '处理完成。',
-          })}
-        />
+        <MessageBubble message={legacyMessage} />
       </I18nProvider>,
     )
 
-    const disclosure = container.querySelector('.message-reasoning')
-    expect(disclosure).not.toHaveAttribute('open')
-    expect(screen.getByText('思考过程')).toBeInTheDocument()
-    expect(disclosure?.querySelector('h1')).not.toBeInTheDocument()
-    expect(disclosure?.querySelector('.message-reasoning-body')?.textContent).toBe('# SESSION INTENT\n用户要求整理文件。')
-
-    fireEvent.click(screen.getByText('思考过程'))
-    expect(disclosure).toHaveAttribute('open')
+    expect(container.querySelector('.message-reasoning')).not.toBeInTheDocument()
+    expect(screen.queryByText('# SESSION INTENT')).not.toBeInTheDocument()
   })
 
   it('treats a single newline as a line break (remark-breaks)', () => {

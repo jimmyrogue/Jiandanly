@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 from langchain_core.load.dump import dumps as lc_dumps
 from langchain_core.messages import AIMessageChunk, HumanMessage, SystemMessage
@@ -61,6 +62,7 @@ from .model_profiles import (
 from .observability import build_callbacks
 from .plugins.catalog import PluginCatalog
 from .plugins.identity import plugin_action_tool_version
+from .presentation import project_run_presentation
 from .progress_ledger import build_handoff_snapshot
 from .sandbox_reaper import reap_sandbox_processes
 from .store.fenced_checkpointer import FencedCheckpointer
@@ -882,6 +884,7 @@ class RunCoordinator:
         profile = apply_known_model_profile_defaults(
             profile,
             service_base_url=str(connection.get("base_url") or ""),
+            trusted_model_catalog=connection.get("preset_id") == "shejane-official",
         )
         profile["capabilities"] = normalized_model_capabilities(
             profile,
@@ -908,22 +911,31 @@ class RunCoordinator:
                 "model_credential_store_unavailable",
                 str(exc),
             )
+        protocol = str(agent_capability.get("protocol"))
+        base_url = str(connection["base_url"])
+        preset_id = str(connection.get("preset_id") or "")
         return {
             "adapter_id": {
                 "openai_chat_completions": "openai_chat",
                 "openai_responses": "openai_chat",
                 "anthropic_messages": "anthropic_messages",
                 "google_generate_content": "google_genai",
-            }.get(str(agent_capability.get("protocol")), str(connection["adapter_id"])),
-            "protocol": str(agent_capability.get("protocol")),
+            }.get(protocol, str(connection["adapter_id"])),
+            "protocol": protocol,
+            "preset_id": preset_id,
             "connection_id": connection_id,
             "connection_version": int(connection.get("version") or 1),
-            "base_url": str(connection["base_url"]),
+            "base_url": base_url,
             "credential_ref": str(connection["credential_ref"]),
             "requested_model": requested_model,
             "model_id": model_id,
             "profile": profile,
             "required_capabilities": list(required_capabilities),
+            "display_reasoning_summary": (
+                protocol == "openai_responses"
+                and preset_id == "openai"
+                and urlparse(base_url).hostname == "api.openai.com"
+            ),
         }, None
 
     async def _model_binding_error(
@@ -1002,6 +1014,7 @@ class RunCoordinator:
             profile = apply_known_model_profile_defaults(
                 profile,
                 service_base_url=str(connection.get("base_url") or ""),
+                trusted_model_catalog=connection.get("preset_id") == "shejane-official",
             )
             profile["capabilities"] = normalized_model_capabilities(
                 profile,
@@ -2665,8 +2678,10 @@ class RunCoordinator:
                 self._live_subscribers.setdefault(run_id, set()).add(live_events)
                 registered = True
                 events = await self.store.events_since(run_id, after_seq=after_seq)
-            for event in events:
-                yield self._stored_event_envelope(event)
+            for event, envelope in zip(
+                events, await self._stream_event_envelopes(events), strict=True
+            ):
+                yield envelope
                 after_seq = int(event["seq"])
 
             while True:
@@ -2675,20 +2690,36 @@ class RunCoordinator:
                     pending_live.append(await asyncio.wait_for(live_events.get(), timeout=0.5))
                     while not live_events.empty():
                         pending_live.append(live_events.get_nowait())
+                    durable_wake_seqs = [
+                        int(event["seq"]) for event in pending_live if event.get("seq") is not None
+                    ]
+                    replay: list[dict[str, Any]] = []
+                    envelopes: list[dict[str, Any]] = []
+                    if durable_wake_seqs:
+                        # Durable queue entries are wakeups, not payloads. One
+                        # range read recovers gaps and avoids N full projections
+                        # when several writes arrive before the consumer wakes.
+                        wake_seq = max(durable_wake_seqs)
+                        events = await self.store.events_since(run_id, after_seq=after_seq)
+                        replay = [
+                            stored_event
+                            for stored_event in events
+                            if int(stored_event["seq"]) <= wake_seq
+                        ]
+                        envelopes = await self._stream_event_envelopes(replay)
+                    replay_index = 0
                     for event in pending_live:
                         if event.get("seq") is None:
                             yield event
                             continue
-                        # A durable live event is only a wakeup. Always read
-                        # from SQLite so an earlier DB-only or dropped event
-                        # cannot be skipped by advancing directly to this seq.
                         wake_seq = int(event["seq"])
-                        events = await self.store.events_since(run_id, after_seq=after_seq)
-                        for stored_event in events:
-                            if int(stored_event["seq"]) > wake_seq:
-                                break
-                            yield self._stored_event_envelope(stored_event)
-                            after_seq = int(stored_event["seq"])
+                        while (
+                            replay_index < len(replay)
+                            and int(replay[replay_index]["seq"]) <= wake_seq
+                        ):
+                            yield envelopes[replay_index]
+                            after_seq = int(replay[replay_index]["seq"])
+                            replay_index += 1
                 except TimeoutError:
                     pass
 
@@ -2698,8 +2729,12 @@ class RunCoordinator:
                     if not live_events.empty():
                         continue
                     events = await self.store.events_since(run_id, after_seq=after_seq)
-                for event in events:
-                    yield self._stored_event_envelope(event)
+                for event, envelope in zip(
+                    events,
+                    await self._stream_event_envelopes(events),
+                    strict=True,
+                ):
+                    yield envelope
                     after_seq = int(event["seq"])
 
                 run = await self.store.get_run(run_id)
@@ -3094,6 +3129,7 @@ class RunCoordinator:
                     bind_runtime_tools(runtime_context.dynamic_tools),  # type: ignore[arg-type]
                 ):
                     active_model_round: tuple[object, object] | None = None
+                    active_model_call_id: str | None = None
                     async for part in agent.astream(
                         input_payload,
                         config=config,
@@ -3117,12 +3153,22 @@ class RunCoordinator:
                                     or part.get("ns")
                                 ):
                                     continue
+                                chunk_round_id = str(
+                                    chunk.additional_kwargs.get("runtime_model_call_id") or ""
+                                )
+                                if chunk_round_id:
+                                    active_model_call_id = chunk_round_id
                                 model_round = (
                                     metadata.get("langgraph_checkpoint_ns"),
                                     metadata.get("langgraph_step"),
                                 )
                                 if model_round != active_model_round:
-                                    await self._enqueue(wakeup, run_id, "llm.round.started", {})
+                                    await self._enqueue(
+                                        wakeup,
+                                        run_id,
+                                        "llm.round.started",
+                                        {"round_id": active_model_call_id},
+                                    )
                                     active_model_round = model_round
                         if kind == "checkpoints":
                             checkpoint_id = _checkpoint_id_from_stream(payload)
@@ -3143,12 +3189,43 @@ class RunCoordinator:
                                     run_id=run_id,
                                     **draft,
                                 )
+                            assistant_round = _assistant_round_from_update(
+                                payload,
+                                allow_reasoning_summary=bool(
+                                    isinstance(model_binding, dict)
+                                    and model_binding.get("display_reasoning_summary") is True
+                                ),
+                            )
+                            if assistant_round is not None:
+                                await self.store.commit_assistant_round(run_id, assistant_round)
+                                committed_item_ids = []
+                                if str(assistant_round.get("reasoning_summary") or "").strip():
+                                    committed_item_ids.append(
+                                        f"round:{assistant_round['round_id']}:reasoning"
+                                    )
+                                if str(assistant_round.get("text") or "").strip():
+                                    committed_item_ids.append(
+                                        f"round:{assistant_round['round_id']}:progress"
+                                    )
+                                await self._enqueue(
+                                    wakeup,
+                                    run_id,
+                                    "llm.round.closed",
+                                    {
+                                        "round_id": assistant_round["round_id"],
+                                        "committed_item_ids": committed_item_ids,
+                                    },
+                                )
+                        if part.get("ns"):
+                            continue
                         for translated in translate(kind, payload):
                             data = (
                                 translated["data"]
                                 if isinstance(translated["data"], dict)
                                 else {"value": translated["data"]}
                             )
+                            if translated["event"].startswith("llm.") and active_model_call_id:
+                                data.setdefault("round_id", active_model_call_id)
                             await self._enqueue(wakeup, run_id, translated["event"], data)
 
                 if current_checkpoint_id is None:
@@ -3556,6 +3633,19 @@ class RunCoordinator:
                     "payload": payload,
                     "created_at": datetime.now(UTC).isoformat(),
                 }
+                round_id = str(payload.get("round_id") or "")
+                if event_type == "llm.delta" and round_id:
+                    event["presentation_change"] = {
+                        "kind": "draft.delta",
+                        "round_id": round_id,
+                        "content": str(payload.get("content") or ""),
+                    }
+                elif event_type == "llm.round.closed" and round_id:
+                    event["presentation_change"] = {
+                        "kind": "draft.closed",
+                        "round_id": round_id,
+                        "committed_item_ids": payload.get("committed_item_ids") or [],
+                    }
             else:
                 stored_event = await self.store.append_event(run_id, event_type, payload)
                 candidate = stored_event.get("_parent_event")
@@ -3657,6 +3747,104 @@ class RunCoordinator:
             "payload": json.loads(event["payload_json"] or "{}"),
             "created_at": event["created_at"],
         }
+
+    async def _stream_event_envelope(self, event: dict[str, Any]) -> dict[str, Any]:
+        return (await self._stream_event_envelopes([event]))[0]
+
+    async def _stream_event_envelopes(
+        self,
+        events: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Project one replay batch with a single consistent facts read."""
+        envelopes = [self._stored_event_envelope(event) for event in events]
+        relevant_types = {
+            "assistant.round.committed",
+            "tool.requested",
+            "tool.completed",
+            "tool.failed",
+            "tool.canceled",
+            "subagent.spawned",
+            "subagent.started",
+            "subagent.waiting",
+            "subagent.completed",
+            "subagent.failed",
+            "subagent.canceled",
+            "subagent.outcome_unknown",
+            "permission.required",
+            "permission.resolved",
+            "question.asked",
+            "question.answered",
+            "plan.approval_required",
+            "plan.resolved",
+            "tool.reconciliation_required",
+            "tool.reconciliation_resolved",
+            "artifact.created",
+            "run.completed",
+            "run.failed",
+            "run.canceled",
+            "run.cleanup_required",
+        }
+        if not events or not any(event["event_type"] in relevant_types for event in events):
+            return envelopes
+        facts = await self.store.get_run_presentation_facts(str(events[0]["run_id"]))
+        if facts is None:
+            return envelopes
+        decoded_events = []
+        for source_event in facts["events"]:
+            try:
+                payload = json.loads(source_event.get("payload_json") or "{}")
+            except (json.JSONDecodeError, TypeError):
+                payload = {}
+            decoded_events.append(
+                {
+                    **source_event,
+                    "payload": payload if isinstance(payload, dict) else {},
+                }
+            )
+        snapshot = project_run_presentation(
+            run=facts["run"],
+            assistant_item=facts["assistant_item"],
+            events=decoded_events,
+            tool_receipts=facts["tool_receipts"],
+            wait_candidates=facts["wait_candidates"],
+            artifacts=facts["artifacts"],
+            event_high_watermark=int(facts["event_high_watermark"]),
+        )
+        terminal_types = {
+            "run.completed",
+            "run.failed",
+            "run.canceled",
+            "run.cleanup_required",
+        }
+        for event, envelope in zip(events, envelopes, strict=True):
+            if event["event_type"] not in relevant_types:
+                continue
+            seq = int(event["seq"])
+            items = [
+                candidate
+                for candidate in snapshot["items"]
+                if candidate["revision"] == seq or candidate["order"]["event_seq"] == seq
+            ]
+            primary_item = items[-1] if items else None
+            if event["event_type"] in terminal_types:
+                ids = {item["id"] for item in items}
+                items.extend(
+                    item
+                    for item in snapshot["items"]
+                    if item["id"] not in ids
+                    and item["kind"] in {"tool", "subagent", "verification"}
+                )
+            if not items:
+                continue
+            changes = [{"kind": "item.upsert", "item": item} for item in items]
+            # Keep the singular field for Clients released during the schema rollout.
+            envelope["presentation_change"] = {
+                "kind": "item.upsert",
+                "item": primary_item or items[-1],
+            }
+            if len(changes) > 1:
+                envelope["presentation_changes"] = changes
+        return envelopes
 
     def _publish_live(self, run_id: str, event: dict[str, Any]) -> None:
         for subscriber in tuple(self._live_subscribers.get(run_id, ())):
@@ -3996,6 +4184,93 @@ def _completion_failure_payload(
 
 def _assistant_draft_from_update(payload: Any) -> dict[str, Any] | None:
     """Extract the latest fully assembled top-level AI message from an update."""
+    message = _complete_ai_message_from_update(payload)
+    if message is None:
+        return None
+    content = _assistant_content_text(getattr(message, "content", None))
+    tool_calls = [
+        dict(item)
+        for item in (getattr(message, "tool_calls", None) or [])
+        if isinstance(item, dict)
+    ]
+    identity = {
+        "id": getattr(message, "id", None),
+        "content": content,
+        "tool_calls": tool_calls,
+    }
+    message_key = hashlib.sha256(
+        json.dumps(
+            identity,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode()
+    ).hexdigest()
+    return {
+        "message_key": message_key,
+        "content": content,
+        "tool_calls": tool_calls,
+    }
+
+
+def _assistant_round_from_update(
+    payload: Any,
+    *,
+    allow_reasoning_summary: bool = False,
+) -> dict[str, Any] | None:
+    """Extract one durable, display-safe progress round from a model update."""
+    message = _complete_ai_message_from_update(payload)
+    if message is None:
+        return None
+    additional_kwargs = getattr(message, "additional_kwargs", None)
+    if not isinstance(additional_kwargs, dict):
+        return None
+    round_id = str(additional_kwargs.get("runtime_model_call_id") or "")
+    tool_call_ids = [
+        str(item.get("id") or "")
+        for item in (getattr(message, "tool_calls", None) or [])
+        if isinstance(item, dict) and item.get("id")
+    ]
+    if not round_id or not tool_call_ids:
+        return None
+    summary = _provider_reasoning_summary(message) if allow_reasoning_summary else None
+    return {
+        "round_id": round_id,
+        "text": _assistant_content_text(getattr(message, "content", None)),
+        "reasoning_summary": summary,
+        "tool_call_ids": tool_call_ids,
+    }
+
+
+def _provider_reasoning_summary(message: Any) -> str | None:
+    """Return provider-declared summaries, never generic/raw reasoning blocks."""
+    response_metadata = getattr(message, "response_metadata", None)
+    if (
+        not isinstance(response_metadata, dict)
+        or response_metadata.get("model_provider") != "openai"
+    ):
+        return None
+    content = getattr(message, "content", None)
+    if not isinstance(content, list):
+        return None
+    parts: list[str] = []
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "reasoning":
+            continue
+        summary = block.get("summary")
+        if not isinstance(summary, list):
+            continue
+        for item in summary:
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("text") or "").strip()
+            if text:
+                parts.append(text)
+    return "\n\n".join(parts) or None
+
+
+def _complete_ai_message_from_update(payload: Any) -> Any | None:
     if not isinstance(payload, dict):
         return None
     for delta in reversed(list(payload.values())):
@@ -4007,31 +4282,7 @@ def _assistant_draft_from_update(payload: Any) -> dict[str, Any] | None:
         for message in reversed(messages):
             if getattr(message, "type", None) != "ai":
                 continue
-            content = _assistant_content_text(getattr(message, "content", None))
-            tool_calls = [
-                dict(item)
-                for item in (getattr(message, "tool_calls", None) or [])
-                if isinstance(item, dict)
-            ]
-            identity = {
-                "id": getattr(message, "id", None),
-                "content": content,
-                "tool_calls": tool_calls,
-            }
-            message_key = hashlib.sha256(
-                json.dumps(
-                    identity,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    default=str,
-                ).encode()
-            ).hexdigest()
-            return {
-                "message_key": message_key,
-                "content": content,
-                "tool_calls": tool_calls,
-            }
+            return message
     return None
 
 

@@ -117,6 +117,44 @@ def test_tool_output_cannot_enable_office_tools_for_an_unrelated_goal() -> None:
     assert [item.name for item in filtered.tools] == ["workspace.read"]
 
 
+def test_simple_weather_lookup_hides_filesystem_and_collaboration_tools() -> None:
+    request = _request([], goal="帮我查一下 今天杭州的天气")
+    request.tools = [
+        {"type": "function", "function": {"name": name}}
+        for name in (
+            "web.fetch",
+            "read_file",
+            "ls",
+            "glob",
+            "execute",
+            "task",
+            "team.run",
+            "child.spawn",
+            "child.check",
+        )
+    ]
+
+    filtered = ToolVisibilityMiddleware._apply(request)
+
+    assert [item["function"]["name"] for item in filtered.tools] == ["web.fetch"]
+
+
+def test_weather_file_request_keeps_filesystem_tools_but_not_collaboration_tools() -> None:
+    request = _request([], goal="查询杭州天气并保存到 weather.md")
+    request.tools = [
+        {"type": "function", "function": {"name": name}}
+        for name in ("web.fetch", "read_file", "write_file", "child.check")
+    ]
+
+    filtered = ToolVisibilityMiddleware._apply(request)
+
+    assert [item["function"]["name"] for item in filtered.tools] == [
+        "web.fetch",
+        "read_file",
+        "write_file",
+    ]
+
+
 def test_office_follow_up_is_detected_from_retained_tool_history() -> None:
     messages = [
         HumanMessage("edit the deck"),
@@ -215,6 +253,38 @@ async def test_blocked_tool_is_rejected_even_when_model_guesses_its_name() -> No
     assert calls == 0
     assert result.status == "error"
     assert result.content == "Tool execute is not available to this Agent."
+
+
+@pytest.mark.asyncio
+async def test_weather_hidden_tool_is_rejected_even_when_model_guesses_its_name() -> None:
+    middleware = ToolVisibilityMiddleware()
+    request = ToolCallRequest(
+        tool_call={
+            "id": "call-hidden-read",
+            "name": "read_file",
+            "args": {"path": "/conversation_history/thread.md"},
+            "type": "tool_call",
+        },
+        tool=read_file,
+        state={"messages": []},
+        runtime=SimpleNamespace(context=SimpleNamespace(task_goal="帮我查一下 今天杭州的天气")),
+    )
+    calls = 0
+
+    async def handler(_request: ToolCallRequest) -> ToolMessage:
+        nonlocal calls
+        calls += 1
+        return ToolMessage(
+            content="read",
+            name="read_file",
+            tool_call_id="call-hidden-read",
+        )
+
+    result = await middleware.awrap_tool_call(request, handler)
+
+    assert calls == 0
+    assert result.status == "error"
+    assert result.content == "Tool read_file is not available to this Agent."
 
 
 @tool("docs_lookup")

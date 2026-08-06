@@ -123,6 +123,8 @@ _APPROVAL_REVIEW_MAX_CALLS = 20
 _CLARIFICATION_REVIEW_MAX_CALLS = 4
 _COMPLETION_REVIEW_MAX_CALLS = 4
 _TITLE_GENERATION_MAX_CALLS = 1
+_SUMMARIZATION_MAX_CALLS = 4
+_SUMMARIZATION_MAX_OUTPUT_TOKENS = 1_024
 _VISION_MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024
 _VISION_MAX_IMAGE_PIXELS = 40_000_000
 _VISION_MEDIA_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
@@ -806,6 +808,9 @@ async def _invoke_plugin_vision(
         current_profile = apply_known_model_profile_defaults(
             current_profile,
             service_base_url=str(connection.get("base_url") or "") if connection else "",
+            trusted_model_catalog=bool(
+                connection and connection.get("preset_id") == "shejane-official"
+            ),
         )
     if (
         connection is None
@@ -1300,7 +1305,12 @@ async def build_agent(
         if isinstance(model, LedgerChatModel)
         else model
     )
-    definition_model = RuntimeModelProxy(profile=getattr(model, "profile", None))
+    definition_model = RuntimeModelProxy(
+        profile=getattr(model, "profile", None),
+        call_purpose="summarization",
+        max_model_calls=_SUMMARIZATION_MAX_CALLS,
+        max_output_tokens=_SUMMARIZATION_MAX_OUTPUT_TOKENS,
+    )
     subagent_model = RuntimeModelProxy(
         profile=getattr(model, "profile", None),
         max_model_calls=max(1, settings.max_model_calls - _PARENT_MODEL_CALL_RESERVE),

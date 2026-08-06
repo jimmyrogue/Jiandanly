@@ -1,8 +1,137 @@
 # Agent 思考与活动可见性调研
 
-> 调研日期：2026-07-19
+> 初次调研：2026-07-19；最新复核：2026-08-04
 >
-> 范围：ChatGPT / Codex、Claude / Claude Code、Gemini / Gemini CLI、Cursor、GitHub Copilot。只采用官方文档、官方帮助、官方博客或官方源码仓库。
+> 范围：LiveAgent、Codex、Claude Code、OpenHands、Cline，以及初次调研覆盖的 ChatGPT、Gemini CLI、Cursor、GitHub Copilot。只采用官方文档、官方帮助、官方博客或官方源码仓库。
+
+## 2026-08-04 复核结论
+
+SheJane 当前的问题已经不是 7 月时的“Tool 卡片太多”，而是矫枉过正后的**过程过弱**：Runtime 实际拥有相当丰富的工具、审批、验证、修复和 SubAgent 事件，但 Client 没有保留一个完整、按发生顺序组织的“工作过程”。
+
+若本节与下方 2026-07-19 的产品记录冲突，以本次复核为准。
+
+成熟 Agent 的共同做法不是把原始思维链直接铺出来，而是同时保留三种不同信息：
+
+1. **工作叙述（progress narrative）**：面向用户的短句，例如“我先核对事件协议，再检查现有投影逻辑”。这是 Agent 主动说明接下来做什么，不是原始 CoT。
+2. **思考摘要（reasoning summary）**：供应商可选提供的可展示摘要。并非每个模型都有，也不应成为过程可见性的唯一来源。
+3. **执行轨迹（action trace）**：Tool、命令、文件改动、搜索、审批、SubAgent、验证和错误等确定性事件。
+
+LiveAgent 和 Codex 的优势就在于把这三类内容放进同一条有序的 Turn / Round 记录中；Claude Code 则进一步用普通视图与详细 transcript 控制信息密度。SheJane 现在把最终文本、单个 `reasoning` 字符串和 `agentEvents` 分开投影，顺序与上下文被削弱，所以即使底层事件很多，用户仍只感到“正在思考……然后突然给结果”。
+
+### 当前实现的根因
+
+1. **模型每轮的中间叙述被主动清空。** [`projectTransientAssistantText`](../../client/src/features/chat/chatStore.ts) 在 `llm.round.started`、`tool.requested` 或 `question.asked` 时返回空字符串；对应测试也明确要求“只保留当前模型回合文本”。因此模型在调用 Tool 前说的“准备检查附件”等内容不会进入最终可见过程。
+2. **思考内容只有一个槽位。** [`appendLocalRunEvent`](../../client/src/App.tsx) 在每个 `llm.round.started` 时清空 `message.reasoning`，旧回合的思考无法与随后发生的 Tool 保持顺序关系。
+3. **完成态活动被完全隐藏。** [`AgentProgress`](../../client/src/features/chat/components/AgentProgress.tsx) 在 `tone === 'done'` 时直接返回；一旦开始输出正文，运行中的活动也会消失。用户无法在完成后展开查看这次任务做过什么。
+4. **Raw reasoning 已退出 Client 协议。** [`event_translator.py`](../../runtime/src/shejane_runtime/event_translator.py) 不再把 `reasoning_content` 转成 SSE；Runtime 只在自身模型能力明确允许时，将 Provider 标记为 display-safe 的 summary 归一化为 `reasoning_summary`。
+5. **实时文本与 reasoning 不可可靠回放。** [`runtime-protocol.md`](../runtime-protocol.md) 明确把 `llm.delta`、`llm.reasoning`、`llm.tool_call_chunk` 和 `tool.progress` 视为可丢失的临时事件。仅在 Client 改样式可以改善当前运行中的体验，但无法让断线重连或历史会话恢复出完整过程。
+
+所以根因不是缺一个更好看的“思考中”动画，而是缺少**有序、分块、可完成、可回放的 Turn 展示模型**。
+
+## 最新产品与开源实现对比
+
+### LiveAgent：按真实 Round 顺序交错展示
+
+本次复核固定在 `Stack-Cairn/LiveAgent main@00a2c6fc43754f40022b0703459824559bee73ea`（2026-08-04）。它最值得 SheJane 参考的不是视觉样式，而是数据形状：
+
+- [`uiMessages.ts`](https://github.com/Stack-Cairn/LiveAgent/blob/00a2c6fc43754f40022b0703459824559bee73ea/crates/agent-gui/src/lib/chat/messages/uiMessages.ts) 把一个 Assistant turn 保存为多个 `UiRound`，每个 Round 又是按原顺序排列的 `thinking`、`text`、`tool` 和 hosted search block。它不会为了得到最终回答而覆盖前一轮内容。
+- [`RoundContent.tsx`](https://github.com/Stack-Cairn/LiveAgent/blob/00a2c6fc43754f40022b0703459824559bee73ea/crates/agent-gui/src/pages/chat/components/assistant-bubble/RoundContent.tsx) 在 thinking 流式生成时自动展开，完成后仍保留为可折叠区；同一条 Assistant 记录中继续渲染 Tool 和最终文本。
+- [`assistantBubbleUtils.ts`](https://github.com/Stack-Cairn/LiveAgent/blob/00a2c6fc43754f40022b0703459824559bee73ea/crates/agent-gui/src/pages/chat/components/assistant-bubble/assistantBubbleUtils.ts) 只合并连续的普通 Tool；Todo、AskUserQuestion、Image 和 SubAgent 等重要 Tool 保持独立卡片，避免一刀切压缩。
+- [`ToolTraceGroup.tsx`](https://github.com/Stack-Cairn/LiveAgent/blob/00a2c6fc43754f40022b0703459824559bee73ea/crates/agent-gui/src/pages/chat/components/assistant-bubble/ToolTraceGroup.tsx) 把连续调用汇总成一行，显示总数、构成和 running / failed / success，展开后才显示逐条调用。
+- [`ToolCallItem.tsx`](https://github.com/Stack-Cairn/LiveAgent/blob/00a2c6fc43754f40022b0703459824559bee73ea/crates/agent-gui/src/pages/chat/components/assistant-bubble/ToolCallItem.tsx) 的默认行只放 Tool 名、关键参数摘要、状态和文件增删数；参数、命令、结果和错误进入第二层。运行中的 Todo / 提问保持展开，完成后自动收起。
+
+LiveAgent 给出的关键答案是：**不要只做“一个思考框 + 一个活动框”；要保留 Round 内真实的 `思考/说明 → 动作 → 结果 → 下一轮说明` 顺序。**
+
+### Claude Code：普通视图与详细 transcript 分层
+
+- Claude Code 默认会压缩低价值细节，例如 MCP 连续调用可以折叠成 “Called slack 3 times”；`Ctrl+O` 打开的 transcript viewer 才显示详细 Tool 使用、执行、时间戳与模型信息。[Interactive mode](https://code.claude.com/docs/en/interactive-mode#keyboard-shortcuts)
+- 计划与后台工作不是混在对话日志里：`Ctrl+T` 显示最多五项任务清单，`/tasks` 单独查看正在运行的 shell 与 SubAgent。[Task list](https://code.claude.com/docs/en/interactive-mode#task-list) · [Run agents in parallel](https://code.claude.com/docs/en/agents#check-on-running-work)
+- 前台 SubAgent 会把权限请求带回主会话；后台 SubAgent 继续并行，但需要额外权限的调用会被拒绝，状态仍可通过任务入口查看。[Subagents](https://code.claude.com/docs/en/sub-agents#run-subagents-in-foreground-or-background)
+
+Claude Code 的启发是：**主对话需要足够强的当前动作和结果摘要，但完整审计日志应该有稳定的详细入口；计划、后台任务和对话 transcript 是不同的信息架构。**
+
+### Codex：先定义可渲染 Item，再谈 UI
+
+- Codex app-server 把一次 Turn 表示成一组有生命周期的 `ThreadItem`：`reasoning`、`plan`、`commandExecution`、`fileChange`、`mcpToolCall`、`collabToolCall`、`webSearch`、`imageView`、`sleep`、`contextCompaction` 等，而不是只有一个不断变化的 assistant 字符串。[app-server protocol](https://github.com/openai/codex/blob/6d4d9442c7142c08ac5c5098dfd6e82d8cd9f65a/codex-rs/app-server/README.md#L1447-L1506)
+- 所有 Item 都有 `item/started` 与 `item/completed`；命令还可流式发送 output delta，并在完成项中携带退出码和耗时。Reasoning summary 与只对部分开源模型适用的 raw reasoning text 也是两个不同字段。[app-server events](https://github.com/openai/codex/blob/6d4d9442c7142c08ac5c5098dfd6e82d8cd9f65a/codex-rs/app-server/README.md#L1458-L1506)
+- Codex 的基础指令要求在 Tool 调用前给用户简短 preamble，长任务中持续给出进度更新；Plan 是独立可渲染状态，而不是让用户从 Tool 日志猜进度。[Codex default instructions](https://github.com/openai/codex/blob/6d4d9442c7142c08ac5c5098dfd6e82d8cd9f65a/codex-rs/protocol/src/prompts/base_instructions/default.md#L264-L296)
+- Codex TUI 会从 reasoning summary 的标题提取当前动作，完成后再生成弱化的摘要块；普通 Agent 命令输出默认只显示少量行，完整内容留给 transcript。[Reasoning streaming](https://github.com/openai/codex/blob/6d4d9442c7142c08ac5c5098dfd6e82d8cd9f65a/codex-rs/tui/src/chatwidget/streaming.rs#L229-L297) · [Command output rendering](https://github.com/openai/codex/blob/6d4d9442c7142c08ac5c5098dfd6e82d8cd9f65a/codex-rs/tui/src/exec_cell/render.rs#L431-L496)
+
+Codex 的关键启发是：**用户感知到的“思考过程”主要来自模型主动写出的工作叙述，加上宿主渲染的结构化执行 Item，而不是依赖供应商恰好返回 raw thinking。**
+
+### OpenHands 与 Cline：事件事实和展示投影解耦
+
+- OpenHands 用不可变、append-only 的 typed event log 保存 `MessageEvent`、`ActionEvent`、`ObservationEvent`、错误和状态变化；Visualizer 只是逐事件读取并决定如何展示。[OpenHands events](https://docs.openhands.dev/sdk/arch/events) · [Custom visualizer](https://docs.openhands.dev/sdk/guides/convo-custom-visualizer)
+- Cline SDK 把 `content_start/update/end`、`iteration_start/end`、usage、notice、done/error 分成不同事件，并提供 snapshot 给 UI 恢复当前状态。[Cline events](https://docs.cline.bot/sdk/events)
+- OpenHands 的 Web UI 会把连续 Tool 自动成组：活动组显示最近动作和完成数，历史组压缩为“已完成 N 个动作”；Plan、TaskTracker、错误和 SubAgent 会打断普通分组，避免关键状态被吞掉。[Event grouping](https://github.com/OpenHands/OpenHands/blob/main/src/components/conversation-events/chat/group-events.ts) · [Grouped event UI](https://github.com/OpenHands/OpenHands/blob/main/src/components/conversation-events/chat/event-message-components/event-group.tsx)
+- Cline 为 thinking、命令、Diff、浏览器、错误、checkpoint 和 SubAgent 提供专用 Row；thinking 在流式期间突出、完成后折叠。它的优点是语义清楚，代价是长任务容易逐行过密，因此仍需自动分组。[Cline chat UI](https://github.com/cline/cline/tree/main/webview-ui/src/components/chat)
+
+这两者共同说明：**Runtime 事件应是事实，Client 的紧凑/详细视图是投影策略；不能为了 UI 简洁而销毁事件之间的顺序和回合边界。**
+
+## 建议的 SheJane 目标形态
+
+### 用户看到的默认结构
+
+```text
+正在处理
+  我先检查现有事件流，确认哪些信息已经由 Runtime 提供。
+
+  › 检查代码结构                         已完成
+  › 搜索 18 处相关实现                   已完成
+  › 对照 LiveAgent / Codex                进行中
+
+  思考摘要                               可展开
+
+最终回答正文……
+
+过程 · 6 步 · 2 个工具组 · 已验证         ›
+```
+
+规则：
+
+1. 运行中保留当前工作叙述，并按真实发生顺序插入 Tool / SubAgent / 审批 / 验证项。
+2. 新一轮模型开始时，结束前一轮 block，不清空它。
+3. 连续普通成功 Tool 可折叠为组；审批、提问、失败、验证失败、SubAgent 和文件 Diff 保持独立。
+4. 最终回答仍是视觉主角；完成后过程变成一条可展开摘要，但不消失。
+5. “标准”视图显示叙述、动作摘要和异常；“详细”视图显示参数、stdout、Tool 返回、时间戳和模型信息。先不增加第三档。
+6. Provider 没有 reasoning summary 时，工作叙述和结构化事件仍能形成完整过程；不能退化成只有“正在思考”。
+
+### 推荐的数据边界
+
+```text
+主要阶段：P4 客户端读取快照并订阅变化
+来源阶段：P8 模型回合、P10 工具/等待、P12 终态提交
+状态所有者：Runtime 拥有有序展示项与完成状态；Client 只拥有折叠状态和临时动画
+替换的当前路径：ChatMessage.content + reasoning + agentEvents 三条割裂投影
+```
+
+建议将每个用户可见 Turn 投影成有序的 presentation items，最小字段为：
+
+- `item_id`
+- `round_id`
+- `kind`: `progress_message | reasoning_summary | tool | plan | subagent | verification | notice | final_answer`
+- `status`: `in_progress | completed | failed | waiting | canceled`
+- `summary`
+- `detail_ref` 或结构化 detail
+- `started_at` / `completed_at`
+
+逐 token delta 可以继续走临时通道，但 Item 的存在、顺序、摘要和终态需要持久化；P12 负责最终化。这样断线恢复时即使没有每个 token，也能恢复“做了什么、为什么这样做、结果如何”。
+
+### 分阶段落地边界
+
+1. **Client 快速修复**：不再清空旧 Round；将现有 reasoning、文本和 `agentEvents` 按 Round 组织；完成后保留一条折叠过程摘要。这个版本改善当前会话，但承认断线后可能缺失临时文本。
+2. **Runtime 正式协议**：增加 provider-neutral `reasoning.summary` / `progress.message`，并持久化 presentation item 的顺序、摘要和终态；继续让 token delta 保持临时。
+3. **Provider 归一化**：分别适配 OpenAI reasoning summary、Anthropic thinking summary/block、Gemini thought summary 与 DeepSeek `reasoning_content`；只有明确允许展示的内容才进入 `reasoning_summary`。
+
+### 验收标准
+
+- 一次 `文本 → Tool → 文本 → Tool → 最终回答` 的运行，五段内容按真实顺序保留，不发生覆盖。
+- Run 完成后仍能通过一条紧凑摘要展开完整过程；普通成功项默认收起，失败与等待默认展开。
+- 没有 reasoning 输出的模型仍能显示 Agent 工作叙述与执行轨迹。
+- 断线重连后，至少恢复每个 Item 的顺序、摘要、状态和关键结果；不要求恢复可丢失的逐 token 动画。
+- 详细视图能看到 Tool 参数、结果、错误、文件 Diff、SubAgent 状态与验证证据；标准视图不被这些内容淹没。
+
+## 原始结论仍成立
 
 ## 结论先行
 
@@ -109,6 +238,6 @@ SheJane 可以采用 **“标准模式默认 + 详细模式可选”**：
 - 完成后：一条完成摘要，默认收起所有成功 Tool；
 - 展开：先按语义阶段分组，再查看逐条 Tool；
 - 审批、等待输入、错误：自动展开；
-- 思考：仅展示 provider 提供的 summary / trace，单独折叠，永远不把 Tool activity 命名为 thinking。
+- 思考：展示 Agent 主动给用户的工作叙述；provider 提供的 summary / trace 作为单独的可选折叠层，永远不把 Tool activity 命名为 thinking。
 
-这是对现有信息架构的收敛，不需要改变 Runtime 事件协议，也不需要删除审计数据。先在 Client 投影视图中做确定性分组即可；只有当现有事件缺少目标、阶段或状态字段时，才需要补协议。
+Client 可以先基于现有事件恢复 Round 顺序并保留完成态摘要；完整的历史回放则需要 Runtime 持久化 presentation item 的顺序、摘要和终态。两步都不应删除现有审计数据。

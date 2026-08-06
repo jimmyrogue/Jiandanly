@@ -152,7 +152,11 @@ import {
 } from './runtime/client'
 import { filePreviewKind } from './shared/files/filePreview'
 import { downloadFile } from './shared/files/downloadFile'
-import { applySubagentLifecycleEvent, projectRuntimeThread } from './features/chat/runtimeProjection'
+import {
+  applyRunPresentationEvent,
+  applySubagentLifecycleEvent,
+  projectRuntimeThread,
+} from './features/chat/runtimeProjection'
 
 const ArtifactPanel = lazy(() => import('./features/chat/components/ArtifactPanel').then((module) => ({ default: module.ArtifactPanel })))
 const DocPreviewPanel = lazy(() => import('./features/chat/components/DocPreviewPanel').then((module) => ({ default: module.DocPreviewPanel })))
@@ -3808,30 +3812,12 @@ function appendLocalRunEvent(
   t: Translator,
   onOfficeFileOpened?: (ref: LocalFileRef) => void,
 ) {
+  applyRunPresentationEvent(message, event)
   if (event.event_type === 'llm.delta') {
     return
   }
-  message.content = projectTransientAssistantText(message.content, event)
-  if (event.event_type === 'llm.round.started') {
-    message.reasoning = ''
-    return
-  }
-  // Accumulate provider-supplied `reasoning_content` into a dedicated field.
-  // MessageBubble keeps it collapsed by default and renders it as plain text,
-  // while the Runtime retains the full model message for later model rounds.
-  // Dedupe on event.id so a re-streamed replay doesn't double-append.
-  if (event.event_type === 'llm.reasoning') {
-    if (event.id && seenEventIDs.has(event.id)) {
-      return
-    }
-    if (event.id) {
-      seenEventIDs.add(event.id)
-    }
-    const chunk = String((event.payload ?? {}).content ?? '')
-    if (chunk) {
-      message.reasoning = (message.reasoning ?? '') + chunk
-    }
-    return
+  if (!message.presentation) {
+    message.content = projectTransientAssistantText(message.content, event)
   }
   // Per-call usage streams as llm.usage; accumulate it onto the message so
   // the usage chip updates live. Dedupe on event.id (re-stream replay).
@@ -3983,6 +3969,9 @@ function detectOfficeFileEdited(payload: AgentRunEvent['payload']): LocalFileRef
 }
 
 function appendLocalDelta(message: ChatMessage, delta: string, event: AgentRunEvent, seenEventIDs: Set<string>) {
+  if (message.presentation) {
+    return
+  }
   if (event.id && seenEventIDs.has(event.id)) {
     return
   }

@@ -105,9 +105,10 @@ class RecordingHandler:
 def _patched_async_client(handler):
     class _Patched(httpx.AsyncClient):
         def __init__(self, **kw):
+            transport = kw.pop("transport", None) or httpx.MockTransport(handler)
             super().__init__(
-                transport=httpx.MockTransport(handler),
-                **{k: v for k, v in kw.items() if k != "transport"},
+                transport=transport,
+                **kw,
             )
 
     return _Patched
@@ -2123,6 +2124,97 @@ def test_capability_6b_skills_middleware_lists_runtime_skill(monkeypatch, tmp_pa
     )
     assert "e2e-active-skill" in system_text
     assert str(skill_file) in system_text
+
+
+def test_weather_lookup_reaches_model_with_only_relevant_tool_families(monkeypatch) -> None:
+    handler = RecordingHandler(
+        scripts=[
+            [
+                ("llm.delta", {"content_delta": "杭州今天多云，出门带伞。"}),
+                ("llm.done", {"request_id": "weather", "finish_reason": "stop"}),
+            ]
+        ]
+    )
+
+    with _make_client(monkeypatch, handler) as client:
+        events = _post_run_and_stream(client, "帮我查一下 今天杭州的天气")
+
+    tool_names = {
+        str(tool.get("name") or tool.get("function", {}).get("name"))
+        for tool in handler.requests[0]["tools"]
+    }
+    assert "run.completed" in {name for name, _payload in events}
+    assert "run.failed" not in {name for name, _payload in events}
+    assert "web_fetch" in tool_names
+    assert tool_names.isdisjoint(
+        {"read_file", "ls", "glob", "execute", "task", "child_spawn", "child_check"}
+    )
+    assert handler.agent_requests == 1
+
+
+def test_weather_lookup_fetches_data_and_completes_without_summarization(monkeypatch) -> None:
+    from shejane_runtime.tools import web as web_module
+
+    weather_url = "https://weather.example.test/hangzhou/today"
+    weather_requests: list[str] = []
+
+    def weather_handler(request: httpx.Request) -> httpx.Response:
+        weather_requests.append(str(request.url))
+        return httpx.Response(
+            200,
+            json={"city": "杭州", "condition": "多云", "temperature_c": 27},
+            request=request,
+        )
+
+    monkeypatch.setattr(
+        web_module,
+        "_pinned_transport",
+        lambda _url: (httpx.MockTransport(weather_handler), ""),
+    )
+    handler = RecordingHandler(
+        scripts=[
+            [
+                (
+                    "llm.tool_call",
+                    {
+                        "id": "weather-fetch",
+                        "name": "web.fetch",
+                        "arguments": {"url": weather_url},
+                    },
+                ),
+                ("llm.done", {"request_id": "weather-1", "finish_reason": "tool_calls"}),
+            ],
+            [
+                ("llm.delta", {"content_delta": "杭州今天 27°C，多云。"}),
+                ("llm.done", {"request_id": "weather-2", "finish_reason": "stop"}),
+            ],
+        ]
+    )
+
+    with _make_client(monkeypatch, handler) as client:
+        headers = {"Authorization": "Bearer tok"}
+        run = client.post(
+            "/v1/runs",
+            headers=headers,
+            json=run_command("帮我查一下 今天杭州的天气"),
+        )
+        assert run.status_code == 200, run.text
+        run_id = run.json()["id"]
+        with client.stream("GET", f"/v1/runs/{run_id}/stream", headers=headers) as response:
+            events = _parse_sse(response.read().decode("utf-8"))
+        diagnostics = client.get(f"/v1/runs/{run_id}/diagnostics", headers=headers).json()
+
+    completed = next(payload for name, payload in events if name == "run.completed")
+    tool_result = next(payload for name, payload in events if name == "tool.completed")
+    weather = json.loads(json.loads(tool_result["content"])["body"])
+    model_spans = [span for span in diagnostics["trace"]["spans"] if span["kind"] == "model"]
+    assert weather_requests == [weather_url]
+    assert weather == {"city": "杭州", "condition": "多云", "temperature_c": 27}
+    assert completed["final_text"] == "杭州今天 27°C，多云。"
+    assert [span["name"] for span in model_spans].count("agent") == 2
+    assert "summarization" not in {span["name"] for span in model_spans}
+    assert diagnostics["tool_receipts"][0]["status"] == "completed"
+    assert handler.agent_requests == 2
 
 
 # ---- capability 7: TodoList middleware exposes write_todos ----

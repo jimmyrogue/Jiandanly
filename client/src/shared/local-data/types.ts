@@ -1,6 +1,7 @@
 import type {
   ImportModelServiceRequest,
   RuntimeModelSpec,
+  RunPresentationState,
   SubagentInvocationStatus,
   SubagentReceiptStatus,
 } from '@shejane/runtime-sdk'
@@ -174,17 +175,12 @@ export interface ChatMessage {
   /** Highest Runtime event sequence already reflected in this cache entry. */
   lastEventSeq?: number
   tokens?: number
+  /** Runtime-owned execution presentation plus disposable live drafts. */
+  presentation?: RunPresentationState
   agentEvents?: AgentTimelineItem[]
   /** Current subagent state rebuilt from the authoritative Run snapshot and
    *  advanced by durable lifecycle events while the stream is connected. */
   subagents?: AgentSubagentProjection[]
-  /** Thinking-mode trace from the model (DeepSeek `reasoning_content`).
-   *  Accumulated from `llm.reasoning` SSE events for backend round-trip
-   *  to subsequent LLM calls (DeepSeek API requires reasoning_content
-   *  be passed back). NOT rendered to the user — only its presence +
-   *  `status === 'streaming'` triggers the ephemeral "Thinking…"
-   *  indicator above the bubble. */
-  reasoning?: string
   /** UI model badge for the completed turn. */
   runMode?: {
     /** The concrete Runtime model id. */

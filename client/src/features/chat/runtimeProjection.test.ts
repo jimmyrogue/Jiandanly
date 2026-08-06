@@ -1,11 +1,218 @@
 import { describe, expect, it } from 'vitest'
 import type { LocalThreadSnapshot } from '../../runtime/client'
 import { createTranslator } from '../../shared/i18n/i18n'
+import type { ChatMessage, Conversation } from '../../shared/local-data/types'
 import { timelineItem } from './chatStore'
 import { findConversationPendingApproval } from './pendingApproval'
-import { applySubagentLifecycleEvent, projectRuntimeThread } from './runtimeProjection'
+import {
+  applyRunPresentationEvent,
+  applySubagentLifecycleEvent,
+  projectLegacyRunPresentation,
+  projectRuntimeThread,
+} from './runtimeProjection'
 
 describe('Runtime thread projection', () => {
+  it('clears stale Client presentation and events when Runtime returns authoritative empties', () => {
+    const snapshot = {
+      thread: {
+        id: 'conversation-clear',
+        title: 'Clear stale state',
+        metadata: {},
+        version: 1,
+        created_at: '2026-08-04T00:00:00Z',
+        updated_at: '2026-08-04T00:00:01Z',
+      },
+      items: [{
+        id: 'assistant-clear',
+        thread_id: 'conversation-clear',
+        run_id: 'run-clear',
+        item_type: 'assistant_message',
+        status: 'in_progress',
+        content: '',
+        metadata: {},
+        position: 1,
+        version: 1,
+        created_at: '2026-08-04T00:00:00Z',
+        updated_at: '2026-08-04T00:00:01Z',
+      }],
+      runs: [],
+      events: [],
+      event_high_watermarks: { 'run-clear': 0 },
+      presentations: {},
+      cursor: 1,
+      has_more_items: false,
+      next_before_position: null,
+      events_truncated: false,
+    } as LocalThreadSnapshot
+    const existing: Conversation = {
+      id: 'conversation-clear',
+      title: 'Old',
+      createdAt: '2026-08-04T00:00:00Z',
+      updatedAt: '2026-08-04T00:00:00Z',
+      archived: false,
+      messages: [{
+        id: 'assistant-clear',
+        role: 'assistant' as const,
+        content: 'stale',
+        createdAt: '2026-08-04T00:00:00Z',
+        status: 'streaming' as const,
+        agentEvents: [{ type: 'tool.completed', label: 'stale event' }],
+        presentation: {
+          snapshot: { schema_version: 1, run_id: 'run-clear', items: [], event_high_watermark: 1 },
+          drafts: { stale: 'stale draft' },
+        },
+      }],
+    }
+
+    const message = projectRuntimeThread(snapshot, existing).messages[0]
+
+    expect(message?.presentation).toBeUndefined()
+    expect(message?.agentEvents).toBeUndefined()
+  })
+  it('adapts an older Runtime tool timeline into the presentation interface', () => {
+    const presentation = projectLegacyRunPresentation(
+      'run-legacy-presentation',
+      {
+        id: 'assistant-legacy-presentation',
+        thread_id: 'conversation-legacy-presentation',
+        run_id: 'run-legacy-presentation',
+        item_type: 'assistant_message',
+        status: 'completed',
+        content: 'Legacy answer.',
+        metadata: {},
+        position: 1,
+        version: 1,
+        created_at: '2026-08-04T00:00:00Z',
+        updated_at: '2026-08-04T00:00:03Z',
+        completed_at: '2026-08-04T00:00:03Z',
+      },
+      [
+        {
+          id: 'legacy-requested',
+          run_id: 'run-legacy-presentation',
+          seq: 1,
+          event_type: 'tool.requested',
+          payload: { tool_call_id: 'legacy-call', tool: 'search' },
+          created_at: '2026-08-04T00:00:01Z',
+        },
+        {
+          id: 'legacy-completed',
+          run_id: 'run-legacy-presentation',
+          seq: 2,
+          event_type: 'tool.completed',
+          payload: { tool_call_id: 'legacy-call', tool: 'search' },
+          created_at: '2026-08-04T00:00:02Z',
+        },
+        {
+          id: 'legacy-terminal',
+          run_id: 'run-legacy-presentation',
+          seq: 3,
+          event_type: 'run.completed',
+          payload: { final_text: 'Legacy answer.' },
+          created_at: '2026-08-04T00:00:03Z',
+        },
+      ],
+    )
+
+    expect(presentation?.snapshot.items?.map((item) => item.kind)).toEqual([
+      'tool',
+      'final_answer',
+    ])
+    expect(presentation?.snapshot.items?.[0]).toMatchObject({
+      id: 'tool-call:legacy-call',
+      status: 'completed',
+    })
+  })
+
+  it('applies live presentation changes to the same message model', () => {
+    const message: ChatMessage = {
+      id: 'assistant-live-presentation',
+      role: 'assistant' as const,
+      content: '',
+      createdAt: '2026-08-04T00:00:00Z',
+      status: 'streaming' as const,
+      runId: 'run-live-presentation',
+    }
+    applyRunPresentationEvent(message, {
+      event_type: 'llm.delta',
+      presentation_change: {
+        kind: 'draft.delta',
+        round_id: 'model-call-live',
+        content: 'Checking',
+      },
+    })
+    applyRunPresentationEvent(message, {
+      event_type: 'run.completed',
+      seq: 2,
+      presentation_change: {
+        kind: 'item.upsert',
+        item: {
+          id: 'answer:assistant-live-presentation',
+          kind: 'final_answer',
+          status: 'completed',
+          order: { event_seq: 2, slot: 0 },
+          revision: 2,
+          source: { kind: 'thread_item', id: 'assistant-live-presentation' },
+          content: 'Done live.',
+          created_at: '2026-08-04T00:00:00Z',
+          completed_at: '2026-08-04T00:00:02Z',
+        },
+      },
+    })
+
+    expect(message.content).toBe('Done live.')
+    expect(message.presentation?.drafts).toEqual({})
+    expect(message.presentation?.snapshot.items).toHaveLength(1)
+  })
+
+  it('applies every presentation item emitted by one durable event', () => {
+    const message: ChatMessage = {
+      id: 'assistant-live-round',
+      role: 'assistant',
+      content: '',
+      createdAt: '2026-08-04T00:00:00Z',
+      status: 'streaming',
+      runId: 'run-live-round',
+    }
+
+    applyRunPresentationEvent(message, {
+      event_type: 'assistant.round.committed',
+      presentation_changes: [
+        {
+          kind: 'item.upsert',
+          item: {
+            id: 'round:model-call-live:reasoning',
+            kind: 'reasoning_summary',
+            status: 'completed',
+            order: { event_seq: 1, slot: 0 },
+            revision: 1,
+            source: { kind: 'run_event', id: 'event-1' },
+            summary: 'The repository structure determines the next read.',
+            created_at: '2026-08-04T00:00:01Z',
+          },
+        },
+        {
+          kind: 'item.upsert',
+          item: {
+            id: 'round:model-call-live:progress',
+            kind: 'progress',
+            status: 'completed',
+            order: { event_seq: 1, slot: 1 },
+            revision: 1,
+            source: { kind: 'run_event', id: 'event-1' },
+            text: 'Inspecting files.',
+            created_at: '2026-08-04T00:00:01Z',
+          },
+        },
+      ],
+    })
+
+    expect(message.presentation?.snapshot.items?.map((item) => item.kind)).toEqual([
+      'reasoning_summary',
+      'progress',
+    ])
+  })
+
   it('tracks live lifecycle events by operation_id without treating outcome_unknown as failed', () => {
     const base = {
       operation_id: 'toolop-live',
@@ -540,6 +747,36 @@ describe('Runtime thread projection', () => {
         created_at: '2026-07-12T00:00:02Z',
       }],
       event_high_watermarks: { 'run-1': 9 },
+      presentations: {
+        'run-1': {
+          schema_version: 1,
+          run_id: 'run-1',
+          event_high_watermark: 9,
+          items: [
+            {
+              id: 'round:model-call-1:progress',
+              kind: 'progress',
+              status: 'completed',
+              order: { event_seq: 2, slot: 0 },
+              revision: 2,
+              source: { kind: 'run_event', id: 'event-progress' },
+              text: 'Inspecting the repository.',
+              created_at: '2026-07-12T00:00:01Z',
+            },
+            {
+              id: 'answer:assistant-1',
+              kind: 'final_answer',
+              status: 'completed',
+              order: { event_seq: 9, slot: 0 },
+              revision: 9,
+              source: { kind: 'thread_item', id: 'assistant-1' },
+              content: 'Done from presentation',
+              created_at: '2026-07-12T00:00:01Z',
+              completed_at: '2026-07-12T00:00:02Z',
+            },
+          ],
+        },
+      },
       cursor: 2,
       has_more_items: false,
       events_truncated: false,
@@ -582,12 +819,22 @@ describe('Runtime thread projection', () => {
       {
         id: 'assistant-client-1',
         role: 'assistant',
-        content: 'Done',
+        content: 'Done from presentation',
         status: 'done',
         runId: 'run-1',
         commandId: 'cmd-1',
         lastEventSeq: 9,
         agentEvents: [{ type: 'run.completed' }],
+        presentation: {
+          snapshot: {
+            run_id: 'run-1',
+            items: [
+              { id: 'round:model-call-1:progress' },
+              { id: 'answer:assistant-1' },
+            ],
+          },
+          drafts: {},
+        },
       },
     ])
   })

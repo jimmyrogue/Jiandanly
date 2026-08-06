@@ -179,6 +179,7 @@ from .plugins.browser_qa import BROWSER_QA_PLUGIN_ID
 from .plugins.catalog import PluginCatalog
 from .plugins.platforms import current_managed_worker_platform
 from .plugins.registry import PluginRegistry, PluginRegistryError
+from .presentation import project_run_presentation
 from .progress_ledger import (
     latest_feature_ledger as _latest_feature_ledger,
 )
@@ -314,6 +315,7 @@ def _model_connection_models(row: dict[str, Any]) -> list[dict[str, Any]]:
         normalized = apply_known_model_profile_defaults(
             model,
             service_base_url=str(row.get("base_url") or ""),
+            trusted_model_catalog=row.get("preset_id") == "shejane-official",
         )
         normalized["capabilities"] = normalized_model_capabilities(
             normalized,
@@ -602,6 +604,7 @@ async def _refresh_model_service_models(
             model_id=model_id,
             display_name=display_name[:100] or model_id[:100],
             service_base_url=base_url,
+            trusted_model_catalog=preset.get("id") == "shejane-official",
         )
         profile.update(
             {
@@ -641,6 +644,9 @@ async def _refresh_model_service_models(
                     },
                     adapter_id=adapter_id,
                 )
+                if "agent_chat" in declared_capabilities:
+                    profile["tool_calling"] = True
+                    profile["streaming"] = True
             recommended_for = candidate.get("recommended_for")
             if isinstance(recommended_for, list):
                 profile["recommended"] = any(
@@ -2721,6 +2727,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         if snapshot is None:
             raise HTTPException(status_code=404, detail="thread not found")
+        tool_receipts_by_run = snapshot.pop("tool_receipts_by_run", {})
+        wait_candidates_by_run = snapshot.pop("wait_candidates_by_run", {})
+        artifacts_by_run = snapshot.pop("artifacts_by_run", {})
+        raw_presentation_events = snapshot.pop("presentation_events", [])
+        presentation_high_watermarks = snapshot.pop("presentation_high_watermarks", {})
         items = []
         for item in snapshot["items"]:
             try:
@@ -2735,12 +2746,41 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             except (json.JSONDecodeError, TypeError):
                 payload = {}
             events.append({**event, "payload": payload if isinstance(payload, dict) else {}})
+        presentation_events_by_run: dict[str, list[dict[str, Any]]] = {}
+        for event in raw_presentation_events:
+            try:
+                payload = json.loads(event.get("payload_json") or "{}")
+            except (json.JSONDecodeError, TypeError):
+                payload = {}
+            decoded = {**event, "payload": payload if isinstance(payload, dict) else {}}
+            presentation_events_by_run.setdefault(str(event["run_id"]), []).append(decoded)
+        presentations = {}
+        for run in snapshot["runs"]:
+            run_id = str(run["id"])
+            presentations[run_id] = project_run_presentation(
+                run=run,
+                assistant_item=next(
+                    (
+                        item
+                        for item in items
+                        if item.get("run_id") == run_id
+                        and item.get("item_type") == "assistant_message"
+                    ),
+                    None,
+                ),
+                events=presentation_events_by_run.get(run_id, []),
+                tool_receipts=tool_receipts_by_run.get(run_id, []),
+                wait_candidates=wait_candidates_by_run.get(run_id, []),
+                artifacts=artifacts_by_run.get(run_id, []),
+                event_high_watermark=int(presentation_high_watermarks.get(run_id, 0)),
+            )
         return {
             **snapshot,
             "thread": _thread_record_for_api(snapshot["thread"]),
             "items": items,
             "runs": await _runs_with_inputs(store, snapshot["runs"]),
             "events": events,
+            "presentations": presentations,
         }
 
     @app.patch("/v1/threads/{thread_id}", response_model=LocalThread)

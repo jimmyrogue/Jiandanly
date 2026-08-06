@@ -240,6 +240,11 @@ async def test_stream_settles_usage_without_reading_sse(tmp_path: Path) -> None:
         chunks = [chunk async for chunk in model.astream([HumanMessage(content="hi")])]
 
         assert "".join(str(chunk.content) for chunk in chunks) == "hello"
+        assembled = chunks[0]
+        for chunk in chunks[1:]:
+            assembled += chunk
+        [model_call] = await store.list_model_calls_for_run(str(run["id"]))
+        assert assembled.additional_kwargs["runtime_model_call_id"] == model_call["id"]
         assert await store.model_usage_summary(str(run["id"])) == {
             "input_tokens": 7,
             "output_tokens": 3,
@@ -382,6 +387,7 @@ async def test_review_budgets_are_separate_but_use_the_same_ledger(tmp_path: Pat
         )
         completion = agent.model_copy(update={"call_purpose": "completion_review", "max_calls": 1})
         title = agent.model_copy(update={"call_purpose": "title_generation", "max_calls": 1})
+        summarization = agent.model_copy(update={"call_purpose": "summarization", "max_calls": 1})
 
         _ = [chunk async for chunk in agent.astream([HumanMessage(content="agent")])]
         _ = [chunk async for chunk in approval.astream([HumanMessage(content="approval")])]
@@ -390,6 +396,12 @@ async def test_review_budgets_are_separate_but_use_the_same_ledger(tmp_path: Pat
         ]
         _ = [chunk async for chunk in completion.astream([HumanMessage(content="completion")])]
         _ = [chunk async for chunk in title.astream([HumanMessage(content="title")])]
+        _ = [chunk async for chunk in summarization.astream([HumanMessage(content="summary")])]
+        with pytest.raises(ModelCallBudgetExceeded):
+            _ = [
+                chunk
+                async for chunk in summarization.astream([HumanMessage(content="summary again")])
+            ]
 
         rows = await store.list_model_calls_for_run(str(run["id"]))
         assert [row["purpose"] for row in rows] == [
@@ -398,6 +410,7 @@ async def test_review_budgets_are_separate_but_use_the_same_ledger(tmp_path: Pat
             "clarification_review",
             "completion_review",
             "title_generation",
+            "summarization",
         ]
     finally:
         await store.close()

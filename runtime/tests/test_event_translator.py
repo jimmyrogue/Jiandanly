@@ -15,15 +15,14 @@ def test_messages_mode_emits_llm_token() -> None:
     assert events == [{"event": "llm.delta", "data": {"content": "Hello"}}]
 
 
-def test_messages_mode_emits_reasoning_separately() -> None:
+def test_messages_mode_does_not_emit_raw_reasoning() -> None:
     chunk = AIMessageChunk(
         content="answer",
         additional_kwargs={"reasoning_content": "thinking..."},
     )
     events = translate("messages", (chunk, {}))
     names = [e["event"] for e in events]
-    assert "llm.delta" in names
-    assert "llm.reasoning" in names
+    assert names == ["llm.delta"]
 
 
 def test_messages_mode_emits_usage() -> None:

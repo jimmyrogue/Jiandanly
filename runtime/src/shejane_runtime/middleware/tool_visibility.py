@@ -35,6 +35,41 @@ _OFFICE_SIGNALS = (
     "单元格",
 )
 _POST_ARTIFACT_FALLBACK_TOOLS = frozenset({"read_file", "execute", "task"})
+_WEATHER_SIGNALS = ("天气", "气温", "weather", "forecast")
+_FILE_WORK_SIGNALS = (
+    "文件",
+    "保存",
+    "写入",
+    "导出",
+    "file",
+    "save",
+    "write",
+    ".md",
+    ".txt",
+    ".json",
+    ".csv",
+    ".docx",
+    ".xlsx",
+    ".pptx",
+)
+_FILESYSTEM_TOOLS = frozenset(
+    {"read_file", "write_file", "edit_file", "ls", "glob", "grep", "execute"}
+)
+_COLLABORATION_TOOLS = frozenset(
+    {
+        "task",
+        "team.run",
+        "child.spawn",
+        "child.list",
+        "child.check",
+        "child.wait",
+        "child.cancel",
+        "mailbox.send",
+        "mailbox.inbox",
+        "mailbox.reply",
+        "mailbox.ack",
+    }
+)
 
 
 def _tool_name(tool: Any) -> str:
@@ -72,6 +107,18 @@ def _message_text(message: Any) -> str:
     return "\n".join(parts)
 
 
+def _goal_hidden_tools(task_goal: str | None) -> frozenset[str]:
+    text = str(task_goal or "").lower()
+    if not any(signal in text for signal in _WEATHER_SIGNALS):
+        return frozenset()
+    hidden = set(_COLLABORATION_TOOLS)
+    if not any(signal in text for signal in _FILE_WORK_SIGNALS):
+        hidden.update(_FILESYSTEM_TOOLS)
+    # ponytail: keep this deterministic weather fast path until another simple
+    # lookup family demonstrates the same failure mode.
+    return frozenset(hidden)
+
+
 def visible_tools_for_messages(
     tools: Sequence[Any],
     messages: Sequence[Any],
@@ -88,16 +135,22 @@ def visible_tools_for_messages(
     office_tools = [tool for tool in tools if _tool_name(tool).startswith("office.")]
     non_office_tools = [tool for tool in tools if not _tool_name(tool).startswith("office.")]
     if not any(signal in text for signal in _OFFICE_SIGNALS):
-        return non_office_tools
-    named = {
-        name
-        for tool in office_tools
-        if (name := _tool_name(tool))
-        and re.search(rf"(?<![\w.]){re.escape(name.lower())}(?![\w.])", text)
-    }
-    if named:
-        return [tool for tool in tools if _tool_name(tool) in named or tool in non_office_tools]
-    return list(tools)
+        visible = non_office_tools
+    else:
+        named = {
+            name
+            for tool in office_tools
+            if (name := _tool_name(tool))
+            and re.search(rf"(?<![\w.]){re.escape(name.lower())}(?![\w.])", text)
+        }
+        if named:
+            visible = [
+                tool for tool in tools if _tool_name(tool) in named or tool in non_office_tools
+            ]
+        else:
+            visible = list(tools)
+    hidden = _goal_hidden_tools(task_goal)
+    return [tool for tool in visible if _tool_name(tool) not in hidden]
 
 
 def _mcp_search_result_names(messages: Sequence[Any]) -> set[str]:
@@ -252,7 +305,11 @@ class ToolVisibilityMiddleware(AgentMiddleware):
 
     def _blocked_tool_result(self, request: ToolCallRequest) -> ToolMessage | None:
         tool_name = str(request.tool_call.get("name") or "")
-        if tool_name not in self.blocked_tool_names:
+        context = getattr(getattr(request, "runtime", None), "context", None)
+        task_goal = getattr(context, "task_goal", None)
+        if tool_name not in self.blocked_tool_names and tool_name not in _goal_hidden_tools(
+            task_goal
+        ):
             return None
         return ToolMessage(
             content=f"Tool {tool_name} is not available to this Agent.",

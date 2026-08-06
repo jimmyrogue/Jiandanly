@@ -855,12 +855,41 @@ _TERMINAL_RUN_STATUSES = {"completed", "failed", "canceled"}
 TRANSIENT_RUN_EVENT_TYPES = frozenset(
     {
         "llm.delta",
+        "llm.round.closed",
         "llm.round.started",
         "llm.reasoning",
         "llm.usage",
         "llm.tool_call_chunk",
         "tool.progress",
     }
+)
+
+_PRESENTATION_EVENT_TYPES = (
+    "assistant.round.committed",
+    "tool.requested",
+    "tool.completed",
+    "tool.failed",
+    "tool.canceled",
+    "subagent.spawned",
+    "subagent.started",
+    "subagent.waiting",
+    "subagent.completed",
+    "subagent.failed",
+    "subagent.canceled",
+    "subagent.outcome_unknown",
+    "permission.required",
+    "permission.resolved",
+    "question.asked",
+    "question.answered",
+    "plan.approval_required",
+    "plan.resolved",
+    "tool.reconciliation_required",
+    "tool.reconciliation_resolved",
+    "artifact.created",
+    "run.completed",
+    "run.failed",
+    "run.canceled",
+    "run.cleanup_required",
 )
 
 _SUBAGENT_EVENT_BY_RECEIPT_STATUS = {
@@ -2069,6 +2098,7 @@ class LocalStore:
             "clarification_review",
             "completion_review",
             "title_generation",
+            "summarization",
         }:
             raise ValueError("model call purpose is invalid")
         async with self.run_write_transaction(run_id) as conn:
@@ -2399,6 +2429,57 @@ class LocalStore:
             "created_at": created_at,
             "updated_at": now,
         }
+
+    async def commit_assistant_round(
+        self,
+        run_id: str,
+        payload: dict[str, Any],
+    ) -> tuple[dict[str, Any], bool]:
+        """Append one complete model round exactly once across execution replay."""
+        round_id = str(payload.get("round_id") or "")
+        if not round_id:
+            raise ValueError("assistant round requires round_id")
+        payload_json = _encode_payload(payload)
+        async with self.run_write_transaction(run_id) as conn:
+            existing = await (
+                await conn.execute(
+                    "SELECT * FROM local_events WHERE run_id = ? "
+                    "AND event_type = 'assistant.round.committed' "
+                    "AND json_extract(payload_json, '$.round_id') = ? LIMIT 1",
+                    (run_id, round_id),
+                )
+            ).fetchone()
+            if existing is not None:
+                record = dict(existing)
+                if str(record["payload_json"]) != payload_json:
+                    committed = _json_payload(record["payload_json"])
+                    # An approved edit creates a replacement tool-call id while
+                    # replaying the same model round. That routing identity is
+                    # allowed to differ; display text and summary are immutable.
+                    if any(
+                        committed.get(key) != payload.get(key)
+                        for key in ("text", "reasoning_summary")
+                    ):
+                        raise RunResultConflictError(
+                            f"assistant round {round_id} was already committed differently"
+                        )
+                return record, False
+            committed_at = _now()
+            event = await self._append_event_uncommitted(
+                conn,
+                run_id,
+                "assistant.round.committed",
+                payload_json=payload_json,
+                created_at=committed_at,
+            )
+            await self._touch_thread_for_run_event_uncommitted(
+                conn,
+                run_id=run_id,
+                change_type="assistant.round.committed",
+                event_high_watermark=int(event["seq"]),
+                changed_at=committed_at,
+            )
+            return event, True
 
     # --- durable tool execution receipts ---
 
@@ -8097,7 +8178,12 @@ class LocalStore:
             )
             runs: list[aiosqlite.Row] = []
             subagent_invocations_by_run: dict[str, list[dict[str, Any]]] = {}
+            tool_receipts_by_run: dict[str, list[dict[str, Any]]] = {}
+            wait_candidates_by_run: dict[str, list[dict[str, Any]]] = {}
+            artifacts_by_run: dict[str, list[dict[str, Any]]] = {}
             events: list[aiosqlite.Row] = []
+            presentation_events: list[aiosqlite.Row] = []
+            presentation_high_watermarks: dict[str, int] = {}
             event_high_watermarks: dict[str, int] = {}
             events_truncated = False
             if run_ids:
@@ -8125,6 +8211,15 @@ class LocalStore:
                 ).fetchall()
                 events_truncated = len(events) > bounded_event_limit
                 events = events[:bounded_event_limit]
+                presentation_events = await (
+                    await conn.execute(
+                        "SELECT e.* FROM local_events e JOIN local_runs r ON r.id = e.run_id "
+                        f"WHERE r.principal_id = ? AND e.run_id IN ({placeholders}) "
+                        f"AND e.event_type IN ({','.join('?' for _ in _PRESENTATION_EVENT_TYPES)}) "
+                        "ORDER BY datetime(r.created_at), r.id, e.seq",
+                        [principal_id, *run_ids, *_PRESENTATION_EVENT_TYPES],
+                    )
+                ).fetchall()
                 subagent_invocations = await self._subagent_invocations_uncommitted(
                     conn,
                     run_ids,
@@ -8133,13 +8228,48 @@ class LocalStore:
                     subagent_invocations_by_run.setdefault(
                         str(invocation["parent_run_id"]), []
                     ).append(invocation)
+                tool_receipts = await (
+                    await conn.execute(
+                        "SELECT * FROM local_tool_receipts "
+                        f"WHERE run_id IN ({placeholders}) ORDER BY created_at, operation_id",
+                        run_ids,
+                    )
+                ).fetchall()
+                for receipt in tool_receipts:
+                    tool_receipts_by_run.setdefault(str(receipt["run_id"]), []).append(
+                        dict(receipt)
+                    )
+                wait_candidates = await (
+                    await conn.execute(
+                        "SELECT * FROM local_wait_candidates "
+                        f"WHERE run_id IN ({placeholders}) ORDER BY created_at, id",
+                        run_ids,
+                    )
+                ).fetchall()
+                for candidate in wait_candidates:
+                    wait_candidates_by_run.setdefault(str(candidate["run_id"]), []).append(
+                        dict(candidate)
+                    )
+                artifacts = await (
+                    await conn.execute(
+                        "SELECT * FROM local_artifacts "
+                        f"WHERE run_id IN ({placeholders}) ORDER BY created_at, id",
+                        run_ids,
+                    )
+                ).fetchall()
+                for artifact in artifacts:
+                    artifacts_by_run.setdefault(str(artifact["run_id"]), []).append(dict(artifact))
                 event_high_watermarks = dict.fromkeys(run_ids, 0)
+                presentation_high_watermarks = dict.fromkeys(run_ids, 0)
                 for event in events:
                     event_run_id = str(event["run_id"])
                     event_high_watermarks[event_run_id] = max(
                         event_high_watermarks[event_run_id],
                         int(event["seq"]),
                     )
+                for event in presentation_events:
+                    event_run_id = str(event["run_id"])
+                    presentation_high_watermarks[event_run_id] = int(event["seq"])
             cursor_row = await (
                 await conn.execute(
                     "SELECT COALESCE(MAX(cursor), 0) FROM local_thread_changes "
@@ -8159,6 +8289,11 @@ class LocalStore:
                     for run in runs
                 ],
                 "events": [dict(event) for event in events],
+                "presentation_events": [dict(event) for event in presentation_events],
+                "presentation_high_watermarks": presentation_high_watermarks,
+                "tool_receipts_by_run": tool_receipts_by_run,
+                "wait_candidates_by_run": wait_candidates_by_run,
+                "artifacts_by_run": artifacts_by_run,
                 "event_high_watermarks": event_high_watermarks,
                 "cursor": int(cursor_row[0] if cursor_row else 0),
                 "has_more_items": has_more_items,
@@ -8166,6 +8301,63 @@ class LocalStore:
                 if has_more_items and page_items
                 else None,
                 "events_truncated": events_truncated,
+            }
+
+    async def get_run_presentation_facts(self, run_id: str) -> dict[str, Any] | None:
+        """Read one Run's presentation sources from a single SQLite snapshot."""
+        async with aiosqlite.connect(str(self._db_path)) as conn:
+            await _configure_connection(conn)
+            await conn.execute("BEGIN")
+            run = await (
+                await conn.execute("SELECT * FROM local_runs WHERE id = ?", (run_id,))
+            ).fetchone()
+            if run is None:
+                await conn.rollback()
+                return None
+            assistant_item = None
+            if run["assistant_item_id"]:
+                assistant_item = await (
+                    await conn.execute(
+                        "SELECT * FROM local_thread_items WHERE id = ? AND run_id = ?",
+                        (run["assistant_item_id"], run_id),
+                    )
+                ).fetchone()
+            events = await (
+                await conn.execute(
+                    "SELECT * FROM local_events WHERE run_id = ? "
+                    f"AND event_type IN ({','.join('?' for _ in _PRESENTATION_EVENT_TYPES)}) "
+                    "ORDER BY seq",
+                    (run_id, *_PRESENTATION_EVENT_TYPES),
+                )
+            ).fetchall()
+            receipts = await (
+                await conn.execute(
+                    "SELECT * FROM local_tool_receipts WHERE run_id = ? "
+                    "ORDER BY created_at, operation_id",
+                    (run_id,),
+                )
+            ).fetchall()
+            wait_candidates = await (
+                await conn.execute(
+                    "SELECT * FROM local_wait_candidates WHERE run_id = ? ORDER BY created_at, id",
+                    (run_id,),
+                )
+            ).fetchall()
+            artifacts = await (
+                await conn.execute(
+                    "SELECT * FROM local_artifacts WHERE run_id = ? ORDER BY created_at, id",
+                    (run_id,),
+                )
+            ).fetchall()
+            await conn.commit()
+            return {
+                "run": dict(run),
+                "assistant_item": dict(assistant_item) if assistant_item is not None else None,
+                "events": [dict(event) for event in events],
+                "tool_receipts": [dict(receipt) for receipt in receipts],
+                "wait_candidates": [dict(candidate) for candidate in wait_candidates],
+                "artifacts": [dict(artifact) for artifact in artifacts],
+                "event_high_watermark": int(events[-1]["seq"]) if events else 0,
             }
 
     async def update_thread(

@@ -1,5 +1,21 @@
 # LangSmith release observability research
 
+## 2026-08-04 复核：与 RunPresentation 的关系
+
+LangSmith 适合作为 **P7 的可选外部观测 Adapter**，用于工程排障、过程日志检索和离线评估；它不是 P4 `RunPresentation`，也不能成为 Client 展示或任务恢复的 source of truth。当前 `build_callbacks` 会强制关闭 tracing，因此在引入明确的用户授权、凭据路径与数据策略前，发布版仍不会把执行数据发送到 LangSmith。
+
+建议只提供三种模式：
+
+- `off`：默认模式，不创建外部 trace。
+- `support_metadata`：仅上传诊断所需的结构化元数据、耗时、状态、错误分类和稳定关联 ID，不上传提示词、模型输出或 Tool 内容。
+- `support_content_once`：用户针对单次 Run 明确授权后，上传经过脱敏的输入、输出和 Tool 内容，用于处理一次具体支持工单；授权不应自动延续到后续 Run。
+
+Adapter 应记录 P8 model round、P10 Tool/SubAgent，以及 P11/P12 verification/settlement 的 span，并用 Runtime 的 `run_id`、`attempt_id`、`thread_id` 和 Receipt ID 建立关联。但 Receipt、Run 和 Thread 仍是 Runtime 的权威事实；LangSmith 中的 trace 只是可丢失的外部副本。网络超时、限流、凭据错误或 LangSmith 不可用都不得阻塞、失败或改变 Run，发送应有短超时、有限缓冲和失败即丢弃的隔离策略。
+
+凭据可以采用用户自己的 LangSmith API Key（BYOK），或者由 SheJane Cloud relay 代发；桌面 Runtime 不应内置官方服务密钥。Cloud relay 仍须服从上述模式、单次授权和脱敏规则。
+
+官方依据：[LangGraph tracing](https://docs.langchain.com/langsmith/trace-with-langgraph)、[查看 traces](https://docs.langchain.com/langsmith/view-traces)、[输入输出脱敏](https://docs.langchain.com/langsmith/mask-inputs-outputs)、[条件 tracing](https://docs.langchain.com/langsmith/conditional-tracing)、[采样](https://docs.langchain.com/langsmith/sample-traces)、[评估](https://docs.langchain.com/langsmith/evaluation)。
+
 > Researched on 2026-07-28 against the current SheJane repository and official LangSmith documentation.
 
 ## Conclusion
@@ -96,7 +112,8 @@ implementation contract. `shejane-cloud/docs/shejane-central-diagnostics.md` now
 Runtime keeps automatic LangSmith/LangChain tracing disabled, mints a distinct `st-` credential through
 the fixed official Cloud connection, stores it in a separate OS credential-store service, and submits one
 strict metadata-only terminal event after the local Run commit. Only Cloud can hold the LangSmith service
-key. The Client defaults to opt-out and enables failure-only diagnostics after explicit consent; no prompt,
+key. Authorizing the official service enables failure-only diagnostics by default, with a visible switch to
+disable it at any time; no prompt,
 output, tool argument/result, local path, model ID, inference Token, or diagnostics Token reaches the relay.
 
 Electron and Runtime native crash dumps are collected locally with uploads disabled. Launcher and updater

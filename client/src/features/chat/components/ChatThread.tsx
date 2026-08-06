@@ -2,9 +2,10 @@ import { Fragment, useCallback, useEffect, useRef } from 'react'
 import { AgentProgress, type AgentFailureAction } from './AgentProgress'
 import { AnsweredQuestions } from './AnsweredQuestions'
 import { MessageBubble } from './MessageBubble'
+import { RunProcess } from './RunProcess'
 import { ThinkingIndicator } from './ThinkingIndicator'
 import { IconCalendar, IconFileText, IconMessage } from '@tabler/icons-react'
-import type { Conversation, LocalFileRef } from '@/shared/local-data/types'
+import type { ChatMessage, Conversation, LocalFileRef } from '@/shared/local-data/types'
 import { appLogoURL } from '@/shared/assets/logo'
 import { useI18n } from '@/shared/i18n/i18n'
 import { useSmartAutoScroll } from '@/shared/streaming/useSmartAutoScroll'
@@ -93,8 +94,15 @@ export function ChatThread({
     },
   ]
   const messageCount = conversation?.messages.length ?? 0
-  const lastMessageContent = conversation?.messages.at(-1)?.content ?? ''
-  const scrollRef = useSmartAutoScroll<HTMLDivElement>([messageCount, lastMessageContent.length], { bottomThreshold: 120 })
+  const lastMessage = conversation?.messages.at(-1)
+  const lastMessageContent = lastMessage?.content ?? ''
+  const presentationRevision = lastMessage?.presentation?.snapshot.event_high_watermark ?? 0
+  const presentationDraftLength = Object.values(lastMessage?.presentation?.drafts ?? {})
+    .reduce((total, draft) => total + draft.length, 0)
+  const scrollRef = useSmartAutoScroll<HTMLDivElement>(
+    [messageCount, lastMessageContent.length, presentationRevision, presentationDraftLength],
+    { bottomThreshold: 120 },
+  )
   const handleStreamTextCommit = useCallback((messageID: string, displayedText: string) => {
     streamDisplayCacheRef.current.set(messageID, displayedText)
   }, [])
@@ -133,7 +141,7 @@ export function ChatThread({
                 onLoadArtifactContent={onLoadArtifactContent}
                 runActive={runActive}
               >
-                <AgentProgress
+                <MessageProcess
                   message={message}
                   onOpenArtifact={onOpenArtifact}
                   onFailureAction={index === conversation.messages.length - 1
@@ -166,6 +174,50 @@ export function ChatThread({
         </div>
       )}
     </section>
+  )
+}
+
+function MessageProcess({
+  message,
+  onOpenArtifact,
+  onFailureAction,
+}: {
+  message: ChatMessage
+  onOpenArtifact: (artifactID: string) => void
+  onFailureAction?: (action: AgentFailureAction, message: ChatMessage) => void
+}) {
+  const { t } = useI18n()
+  const hasPresentationProcess = Boolean(
+    Object.values(message.presentation?.drafts ?? {}).some(Boolean)
+    || message.presentation?.snapshot.items?.some((item) => item.kind !== 'final_answer'),
+  )
+  const recoveryMessage = message.presentation && message.status === 'error'
+    ? {
+        ...message,
+        subagents: undefined,
+        agentEvents: (message.agentEvents ?? [])
+          .filter((event) => event.type === 'run.failed' || event.type === 'run.cleanup_required')
+          .map((event) => ({
+            ...event,
+            label: event.type === 'run.failed'
+              ? t('chat.timeline.runFailed')
+              : t('chat.timeline.runCleanupRequired'),
+          })),
+      }
+    : message
+  return (
+    <>
+      {hasPresentationProcess ? (
+        <RunProcess message={message} onOpenArtifact={onOpenArtifact} />
+      ) : null}
+      {!hasPresentationProcess || message.status === 'error' ? (
+        <AgentProgress
+          message={recoveryMessage}
+          onOpenArtifact={onOpenArtifact}
+          onFailureAction={onFailureAction}
+        />
+      ) : null}
+    </>
   )
 }
 

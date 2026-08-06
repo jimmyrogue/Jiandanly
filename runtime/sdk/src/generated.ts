@@ -2752,6 +2752,10 @@ export interface components {
             items: components["schemas"]["LocalThreadItem"][];
             /** Next Before Position */
             next_before_position?: number | null;
+            /** Presentations */
+            presentations?: {
+                [key: string]: components["schemas"]["RunPresentationSnapshot"];
+            };
             /** Runs */
             runs: components["schemas"]["LocalRun"][];
             thread: components["schemas"]["LocalThread"];
@@ -3760,6 +3764,291 @@ export interface components {
             decision: "approve" | "modify" | "reject";
             /** Instructions */
             instructions?: string | null;
+        };
+        /** RunPresentationArtifactItem */
+        RunPresentationArtifactItem: {
+            /** Artifact Id */
+            artifact_id: string;
+            /** Content Type */
+            content_type: string;
+            /** Created At */
+            created_at: string;
+            /** Id */
+            id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "artifact";
+            order: components["schemas"]["RunPresentationOrder"];
+            /** Revision */
+            revision: number;
+            source: components["schemas"]["RunPresentationSource"];
+            /**
+             * Status
+             * @default completed
+             * @constant
+             */
+            status: "completed";
+            /** Title */
+            title: string;
+        };
+        /** RunPresentationDecisionItem */
+        RunPresentationDecisionItem: {
+            /** Completed At */
+            completed_at?: string | null;
+            /** Created At */
+            created_at: string;
+            /** Id */
+            id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "approval" | "plan" | "question" | "reconciliation";
+            order: components["schemas"]["RunPresentationOrder"];
+            /** Request Id */
+            request_id: string;
+            /** Revision */
+            revision: number;
+            source: components["schemas"]["RunPresentationSource"];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "waiting" | "completed" | "failed" | "canceled";
+            /** Summary */
+            summary: string;
+            /** Updated At */
+            updated_at: string;
+        };
+        /** RunPresentationFinalAnswerItem */
+        RunPresentationFinalAnswerItem: {
+            /** Completed At */
+            completed_at: string;
+            /** Content */
+            content: string;
+            /** Created At */
+            created_at: string;
+            /** Id */
+            id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "final_answer";
+            order: components["schemas"]["RunPresentationOrder"];
+            /** Revision */
+            revision: number;
+            source: components["schemas"]["RunPresentationSource"];
+            /**
+             * Status
+             * @default completed
+             * @constant
+             */
+            status: "completed";
+        };
+        /** RunPresentationNoticeItem */
+        RunPresentationNoticeItem: {
+            /** Created At */
+            created_at: string;
+            /** Id */
+            id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "notice";
+            /** Message */
+            message: string;
+            order: components["schemas"]["RunPresentationOrder"];
+            /** Revision */
+            revision: number;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "warning" | "error";
+            source: components["schemas"]["RunPresentationSource"];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "failed" | "canceled" | "unknown";
+        };
+        /** RunPresentationOrder */
+        RunPresentationOrder: {
+            /** Event Seq */
+            event_seq: number;
+            /**
+             * Slot
+             * @default 0
+             */
+            slot: number;
+        };
+        /** RunPresentationProgressItem */
+        RunPresentationProgressItem: {
+            /** Created At */
+            created_at: string;
+            /** Id */
+            id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "progress";
+            order: components["schemas"]["RunPresentationOrder"];
+            /** Revision */
+            revision: number;
+            source: components["schemas"]["RunPresentationSource"];
+            /**
+             * Status
+             * @default completed
+             * @constant
+             */
+            status: "completed";
+            /** Text */
+            text: string;
+        };
+        /** RunPresentationReasoningSummaryItem */
+        RunPresentationReasoningSummaryItem: {
+            /** Created At */
+            created_at: string;
+            /** Id */
+            id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "reasoning_summary";
+            order: components["schemas"]["RunPresentationOrder"];
+            /** Revision */
+            revision: number;
+            source: components["schemas"]["RunPresentationSource"];
+            /**
+             * Status
+             * @default completed
+             * @constant
+             */
+            status: "completed";
+            /** Summary */
+            summary: string;
+        };
+        /** RunPresentationSnapshot */
+        RunPresentationSnapshot: {
+            /** Event High Watermark */
+            event_high_watermark: number;
+            /** Items */
+            items?: (components["schemas"]["RunPresentationProgressItem"] | components["schemas"]["RunPresentationReasoningSummaryItem"] | components["schemas"]["RunPresentationToolItem"] | components["schemas"]["RunPresentationSubagentItem"] | components["schemas"]["RunPresentationVerificationItem"] | components["schemas"]["RunPresentationArtifactItem"] | components["schemas"]["RunPresentationDecisionItem"] | components["schemas"]["RunPresentationNoticeItem"] | components["schemas"]["RunPresentationFinalAnswerItem"])[];
+            /** Run Id */
+            run_id: string;
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: 1;
+        };
+        /** RunPresentationSource */
+        RunPresentationSource: {
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "run_event" | "tool_receipt" | "wait_candidate" | "artifact" | "thread_item";
+        };
+        /** RunPresentationSubagentItem */
+        RunPresentationSubagentItem: {
+            /** Completed At */
+            completed_at?: string | null;
+            /** Created At */
+            created_at: string;
+            /** Description */
+            description: string;
+            /** Id */
+            id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "subagent";
+            /** Operation Id */
+            operation_id: string;
+            order: components["schemas"]["RunPresentationOrder"];
+            /** Revision */
+            revision: number;
+            source: components["schemas"]["RunPresentationSource"];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "in_progress" | "waiting" | "completed" | "failed" | "canceled" | "unknown";
+            /** Subagent Type */
+            subagent_type: string;
+            /** Updated At */
+            updated_at: string;
+        };
+        /** RunPresentationToolItem */
+        RunPresentationToolItem: {
+            /** Completed At */
+            completed_at?: string | null;
+            /** Created At */
+            created_at: string;
+            /** Id */
+            id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "tool";
+            order: components["schemas"]["RunPresentationOrder"];
+            /** Revision */
+            revision: number;
+            /** Risk */
+            risk: string;
+            source: components["schemas"]["RunPresentationSource"];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "in_progress" | "waiting" | "completed" | "failed" | "canceled" | "unknown";
+            /** Tool Call Id */
+            tool_call_id: string;
+            /** Tool Name */
+            tool_name: string;
+            /** Updated At */
+            updated_at: string;
+        };
+        /** RunPresentationVerificationItem */
+        RunPresentationVerificationItem: {
+            /** Completed At */
+            completed_at?: string | null;
+            /** Created At */
+            created_at: string;
+            /** Id */
+            id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "verification";
+            /** Operation Id */
+            operation_id: string;
+            order: components["schemas"]["RunPresentationOrder"];
+            /** Revision */
+            revision: number;
+            source: components["schemas"]["RunPresentationSource"];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "in_progress" | "waiting" | "completed" | "failed" | "canceled" | "unknown";
+            /** Tool Name */
+            tool_name: string;
+            /** Updated At */
+            updated_at: string;
         };
         /** RuntimeAssetCleanupResult */
         RuntimeAssetCleanupResult: {

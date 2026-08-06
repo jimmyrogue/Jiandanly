@@ -102,11 +102,13 @@ async def test_agent_definition_cache_reuses_only_matching_structure(
 
     compiled: list[object] = []
     backends: list[object] = []
+    models: list[object] = []
 
     def fake_create_deep_agent(**kwargs):
         definition = object()
         compiled.append(definition)
         backends.append(kwargs["backend"])
+        models.append(kwargs["model"])
         return definition
 
     monkeypatch.setattr(builder_module, "create_deep_agent", fake_create_deep_agent)
@@ -174,6 +176,9 @@ async def test_agent_definition_cache_reuses_only_matching_structure(
         assert changed is not skill_changed
         assert len(compiled) == 3
         assert all(isinstance(backend, BackendProtocol) for backend in backends)
+        assert all(getattr(model, "call_purpose", None) == "summarization" for model in models)
+        assert all(getattr(model, "max_model_calls", None) == 4 for model in models)
+        assert all(getattr(model, "max_output_tokens", None) == 1_024 for model in models)
     finally:
         await store.close()
         await stack.aclose()

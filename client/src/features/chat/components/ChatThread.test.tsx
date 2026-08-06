@@ -32,12 +32,11 @@ describe('ChatThread streaming display cache', () => {
     expect(document.body).toHaveTextContent('第二段。')
   })
 
-  it('uses the collapsed reasoning disclosure as the only thinking indicator', () => {
+  it('never renders legacy raw reasoning', () => {
     renderThread(conversationWithReasoningAnswer())
 
     expect(screen.getAllByText('正在思考…')).toHaveLength(1)
-    expect(document.querySelector('.message-reasoning')).not.toHaveAttribute('open')
-    expect(document.querySelector('.thinking-indicator')).not.toBeInTheDocument()
+    expect(document.querySelector('.message-reasoning')).not.toBeInTheDocument()
   })
 
   it('keeps answered user.ask choices in the transcript', () => {
@@ -121,7 +120,6 @@ function conversationWithReasoningAnswer(): Conversation {
         id: 'msg-assistant',
         role: 'assistant',
         content: '',
-        reasoning: 'Need to search first.',
         createdAt: '2026-05-10T00:00:01Z',
         status: 'streaming',
       },

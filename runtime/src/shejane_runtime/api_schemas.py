@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -741,6 +741,160 @@ class ListThreadsResponse(BaseModel):
     next_before_id: str | None = None
 
 
+class RunPresentationOrder(BaseModel):
+    event_seq: int = Field(ge=1)
+    slot: int = Field(default=0, ge=0)
+
+
+class RunPresentationSource(BaseModel):
+    kind: Literal["run_event", "tool_receipt", "wait_candidate", "artifact", "thread_item"]
+    id: str
+
+
+class RunPresentationProgressItem(BaseModel):
+    id: str
+    kind: Literal["progress"] = "progress"
+    status: Literal["completed"] = "completed"
+    order: RunPresentationOrder
+    revision: int = Field(ge=1)
+    source: RunPresentationSource
+    text: str
+    created_at: str
+
+
+class RunPresentationToolItem(BaseModel):
+    id: str
+    kind: Literal["tool"] = "tool"
+    status: Literal[
+        "pending", "in_progress", "waiting", "completed", "failed", "canceled", "unknown"
+    ]
+    order: RunPresentationOrder
+    revision: int = Field(ge=1)
+    source: RunPresentationSource
+    tool_call_id: str
+    tool_name: str
+    risk: str
+    created_at: str
+    updated_at: str
+    completed_at: str | None = None
+
+
+class RunPresentationReasoningSummaryItem(BaseModel):
+    id: str
+    kind: Literal["reasoning_summary"] = "reasoning_summary"
+    status: Literal["completed"] = "completed"
+    order: RunPresentationOrder
+    revision: int = Field(ge=1)
+    source: RunPresentationSource
+    summary: str
+    created_at: str
+
+
+class RunPresentationSubagentItem(BaseModel):
+    id: str
+    kind: Literal["subagent"] = "subagent"
+    status: Literal[
+        "pending", "in_progress", "waiting", "completed", "failed", "canceled", "unknown"
+    ]
+    order: RunPresentationOrder
+    revision: int = Field(ge=1)
+    source: RunPresentationSource
+    operation_id: str
+    subagent_type: str
+    description: str
+    created_at: str
+    updated_at: str
+    completed_at: str | None = None
+
+
+class RunPresentationVerificationItem(BaseModel):
+    id: str
+    kind: Literal["verification"] = "verification"
+    status: Literal[
+        "pending", "in_progress", "waiting", "completed", "failed", "canceled", "unknown"
+    ]
+    order: RunPresentationOrder
+    revision: int = Field(ge=1)
+    source: RunPresentationSource
+    operation_id: str
+    tool_name: str
+    created_at: str
+    updated_at: str
+    completed_at: str | None = None
+
+
+class RunPresentationArtifactItem(BaseModel):
+    id: str
+    kind: Literal["artifact"] = "artifact"
+    status: Literal["completed"] = "completed"
+    order: RunPresentationOrder
+    revision: int = Field(ge=1)
+    source: RunPresentationSource
+    artifact_id: str
+    title: str
+    content_type: str
+    created_at: str
+
+
+class RunPresentationDecisionItem(BaseModel):
+    id: str
+    kind: Literal["approval", "question", "plan", "reconciliation"]
+    status: Literal["waiting", "completed", "failed", "canceled"]
+    order: RunPresentationOrder
+    revision: int = Field(ge=1)
+    source: RunPresentationSource
+    request_id: str
+    summary: str
+    created_at: str
+    updated_at: str
+    completed_at: str | None = None
+
+
+class RunPresentationNoticeItem(BaseModel):
+    id: str
+    kind: Literal["notice"] = "notice"
+    status: Literal["failed", "canceled", "unknown"]
+    order: RunPresentationOrder
+    revision: int = Field(ge=1)
+    source: RunPresentationSource
+    severity: Literal["warning", "error"]
+    message: str
+    created_at: str
+
+
+class RunPresentationFinalAnswerItem(BaseModel):
+    id: str
+    kind: Literal["final_answer"] = "final_answer"
+    status: Literal["completed"] = "completed"
+    order: RunPresentationOrder
+    revision: int = Field(ge=1)
+    source: RunPresentationSource
+    content: str
+    created_at: str
+    completed_at: str
+
+
+RunPresentationItem = Annotated[
+    RunPresentationProgressItem
+    | RunPresentationReasoningSummaryItem
+    | RunPresentationToolItem
+    | RunPresentationSubagentItem
+    | RunPresentationVerificationItem
+    | RunPresentationArtifactItem
+    | RunPresentationDecisionItem
+    | RunPresentationNoticeItem
+    | RunPresentationFinalAnswerItem,
+    Field(discriminator="kind"),
+]
+
+
+class RunPresentationSnapshot(BaseModel):
+    schema_version: Literal[1] = 1
+    run_id: str
+    items: list[RunPresentationItem] = Field(default_factory=list)
+    event_high_watermark: int = Field(ge=0)
+
+
 class LocalThreadSnapshot(BaseModel):
     thread: LocalThread
     items: list[LocalThreadItem]
@@ -750,6 +904,7 @@ class LocalThreadSnapshot(BaseModel):
         default_factory=dict,
         description="Highest event sequence included in this snapshot per Run; 0 means replay all.",
     )
+    presentations: dict[str, RunPresentationSnapshot] = Field(default_factory=dict)
     cursor: int
     has_more_items: bool = False
     next_before_position: int | None = None

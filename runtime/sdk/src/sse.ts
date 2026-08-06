@@ -1,3 +1,13 @@
+import type { components } from './generated.js'
+
+type RunPresentationSnapshot = components['schemas']['RunPresentationSnapshot']
+type RunPresentationItem = NonNullable<RunPresentationSnapshot['items']>[number]
+
+export type RunPresentationChange =
+  | { kind: 'item.upsert'; item: RunPresentationItem }
+  | { kind: 'draft.delta'; round_id: string; content: string }
+  | { kind: 'draft.closed'; round_id: string; committed_item_ids: string[] }
+
 export interface AgentRunEvent {
   event_type: string
   payload?: Record<string, unknown>
@@ -5,6 +15,8 @@ export interface AgentRunEvent {
   run_id?: string
   seq?: number
   created_at?: string
+  presentation_change?: RunPresentationChange
+  presentation_changes?: RunPresentationChange[]
 }
 
 export const SUBAGENT_LIFECYCLE_EVENT_TYPES = [
@@ -109,6 +121,94 @@ export function isSubagentLifecycleEvent(
     && (payload.error_type === null || typeof payload.error_type === 'string')
 }
 
+export function isRunPresentationChange(value: unknown): value is RunPresentationChange {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const change = value as Record<string, unknown>
+  if (change.kind === 'draft.delta') {
+    return nonEmptyString(change.round_id) && typeof change.content === 'string'
+  }
+  if (change.kind === 'draft.closed') {
+    return nonEmptyString(change.round_id)
+      && Array.isArray(change.committed_item_ids)
+      && change.committed_item_ids.every(nonEmptyString)
+  }
+  if (change.kind !== 'item.upsert') return false
+  const item = change.item
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return false
+  const record = item as Record<string, unknown>
+  const order = record.order as Record<string, unknown> | undefined
+  const source = record.source as Record<string, unknown> | undefined
+  if (!nonEmptyString(record.id)
+    || !positiveInteger(record.revision)
+    || !order
+    || !positiveInteger(order.event_seq)
+    || !nonNegativeInteger(order.slot)
+    || !source
+    || !['run_event', 'tool_receipt', 'wait_candidate', 'artifact', 'thread_item'].includes(String(source.kind))
+    || !nonEmptyString(source.id)
+    || typeof record.created_at !== 'string') return false
+
+  const terminalTime = record.completed_at === undefined
+    || record.completed_at === null
+    || typeof record.completed_at === 'string'
+  const updatedTime = typeof record.updated_at === 'string' && terminalTime
+  switch (record.kind) {
+    case 'progress':
+      return record.status === 'completed' && typeof record.text === 'string'
+    case 'reasoning_summary':
+      return record.status === 'completed' && typeof record.summary === 'string'
+    case 'tool':
+      return presentationActivityStatus(record.status)
+        && nonEmptyString(record.tool_call_id)
+        && nonEmptyString(record.tool_name)
+        && typeof record.risk === 'string'
+        && updatedTime
+    case 'subagent':
+      return presentationActivityStatus(record.status)
+        && nonEmptyString(record.operation_id)
+        && typeof record.subagent_type === 'string'
+        && typeof record.description === 'string'
+        && updatedTime
+    case 'verification':
+      return presentationActivityStatus(record.status)
+        && nonEmptyString(record.operation_id)
+        && nonEmptyString(record.tool_name)
+        && updatedTime
+    case 'artifact':
+      return record.status === 'completed'
+        && nonEmptyString(record.artifact_id)
+        && typeof record.title === 'string'
+        && nonEmptyString(record.content_type)
+    case 'approval':
+    case 'question':
+    case 'plan':
+    case 'reconciliation':
+      return ['waiting', 'completed', 'failed', 'canceled'].includes(String(record.status))
+        && nonEmptyString(record.request_id)
+        && typeof record.summary === 'string'
+        && updatedTime
+    case 'notice':
+      return ['failed', 'canceled', 'unknown'].includes(String(record.status))
+        && ['warning', 'error'].includes(String(record.severity))
+        && typeof record.message === 'string'
+    case 'final_answer':
+      return record.status === 'completed'
+        && typeof record.content === 'string'
+        && typeof record.completed_at === 'string'
+    default:
+      return false
+  }
+}
+
+function presentationActivityStatus(value: unknown): boolean {
+  return ['pending', 'in_progress', 'waiting', 'completed', 'failed', 'canceled', 'unknown']
+    .includes(String(value))
+}
+
+function positiveInteger(value: unknown): boolean {
+  return nonNegativeInteger(value) && Number(value) > 0
+}
+
 export type AgentSSEEvent =
   | { type: 'agent'; event: AgentRunEvent }
   | { type: 'done' }
@@ -204,6 +304,18 @@ function parseAgentSSEChunk(chunk: string): AgentSSEEvent {
   ) {
     throw new Error('Runtime event envelope requires event_type')
   }
+  const presentationChange = (event as { presentation_change?: unknown }).presentation_change
+  if (presentationChange !== undefined && !isRunPresentationChange(presentationChange)) {
+    throw new Error('Runtime event envelope has invalid presentation_change')
+  }
+  const presentationChanges = (event as { presentation_changes?: unknown }).presentation_changes
+  if (presentationChanges !== undefined && (
+    !Array.isArray(presentationChanges)
+    || presentationChanges.length === 0
+    || !presentationChanges.every(isRunPresentationChange)
+  )) {
+    throw new Error('Runtime event envelope has invalid presentation_changes')
+  }
   return { type: 'agent', event: event as AgentRunEvent }
 }
 
@@ -219,6 +331,10 @@ function numberPayload(event: AgentRunEvent, key: string): number {
 
 function nonNegativeInteger(value: unknown): boolean {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0
+}
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && Boolean(value)
 }
 
 function isSubagentInvocationStatus(value: unknown): value is SubagentInvocationStatus {

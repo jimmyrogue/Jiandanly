@@ -249,9 +249,6 @@ function MessageBubbleView({ view }: { view: ReturnType<typeof useMessageBubbleV
     <article className={cn('message', message.role)}>
       {!isAssistant ? attachmentCards : null}
       <div className="message-bubble-inner">
-        {isAssistant && message.reasoning?.trim() ? (
-          <ReasoningDisclosure reasoning={message.reasoning} active={message.status === 'streaming'} />
-        ) : null}
         <div className="message-content">
           {!isAssistant && (message.pluginReferences?.length || message.pluginCommand) ? (
             <div className="message-attachments message-plugin-selection">
@@ -404,18 +401,6 @@ function MessageBubbleView({ view }: { view: ReturnType<typeof useMessageBubbleV
         ) : null}
       </div>
     </article>
-  )
-}
-
-function ReasoningDisclosure({ reasoning, active }: { reasoning: string; active: boolean }) {
-  const { t } = useI18n()
-  return (
-    <details className="message-reasoning">
-      <summary aria-live={active ? 'polite' : undefined}>
-        {active ? t('agent.thinkingStreaming') : t('message.reasoningTitle')}
-      </summary>
-      <div className="message-reasoning-body">{reasoning}</div>
-    </details>
   )
 }
 

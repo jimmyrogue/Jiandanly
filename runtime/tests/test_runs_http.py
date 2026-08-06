@@ -1502,6 +1502,205 @@ def test_runtime_thread_snapshot_and_change_cursor_are_authoritative(client: Tes
         "subagent.completed",
         "run.completed",
     ]
+    presentation_items = snapshot.json()["presentations"][run["id"]]["items"]
+    [subagent_item] = [item for item in presentation_items if item["kind"] == "subagent"]
+    assert subagent_item["id"] == "tool-call:call-snapshot-child"
+    assert subagent_item["description"] == "Inspect the durable snapshot"
+    assert subagent_item["status"] == "completed"
+    assert subagent_item["subagent_type"] == "researcher"
+
+
+def test_thread_snapshot_projects_durable_run_presentation(client: TestClient) -> None:
+    store = client.app.state.store
+
+    async def seed_thread() -> str:
+        run, _created = await store.accept_run_command(
+            principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+            command_id="cmd_presentation",
+            client_message_id="msg_presentation",
+            thread_id="conversation_presentation",
+            assistant_message_id="msg_assistant_presentation",
+            user_input="inspect the repository",
+            thread_title="Presentation snapshot",
+            thread_metadata={},
+            command_payload={"type": "run.start", "goal": "inspect"},
+            goal="inspect",
+            workspace_path=None,
+            mode="auto",
+        )
+        job = await store.claim_run_job(worker_id="worker-presentation")
+        assert job is not None
+        with store.bind_execution_lease(
+            job_id=job["id"],
+            run_id=run["id"],
+            lease_owner="worker-presentation",
+            lease_generation=int(job["lease_generation"]),
+        ):
+            progress = await store.append_event(
+                run["id"],
+                "assistant.round.committed",
+                {
+                    "round_id": "model-call-presentation",
+                    "text": "I’ll inspect the relevant files first.",
+                    "reasoning_summary": "The repository structure determines the next read.",
+                    "tool_call_ids": ["call-presentation"],
+                },
+            )
+            requested = await store.append_event(
+                run["id"],
+                "tool.requested",
+                {
+                    "tool_call_id": "call-presentation",
+                    "name": "read_file",
+                    "tool": "read_file",
+                    "arguments": {"path": "README.md"},
+                },
+            )
+            await store.prepare_tool_receipt(
+                operation_id="toolop_presentation",
+                run_id=run["id"],
+                execution_attempt_id=f"{job['id']}:{job['lease_generation']}",
+                execution_namespace="main",
+                tool_call_id="call-presentation",
+                tool_name="read_file",
+                tool_version="builtin-v1",
+                arguments_hash="presentation-args",
+                arguments_json='{"path":"README.md"}',
+                risk="read_only",
+            )
+            await store.begin_tool_receipt(
+                operation_id="toolop_presentation",
+                run_id=run["id"],
+                execution_attempt_id=f"{job['id']}:{job['lease_generation']}",
+            )
+            await store.settle_tool_receipt(
+                operation_id="toolop_presentation",
+                run_id=run["id"],
+                status="completed",
+                result_json='{"content":"# SheJane"}',
+                result_hash="presentation-result",
+            )
+            completed = await store.append_event(
+                run["id"],
+                "tool.completed",
+                {
+                    "tool_call_id": "call-presentation",
+                    "name": "read_file",
+                    "tool": "read_file",
+                },
+            )
+            terminal, created = await store.commit_run_result(
+                run["id"],
+                status="completed",
+                event_type="run.completed",
+                payload={"final_text": "The repository is ready."},
+            )
+            assert created is True
+        assert progress["seq"] < requested["seq"] < completed["seq"] < terminal["seq"]
+        return run["id"]
+
+    run_id = asyncio.run(seed_thread())
+    response = client.get(
+        "/v1/threads/conversation_presentation?event_limit=1",
+        headers={"Authorization": "Bearer tok"},
+    )
+
+    assert response.status_code == 200
+    presentation = response.json()["presentations"][run_id]
+    assert presentation["schema_version"] == 1
+    assert presentation["run_id"] == run_id
+    assert len(response.json()["events"]) == 1
+    assert presentation["event_high_watermark"] > response.json()["event_high_watermarks"][run_id]
+    assert [item["kind"] for item in presentation["items"]] == [
+        "reasoning_summary",
+        "progress",
+        "tool",
+        "final_answer",
+    ]
+    reasoning_item, progress_item, tool_item, final_item = presentation["items"]
+    assert reasoning_item["id"] == "round:model-call-presentation:reasoning"
+    assert reasoning_item["summary"] == ("The repository structure determines the next read.")
+    assert progress_item["id"] == "round:model-call-presentation:progress"
+    assert progress_item["text"] == "I’ll inspect the relevant files first."
+    assert progress_item["status"] == "completed"
+    assert tool_item["id"] == "tool-call:call-presentation"
+    assert tool_item["tool_name"] == "read_file"
+    assert tool_item["status"] == "completed"
+    assert tool_item["source"] == {
+        "kind": "tool_receipt",
+        "id": "toolop_presentation",
+    }
+    assert final_item["id"] == "answer:msg_assistant_presentation"
+    assert final_item["content"] == "The repository is ready."
+    assert final_item["status"] == "completed"
+    assert [item["order"]["event_seq"] for item in presentation["items"]] == sorted(
+        item["order"]["event_seq"] for item in presentation["items"]
+    )
+
+
+def test_thread_snapshot_degrades_legacy_tool_events_without_receipts(client: TestClient) -> None:
+    store = client.app.state.store
+
+    async def seed_thread() -> str:
+        run, _created = await store.accept_run_command(
+            principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+            command_id="cmd_legacy_presentation",
+            client_message_id="msg_legacy_presentation",
+            thread_id="conversation_legacy_presentation",
+            assistant_message_id="msg_assistant_legacy_presentation",
+            user_input="legacy run",
+            thread_title="Legacy presentation",
+            thread_metadata={},
+            command_payload={"type": "run.start", "goal": "legacy"},
+            goal="legacy",
+            workspace_path=None,
+            mode="auto",
+        )
+        job = await store.claim_run_job(worker_id="worker-legacy-presentation")
+        assert job is not None
+        with store.bind_execution_lease(
+            job_id=job["id"],
+            run_id=run["id"],
+            lease_owner="worker-legacy-presentation",
+            lease_generation=int(job["lease_generation"]),
+        ):
+            requested = await store.append_event(
+                run["id"],
+                "tool.requested",
+                {
+                    "tool_call_id": "legacy-call",
+                    "name": "search",
+                    "tool": "search",
+                    "arguments": {"query": "SheJane"},
+                },
+            )
+            completed = await store.append_event(
+                run["id"],
+                "tool.completed",
+                {"tool_call_id": "legacy-call", "name": "search", "tool": "search"},
+            )
+            await store.commit_run_result(
+                run["id"],
+                status="completed",
+                event_type="run.completed",
+                payload={"final_text": "Legacy result."},
+            )
+        assert requested["seq"] < completed["seq"]
+        return run["id"]
+
+    run_id = asyncio.run(seed_thread())
+    response = client.get(
+        "/v1/threads/conversation_legacy_presentation",
+        headers={"Authorization": "Bearer tok"},
+    )
+
+    assert response.status_code == 200
+    tool_item, final_item = response.json()["presentations"][run_id]["items"]
+    assert tool_item["id"] == "tool-call:legacy-call"
+    assert tool_item["kind"] == "tool"
+    assert tool_item["status"] == "completed"
+    assert tool_item["source"]["kind"] == "run_event"
+    assert final_item["kind"] == "final_answer"
 
 
 def test_create_run_command_is_idempotent_and_rejects_conflicting_content(

@@ -540,9 +540,27 @@ class ToolExecutionMiddleware(AgentMiddleware):
                 tool_name=tool_name,
                 error=exc,
             )
+            contained_content: str | None = None
             if tool_name == "task" and not isinstance(exc, asyncio.CancelledError):
+                contained_content = f"Subagent failed: {type(exc).__name__}: {str(exc)[:2000]}"
+            elif (
+                tool_name.startswith("child.")
+                and isinstance(exc, KeyError)
+                and str(exc).strip("'").startswith("child run not found:")
+            ):
+                contained_content = json.dumps(
+                    {
+                        "ok": False,
+                        "error_code": "child_run_not_found",
+                        "message": "child run not found",
+                        "retryable": False,
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            if contained_content is not None:
                 result = ToolMessage(
-                    content=f"Subagent failed: {type(exc).__name__}: {str(exc)[:2000]}",
+                    content=contained_content,
                     name=tool_name,
                     tool_call_id=str(request.tool_call.get("id") or ""),
                     status="error",

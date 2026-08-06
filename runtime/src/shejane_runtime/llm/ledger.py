@@ -141,6 +141,7 @@ class LedgerChatModel(BaseChatModel):
                 ),
                 aliases,
             )
+            message = _with_model_call_id(message, str(receipt["id"]))
             if _has_visible_output(message):
                 await self.store.mark_model_call_output(
                     run_id=self.run_id,
@@ -181,6 +182,7 @@ class LedgerChatModel(BaseChatModel):
         output_started = False
         usage: dict[str, int | None] = {}
         provider_request_id: str | None = None
+        first_chunk = True
         try:
             async for provider_message in provider_model.astream(
                 messages,
@@ -189,6 +191,9 @@ class LedgerChatModel(BaseChatModel):
                 **kwargs,
             ):
                 message = _rewrite_tool_names(provider_message, aliases)
+                if first_chunk:
+                    message = _with_model_call_id(message, str(receipt["id"]))
+                    first_chunk = False
                 if not output_started and _has_visible_output(message):
                     await self.store.mark_model_call_output(
                         run_id=self.run_id,
@@ -271,6 +276,17 @@ class LedgerChatModel(BaseChatModel):
         **kwargs: Any,
     ) -> Iterator[ChatGenerationChunk]:
         raise RuntimeError("LedgerChatModel is async-only")
+
+
+def _with_model_call_id(message: BaseMessage, call_id: str) -> BaseMessage:
+    return message.model_copy(
+        update={
+            "additional_kwargs": {
+                **message.additional_kwargs,
+                "runtime_model_call_id": call_id,
+            }
+        }
+    )
 
 
 _SAFE_TOOL_NAME = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
