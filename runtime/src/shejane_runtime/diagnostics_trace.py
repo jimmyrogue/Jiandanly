@@ -42,9 +42,10 @@ def build_run_trace(
     ]
     model_spans: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for call in model_calls:
+        parent_operation_id = call.get("parent_tool_operation_id")
         span = _span(
             span_id=f"span:model:{call['id']}",
-            parent_id=root_id,
+            parent_id=(f"span:tool:{parent_operation_id}" if parent_operation_id else root_id),
             kind="model",
             name=str(call.get("purpose") or "model"),
             status=str(call.get("status") or "unknown"),
@@ -53,26 +54,39 @@ def build_run_trace(
             attributes={
                 "model": str(call.get("model") or ""),
                 "call_index": int(call.get("call_index") or 0),
+                "logical_call_id": str(call.get("logical_call_id") or call["id"]),
+                "retry_attempt": int(call.get("retry_attempt") or 0),
+                "purpose": str(call.get("purpose") or "agent"),
+                "parent_tool_operation_id": parent_operation_id,
                 "input_tokens": call.get("input_tokens"),
                 "output_tokens": call.get("output_tokens"),
                 "output_started": bool(call.get("output_started")),
+                "outcome_unknown": call.get("status") == "outcome_unknown",
+                "provider_request_id": call.get("provider_request_id"),
+                "first_output_at": call.get("first_output_at"),
                 "error_code": call.get("error_code"),
             },
         )
         spans.append(span)
         model_spans.append((call, span))
     for receipt in tool_receipts:
-        parent_id = root_id
-        candidates = [
-            item
-            for item in model_spans
-            if item[0].get("execution_attempt_id") == receipt.get("execution_attempt_id")
-            and str(item[0].get("created_at") or "") <= str(receipt.get("created_at") or "")
-        ]
-        if candidates:
-            parent_id = max(candidates, key=lambda item: str(item[0].get("created_at") or ""))[1][
-                "id"
+        parent_operation_id = receipt.get("parent_operation_id")
+        if parent_operation_id:
+            parent_id = f"span:tool:{parent_operation_id}"
+        else:
+            parent_id = root_id
+            candidates = [
+                item
+                for item in model_spans
+                if item[0].get("execution_attempt_id") == receipt.get("execution_attempt_id")
+                and str(item[0].get("created_at") or "") <= str(receipt.get("created_at") or "")
+                and not item[0].get("parent_tool_operation_id")
             ]
+            if candidates:
+                parent_id = max(
+                    candidates,
+                    key=lambda item: str(item[0].get("created_at") or ""),
+                )[1]["id"]
         tool_name = str(receipt.get("tool_name") or "unknown")
         spans.append(
             _span(
@@ -85,12 +99,16 @@ def build_run_trace(
                 ended_at=receipt.get("completed_at"),
                 attributes={
                     "tool_call_id": str(receipt.get("tool_call_id") or ""),
+                    "execution_namespace": str(receipt.get("execution_namespace") or "main"),
+                    "parent_operation_id": parent_operation_id,
                     "tool_version": str(receipt.get("tool_version") or ""),
                     "arguments_hash": str(receipt.get("arguments_hash") or ""),
                     "result_hash": receipt.get("result_hash"),
                     "risk": str(receipt.get("risk") or ""),
                     "attempt_count": int(receipt.get("attempt_count") or 0),
                     "error_type": receipt.get("error_type"),
+                    "review_decision": receipt.get("review_decision"),
+                    "review_source": receipt.get("review_source"),
                 },
             )
         )

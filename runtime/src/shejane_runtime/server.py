@@ -38,7 +38,14 @@ from langgraph.graph import add_messages
 from sse_starlette.sse import EventSourceResponse
 
 from . import __version__
-from .agent.builder import _build_byok_chat_model, open_checkpointer, open_store
+from .agent.builder import (
+    MAX_SUBAGENT_TASKS_PER_RUN,
+    _agent_model_call_limit,
+    _build_byok_chat_model,
+    open_checkpointer,
+    open_store,
+)
+from .agent.subagents import SUBAGENT_MODEL_CALL_LIMIT
 from .api_schemas import (
     AddModelServiceModelRequest,
     AnswerQuestionCommand,
@@ -141,6 +148,7 @@ from .api_schemas import (
     VerifyModelServiceModelRequest,
 )
 from .auth import LOCAL_OWNER_PRINCIPAL_ID, PairingTokenAuthMiddleware
+from .build_info import runtime_build_identity
 from .central_diagnostics import (
     CentralDiagnosticsConfigurationError,
     CentralDiagnosticsManager,
@@ -152,6 +160,7 @@ from .failure_policy import classify_failure_payload
 from .http_body_limit import RequestBodyLimitMiddleware
 from .llm.ledger import _provider_tools, _rewrite_tool_names
 from .middleware.tool_execution import serialize_tool_result
+from .middleware.tool_visibility import execution_policy_for_task
 from .model_credentials import (
     CredentialStoreError,
     credential_ref,
@@ -2885,6 +2894,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 plugin_id=plugin_id,
             )
         except PluginRegistryError as exc:
+            if exc.status_code == 404 and plugin_id in {
+                "org.shejane.browser-qa",
+                "org.shejane.ocr",
+            }:
+                return {
+                    "plugin_id": plugin_id,
+                    "available": False,
+                    "downloaded": False,
+                }
             raise HTTPException(
                 status_code=exc.status_code,
                 detail={"code": exc.code, "message": str(exc)},
@@ -4243,17 +4261,44 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         latest_checkpoint = await _latest_checkpoint_summary(app.state.checkpointer, run)
         reflection = await _latest_checkpoint_reflection(app.state.checkpointer, run)
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "exported_at": datetime.now(UTC).isoformat(),
             "runtime_version": __version__,
+            "build": _diagnostics_build(run),
+            "execution_policy": _diagnostics_execution_policy(run),
             "run": await _run_with_inputs(store, run),
             "events": events,
             "permissions": permissions,
+            "model_calls": [
+                {
+                    "id": str(call["id"]),
+                    "logical_call_id": str(call.get("logical_call_id") or call["id"]),
+                    "retry_attempt": int(call.get("retry_attempt") or 0),
+                    "execution_attempt_id": str(call["execution_attempt_id"]),
+                    "parent_tool_operation_id": call.get("parent_tool_operation_id"),
+                    "call_index": int(call["call_index"]),
+                    "model": str(call["model"]),
+                    "purpose": str(call.get("purpose") or "agent"),
+                    "status": str(call["status"]),
+                    "output_started": bool(call.get("output_started")),
+                    "outcome_unknown": call.get("status") == "outcome_unknown",
+                    "provider_request_id": call.get("provider_request_id"),
+                    "input_tokens": call.get("input_tokens"),
+                    "output_tokens": call.get("output_tokens"),
+                    "error_code": call.get("error_code"),
+                    "created_at": str(call["created_at"]),
+                    "first_output_at": call.get("first_output_at"),
+                    "completed_at": call.get("completed_at"),
+                }
+                for call in model_calls
+            ],
             "tool_receipts": [
                 {
                     key: receipt.get(key)
                     for key in (
                         "operation_id",
+                        "execution_namespace",
+                        "parent_operation_id",
                         "tool_call_id",
                         "tool_name",
                         "tool_version",
@@ -4263,10 +4308,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "attempt_count",
                         "result_hash",
                         "error_type",
+                        "review_decision",
+                        "review_source",
                         "created_at",
                         "started_at",
                         "completed_at",
                         "updated_at",
+                    )
+                }
+                | {
+                    "review_reason_hash": (
+                        hashlib.sha256(str(receipt["review_reason"]).encode()).hexdigest()
+                        if receipt.get("review_reason")
+                        else None
                     )
                 }
                 for receipt in tool_receipts
@@ -4703,6 +4757,60 @@ def _hitl_decision_for_permission(permission: dict[str, Any]) -> dict[str, Any]:
     if permission.get("status") == "approved":
         return {"type": "approve"}
     return {"type": "reject", "message": "Tool execution denied by user."}
+
+
+def _diagnostics_execution_policy(run: dict[str, Any]) -> dict[str, Any]:
+    try:
+        settings = json.loads(str(run.get("settings_json") or "{}"))
+    except json.JSONDecodeError:
+        settings = {}
+    if not isinstance(settings, dict):
+        settings = {}
+    stored_policy = settings.get("_execution_policy")
+    policy = (
+        stored_policy
+        if isinstance(stored_policy, dict)
+        and stored_policy.get("complexity") in {"simple", "complex"}
+        else execution_policy_for_task(str(run.get("goal") or ""))
+    )
+    plan_mode = str(settings.get("plan_first") or "auto")
+    if plan_mode not in {"off", "auto", "always"}:
+        plan_mode = "auto"
+    configured_model_calls = settings.get("max_model_calls")
+    max_model_calls = (
+        int(configured_model_calls)
+        if isinstance(configured_model_calls, int) and configured_model_calls > 0
+        else 100
+    )
+    subagents_enabled = settings.get("subagents") is not False
+    subagent_allowed = bool(policy["subagent_allowed"] and subagents_enabled)
+    return {
+        "complexity": policy["complexity"],
+        "plan_mode": plan_mode,
+        "plan_required": plan_mode == "always"
+        or (plan_mode == "auto" and policy["complexity"] == "complex"),
+        "subagent_allowed": subagent_allowed,
+        "reason": "subagents_disabled" if not subagents_enabled else policy["reason"],
+        "max_model_calls": _agent_model_call_limit(
+            max_model_calls,
+            str(run.get("goal") or ""),
+        ),
+        "max_subagent_tasks": MAX_SUBAGENT_TASKS_PER_RUN if subagent_allowed else 0,
+        "max_subagent_model_calls": SUBAGENT_MODEL_CALL_LIMIT if subagent_allowed else 0,
+    }
+
+
+def _diagnostics_build(run: dict[str, Any]) -> dict[str, Any]:
+    try:
+        settings = json.loads(str(run.get("settings_json") or "{}"))
+    except json.JSONDecodeError:
+        settings = {}
+    stored = settings.get("_diagnostics_build") if isinstance(settings, dict) else None
+    return (
+        stored
+        if isinstance(stored, dict)
+        else runtime_build_identity(protocol_version=RUNTIME_PROTOCOL_VERSION)
+    )
 
 
 def _build_diagnostics_handoff(

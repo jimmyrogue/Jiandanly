@@ -14,6 +14,8 @@ import json
 import math
 import re
 from collections.abc import AsyncIterator, Callable, Iterator, Sequence
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -33,6 +35,7 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.constants import TAG_NOSTREAM
 from pydantic import Field
 
+from ..failure_policy import build_retry_decision
 from ..middleware.tool_visibility import visible_tools_for_messages
 from ..store.sqlite import LocalStore
 from ..tools.runtime import current_runtime_tool_execution_or_none
@@ -47,6 +50,9 @@ class ModelContextBudgetExceeded(RuntimeError):
 class ModelContextProfileMissing(RuntimeError):
     code = "model_context_profile_missing"
     retryable = False
+
+
+MODEL_RETRY_ATTEMPTS = 2
 
 
 class LedgerChatModel(BaseChatModel):
@@ -103,7 +109,12 @@ class LedgerChatModel(BaseChatModel):
             choices,
         )
 
-    async def _reserve(self) -> dict[str, Any]:
+    async def _reserve(
+        self,
+        *,
+        logical_call_id: str | None = None,
+        retry_attempt: int = 0,
+    ) -> dict[str, Any]:
         store = self.store
         if not isinstance(store, LocalStore):
             raise RuntimeError("model ledger store is not bound")
@@ -117,6 +128,8 @@ class LedgerChatModel(BaseChatModel):
             parent_tool_operation_id=(
                 parent_execution.operation_id if parent_execution is not None else None
             ),
+            logical_call_id=logical_call_id,
+            retry_attempt=retry_attempt,
         )
 
     async def _agenerate(
@@ -129,44 +142,62 @@ class LedgerChatModel(BaseChatModel):
         provider_model, tool_schema_tokens, aliases, choices = self._provider_model(messages)
         messages = self._bounded_messages(messages, tool_schema_tokens=tool_schema_tokens)
         messages = [_rewrite_tool_names(message, choices) for message in messages]
-        receipt = await self._reserve()
-        output_started = False
-        try:
-            message = _rewrite_tool_names(
-                await provider_model.ainvoke(
-                    messages,
-                    stop=stop,
-                    config={"callbacks": [], "tags": [TAG_NOSTREAM]},
-                    **kwargs,
-                ),
-                aliases,
+        retry_attempt = 0
+        logical_call_id: str | None = None
+        while True:
+            receipt = await self._reserve(
+                logical_call_id=logical_call_id,
+                retry_attempt=retry_attempt,
             )
-            message = _with_model_call_id(message, str(receipt["id"]))
-            if _has_visible_output(message):
-                await self.store.mark_model_call_output(
+            logical_call_id = str(receipt["logical_call_id"])
+            output_started = False
+            try:
+                message = _rewrite_tool_names(
+                    await provider_model.ainvoke(
+                        messages,
+                        stop=stop,
+                        config={"callbacks": [], "tags": [TAG_NOSTREAM]},
+                        **kwargs,
+                    ),
+                    aliases,
+                )
+                message = _with_model_call_id(message, str(receipt["id"]))
+                if _has_visible_output(message):
+                    await self.store.mark_model_call_output(
+                        run_id=self.run_id,
+                        call_id=receipt["id"],
+                    )
+                    output_started = True
+                usage = _usage_from_message(message)
+                await self.store.settle_model_call(
                     run_id=self.run_id,
                     call_id=receipt["id"],
+                    provider_request_id=_request_id_from_message(message),
+                    input_tokens=usage.get("input_tokens"),
+                    output_tokens=usage.get("output_tokens"),
                 )
-                output_started = True
-            usage = _usage_from_message(message)
-            await self.store.settle_model_call(
-                run_id=self.run_id,
-                call_id=receipt["id"],
-                provider_request_id=_request_id_from_message(message),
-                input_tokens=usage.get("input_tokens"),
-                output_tokens=usage.get("output_tokens"),
-            )
-            return ChatResult(generations=[ChatGeneration(message=message)])
-        except BaseException as exc:
-            await asyncio.shield(
-                self.store.fail_model_call(
-                    run_id=self.run_id,
-                    call_id=receipt["id"],
-                    outcome_unknown=self._outcome_unknown(exc, output_started=output_started),
-                    error_code=_error_code(exc),
+                return ChatResult(generations=[ChatGeneration(message=message)])
+            except BaseException as exc:
+                outcome_unknown = self._outcome_unknown(exc, output_started=output_started)
+                await asyncio.shield(
+                    self.store.fail_model_call(
+                        run_id=self.run_id,
+                        call_id=receipt["id"],
+                        outcome_unknown=outcome_unknown,
+                        error_code=_error_code(exc),
+                        provider_request_id=_request_id_from_error(exc),
+                    )
                 )
-            )
-            raise
+                decision = _model_retry_decision(
+                    exc,
+                    output_started=output_started,
+                    outcome_unknown=outcome_unknown,
+                    retry_attempt=retry_attempt,
+                )
+                if not decision["should_retry"]:
+                    raise
+                await asyncio.sleep(float(decision["delay_s"]))
+                retry_attempt += 1
 
     async def _astream(
         self,
@@ -178,50 +209,69 @@ class LedgerChatModel(BaseChatModel):
         provider_model, tool_schema_tokens, aliases, choices = self._provider_model(messages)
         messages = self._bounded_messages(messages, tool_schema_tokens=tool_schema_tokens)
         messages = [_rewrite_tool_names(message, choices) for message in messages]
-        receipt = await self._reserve()
-        output_started = False
-        usage: dict[str, int | None] = {}
-        provider_request_id: str | None = None
-        first_chunk = True
-        try:
-            async for provider_message in provider_model.astream(
-                messages,
-                stop=stop,
-                config={"callbacks": [], "tags": [TAG_NOSTREAM]},
-                **kwargs,
-            ):
-                message = _rewrite_tool_names(provider_message, aliases)
-                if first_chunk:
-                    message = _with_model_call_id(message, str(receipt["id"]))
-                    first_chunk = False
-                if not output_started and _has_visible_output(message):
-                    await self.store.mark_model_call_output(
-                        run_id=self.run_id,
-                        call_id=receipt["id"],
-                    )
-                    output_started = True
-                current_usage = _usage_from_message(message)
-                if current_usage:
-                    usage = current_usage
-                provider_request_id = _request_id_from_message(message) or provider_request_id
-                yield ChatGenerationChunk(message=message)
-            await self.store.settle_model_call(
-                run_id=self.run_id,
-                call_id=receipt["id"],
-                provider_request_id=provider_request_id,
-                input_tokens=usage.get("input_tokens"),
-                output_tokens=usage.get("output_tokens"),
+        retry_attempt = 0
+        logical_call_id: str | None = None
+        while True:
+            receipt = await self._reserve(
+                logical_call_id=logical_call_id,
+                retry_attempt=retry_attempt,
             )
-        except BaseException as exc:
-            await asyncio.shield(
-                self.store.fail_model_call(
+            logical_call_id = str(receipt["logical_call_id"])
+            output_started = False
+            usage: dict[str, int | None] = {}
+            provider_request_id: str | None = None
+            first_chunk = True
+            try:
+                async for provider_message in provider_model.astream(
+                    messages,
+                    stop=stop,
+                    config={"callbacks": [], "tags": [TAG_NOSTREAM]},
+                    **kwargs,
+                ):
+                    message = _rewrite_tool_names(provider_message, aliases)
+                    if first_chunk:
+                        message = _with_model_call_id(message, str(receipt["id"]))
+                        first_chunk = False
+                    if not output_started and _has_visible_output(message):
+                        await self.store.mark_model_call_output(
+                            run_id=self.run_id,
+                            call_id=receipt["id"],
+                        )
+                        output_started = True
+                    current_usage = _usage_from_message(message)
+                    if current_usage:
+                        usage = current_usage
+                    provider_request_id = _request_id_from_message(message) or provider_request_id
+                    yield ChatGenerationChunk(message=message)
+                await self.store.settle_model_call(
                     run_id=self.run_id,
                     call_id=receipt["id"],
-                    outcome_unknown=self._outcome_unknown(exc, output_started=output_started),
-                    error_code=_error_code(exc),
+                    provider_request_id=provider_request_id,
+                    input_tokens=usage.get("input_tokens"),
+                    output_tokens=usage.get("output_tokens"),
                 )
-            )
-            raise
+                return
+            except BaseException as exc:
+                outcome_unknown = self._outcome_unknown(exc, output_started=output_started)
+                await asyncio.shield(
+                    self.store.fail_model_call(
+                        run_id=self.run_id,
+                        call_id=receipt["id"],
+                        outcome_unknown=outcome_unknown,
+                        error_code=_error_code(exc),
+                        provider_request_id=_request_id_from_error(exc),
+                    )
+                )
+                decision = _model_retry_decision(
+                    exc,
+                    output_started=output_started,
+                    outcome_unknown=outcome_unknown,
+                    retry_attempt=retry_attempt,
+                )
+                if not decision["should_retry"]:
+                    raise
+                await asyncio.sleep(float(decision["delay_s"]))
+                retry_attempt += 1
 
     def _outcome_unknown(self, exc: BaseException, *, output_started: bool) -> bool:
         # Review calls are read-only and cannot emit Tool calls into the graph.
@@ -421,6 +471,15 @@ def _request_id_from_message(message: BaseMessage) -> str | None:
     return str(value) if value else None
 
 
+def _request_id_from_error(exc: BaseException) -> str | None:
+    if isinstance(exc, ModelServiceError):
+        return exc.request_id
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.headers.get("x-request-id")
+    value = getattr(exc, "request_id", None)
+    return str(value) if value else None
+
+
 def _int_or_none(value: Any) -> int | None:
     try:
         return int(value) if value is not None else None
@@ -439,6 +498,57 @@ def _outcome_may_be_unknown(exc: BaseException) -> bool:
             ConnectionError,
         ),
     )
+
+
+def _model_retry_decision(
+    exc: BaseException,
+    *,
+    output_started: bool,
+    outcome_unknown: bool,
+    retry_attempt: int,
+) -> dict[str, Any]:
+    if output_started or outcome_unknown or isinstance(exc, asyncio.CancelledError):
+        return {"should_retry": False, "delay_s": 0.0}
+    if isinstance(exc, ModelServiceError):
+        payload = exc.to_event_payload()
+    else:
+        payload = {
+            "type": type(exc).__name__,
+            "error_code": _error_code(exc),
+            "message": str(exc),
+        }
+        for field in ("recoverable", "retryable"):
+            value = getattr(exc, field, None)
+            if isinstance(value, bool):
+                payload[field] = value
+    decision = build_retry_decision(
+        "model.failed",
+        payload,
+        attempt=retry_attempt,
+        max_attempts=MODEL_RETRY_ATTEMPTS,
+    )
+    retry_after = _retry_after_seconds(exc)
+    if decision["should_retry"] and retry_after is not None:
+        decision["delay_s"] = max(float(decision["delay_s"]), retry_after)
+    return decision
+
+
+def _retry_after_seconds(exc: BaseException) -> float | None:
+    if not isinstance(exc, httpx.HTTPStatusError):
+        return None
+    value = exc.response.headers.get("retry-after")
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        try:
+            parsed = parsedate_to_datetime(value)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=UTC)
+            return max(0.0, (parsed - datetime.now(UTC)).total_seconds())
+        except (TypeError, ValueError, OverflowError):
+            return None
 
 
 def _error_code(exc: BaseException) -> str:

@@ -1062,6 +1062,13 @@ jobs:
         working-directory: client
         shell: bash
         run: pnpm version "${GITHUB_REF_NAME#client-v}" --no-git-tag-version --allow-same-version
+      - name: Stamp packaged Runtime identity
+        shell: bash
+        run: >-
+          node -e "require('node:fs').writeFileSync(
+          'client/electron/build-info.cjs',
+          'module.exports = Object.freeze(' + JSON.stringify({commit: process.env.GITHUB_SHA,
+          buildId: process.env.GITHUB_RUN_ID + '-' + process.env.GITHUB_RUN_ATTEMPT}) + ')\\n')"
       - name: Configure macOS release signing
         if: matrix.platform == 'macos'
         shell: bash

@@ -7,6 +7,7 @@ import re
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 
+import httpx
 import pytest
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -23,12 +24,14 @@ from langchain_core.tools import tool
 from langgraph.graph import START, MessagesState, StateGraph
 
 from shejane_runtime.auth import LOCAL_OWNER_PRINCIPAL_ID
+from shejane_runtime.llm.errors import ModelServiceError
 from shejane_runtime.llm.ledger import (
     LedgerChatModel,
     ModelContextBudgetExceeded,
     _conservative_token_count,
     _enforce_context_envelope,
     _estimate_tool_tokens,
+    _model_retry_decision,
     _provider_tools,
     _rewrite_tool_names,
     _truncate_large_message,
@@ -47,6 +50,25 @@ def test_tool_token_estimate_is_local_and_conservative() -> None:
 
     payload = '[{"name": "lookup", "description": "查询天气", "input_schema": {"type": "object"}}]'
     assert estimated == math.ceil(len(payload.encode("utf-8")) / 2)
+
+
+def test_model_retry_honors_provider_retry_after() -> None:
+    response = httpx.Response(
+        429,
+        headers={"Retry-After": "3"},
+        request=httpx.Request("POST", "https://provider.example/v1/chat"),
+    )
+    error = httpx.HTTPStatusError("rate limited", request=response.request, response=response)
+
+    decision = _model_retry_decision(
+        error,
+        output_started=False,
+        outcome_unknown=False,
+        retry_attempt=0,
+    )
+
+    assert decision["should_retry"] is True
+    assert decision["delay_s"] == 3.0
 
 
 class _StreamingModel(BaseChatModel):
@@ -79,6 +101,30 @@ class _StreamingModel(BaseChatModel):
 
     def _generate(self, *args: object, **kwargs: object) -> ChatResult:
         raise NotImplementedError
+
+
+class _TransientThenStreamingModel(_StreamingModel):
+    failures_before_success: int = 2
+    attempts: int = 0
+
+    async def _astream(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
+        **kwargs: object,
+    ) -> AsyncIterator[ChatGenerationChunk]:
+        del messages, stop, run_manager, kwargs
+        self.attempts += 1
+        if self.attempts <= self.failures_before_success:
+            raise ModelServiceError(
+                "Service temporarily unavailable",
+                code="service_unavailable",
+                request_id=f"provider-failed-{self.attempts}",
+                recoverable=True,
+                retryable=True,
+            )
+        yield ChatGenerationChunk(message=AIMessageChunk(content="recovered"))
 
 
 class _BindableStreamingModel(_StreamingModel):
@@ -313,6 +359,45 @@ async def test_failure_after_visible_output_is_outcome_unknown(tmp_path: Path) -
         usage = await store.model_usage_summary(str(run["id"]))
         assert usage["outcome_unknown_calls"] == 1
         assert usage["model_calls"] == 1
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_transient_failure_before_output_retries_with_separate_ledger_calls(
+    tmp_path: Path,
+) -> None:
+    store, run = await _store_and_run(tmp_path)
+    delegate = _TransientThenStreamingModel()
+    try:
+        model = LedgerChatModel(
+            delegate=delegate,
+            store=store,
+            run_id=str(run["id"]),
+            execution_attempt_id="job-retry:1",
+            model_name="local:test:model",
+            max_calls=5,
+            profile={"max_input_tokens": 8_192},
+        )
+
+        chunks = [chunk async for chunk in model.astream([HumanMessage(content="hi")])]
+
+        assert "".join(str(chunk.content) for chunk in chunks) == "recovered"
+        calls = await store.list_model_calls_for_run(str(run["id"]))
+        assert [call["status"] for call in calls] == ["failed", "failed", "completed_unmetered"]
+        assert [call["error_code"] for call in calls] == [
+            "service_unavailable",
+            "service_unavailable",
+            None,
+        ]
+        assert len({call["logical_call_id"] for call in calls}) == 1
+        assert [call["retry_attempt"] for call in calls] == [0, 1, 2]
+        assert [call["provider_request_id"] for call in calls] == [
+            "provider-failed-1",
+            "provider-failed-2",
+            None,
+        ]
+        assert delegate.attempts == 3
     finally:
         await store.close()
 

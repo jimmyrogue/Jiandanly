@@ -91,6 +91,29 @@ describe('SettingsView', () => {
     ))).toBe(true)
   })
 
+  it('hides fixed Runtime Assets that are unavailable in this build', async () => {
+    render(
+      <I18nProvider>
+        <SettingsView
+          isDesktop
+          agentSettings={settings}
+          onAgentSettingsChange={vi.fn()}
+          onImportLocalData={vi.fn()}
+          getRuntimeAssetStatus={vi.fn(async (pluginID) => ({
+            plugin_id: pluginID,
+            available: false,
+            downloaded: false,
+          }))}
+        />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.queryByText('Browser QA')).not.toBeInTheDocument()
+      expect(screen.queryByText('RapidOCR')).not.toBeInTheDocument()
+    })
+  })
+
   it('shows runtime asset download progress', async () => {
     let finishDownload: (() => void) | undefined
     let downloading = false
@@ -99,6 +122,7 @@ describe('SettingsView', () => {
     }))
     const getRuntimeAssetStatus = vi.fn(async (pluginID: string) => ({
       plugin_id: pluginID as 'org.shejane.browser-qa' | 'org.shejane.ocr',
+      available: true,
       downloaded: false,
       downloading: downloading && pluginID === 'org.shejane.browser-qa',
       download_progress: downloading && pluginID === 'org.shejane.browser-qa' ? 42 : null,
@@ -168,6 +192,7 @@ describe('SettingsView', () => {
     const externalFinished = new Promise<FixedRuntimeAssetStatus>((resolve) => {
       finishExternalDownload = () => resolve({
         plugin_id: 'org.shejane.browser-qa',
+        available: true,
         downloaded: false,
         downloading: false,
         download_progress: null,
@@ -179,6 +204,7 @@ describe('SettingsView', () => {
       if (pluginID === 'org.shejane.ocr') {
         return Promise.resolve({
           plugin_id: pluginID,
+          available: true,
           downloaded: false,
           downloading: false,
           download_progress: null,
@@ -188,6 +214,7 @@ describe('SettingsView', () => {
       if (browserStatusCalls === 1) {
         return Promise.resolve({
           plugin_id: pluginID,
+          available: true,
           downloaded: false,
           downloading: true,
           download_progress: 42,
@@ -219,6 +246,7 @@ describe('SettingsView', () => {
   it('restores downloaded asset state from Runtime when settings reopens', async () => {
     const getRuntimeAssetStatus = vi.fn(async (pluginID: string) => ({
       plugin_id: pluginID as 'org.shejane.browser-qa' | 'org.shejane.ocr',
+      available: true,
       downloaded: pluginID === 'org.shejane.browser-qa',
     }))
     const removeRuntimeAsset = vi.fn().mockResolvedValue(undefined)

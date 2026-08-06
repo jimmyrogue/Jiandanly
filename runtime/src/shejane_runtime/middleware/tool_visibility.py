@@ -8,10 +8,11 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware, ToolCallRequest
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.types import Command
 
 from ..tools.mcp import MCP_TOOL_SEARCH_NAME, MCP_TOOL_SEARCH_RESULT_KIND
+from .plan_first import _looks_complex
 
 _OFFICE_SIGNALS = (
     "office.",
@@ -70,6 +71,41 @@ _COLLABORATION_TOOLS = frozenset(
         "mailbox.ack",
     }
 )
+_COLLABORATION_SIGNALS = (
+    "use the task tool",
+    "using the task tool",
+    "delegate",
+    "subagent",
+    "sub-agent",
+    "researcher agent",
+    "team.run",
+    "child.spawn",
+    "use child.spawn",
+    "child.spawn",
+    "required child",
+    "child agent",
+    "mailbox",
+    "子 agent",
+    "子agent",
+    "子代理",
+    "委派",
+    "请分工",
+    "帮我分工",
+    "请协作",
+    "协作完成",
+)
+
+_SIMPLE_QUESTION_PREFIXES = (
+    "what is ",
+    "what are ",
+    "who is ",
+    "how many ",
+    "define ",
+    "什么是",
+    "什么叫",
+    "谁是",
+    "有多少",
+)
 
 
 def _tool_name(tool: Any) -> str:
@@ -107,15 +143,52 @@ def _message_text(message: Any) -> str:
     return "\n".join(parts)
 
 
-def _goal_hidden_tools(task_goal: str | None) -> frozenset[str]:
+def execution_policy_for_task(
+    task_goal: str | None,
+    messages: Sequence[Any] = (),
+) -> dict[str, Any]:
     text = str(task_goal or "").lower()
-    if not any(signal in text for signal in _WEATHER_SIGNALS):
-        return frozenset()
-    hidden = set(_COLLABORATION_TOOLS)
-    if not any(signal in text for signal in _FILE_WORK_SIGNALS):
+    task_messages = (
+        [
+            HumanMessage(
+                content=task_goal,
+                additional_kwargs={"runtime_kind": "task_input"},
+            )
+        ]
+        if isinstance(task_goal, str) and task_goal.strip()
+        else list(messages)
+    )
+    simple_question = text.strip().startswith(_SIMPLE_QUESTION_PREFIXES)
+    complex_task = not simple_question and _looks_complex(task_messages)
+    collaboration_requested = any(signal in text for signal in _COLLABORATION_SIGNALS)
+    return {
+        "complexity": "complex" if complex_task else "simple",
+        "subagent_allowed": complex_task or collaboration_requested,
+        "reason": (
+            "complex_task"
+            if complex_task
+            else "explicit_collaboration"
+            if collaboration_requested
+            else "simple_task"
+        ),
+    }
+
+
+def _goal_hidden_tools(
+    task_goal: str | None,
+    messages: Sequence[Any] = (),
+    *,
+    collaboration_active: bool = False,
+) -> frozenset[str]:
+    text = str(task_goal or "").lower()
+    hidden: set[str] = set()
+    policy = execution_policy_for_task(task_goal, messages)
+    if task_goal and not collaboration_active and not policy["subagent_allowed"]:
+        hidden.update(_COLLABORATION_TOOLS)
+    if any(signal in text for signal in _WEATHER_SIGNALS) and not any(
+        signal in text for signal in _FILE_WORK_SIGNALS
+    ):
         hidden.update(_FILESYSTEM_TOOLS)
-    # ponytail: keep this deterministic weather fast path until another simple
-    # lookup family demonstrates the same failure mode.
     return frozenset(hidden)
 
 
@@ -124,6 +197,7 @@ def visible_tools_for_messages(
     messages: Sequence[Any],
     *,
     task_goal: str | None = None,
+    collaboration_active: bool = False,
 ) -> list[Any]:
     """Return the request-visible subset without changing registered tools."""
     corpus = (
@@ -149,7 +223,11 @@ def visible_tools_for_messages(
             ]
         else:
             visible = list(tools)
-    hidden = _goal_hidden_tools(task_goal)
+    hidden = _goal_hidden_tools(
+        task_goal,
+        messages,
+        collaboration_active=collaboration_active,
+    )
     return [tool for tool in visible if _tool_name(tool) not in hidden]
 
 
@@ -237,6 +315,7 @@ class ToolVisibilityMiddleware(AgentMiddleware):
             request.tools,
             request.messages,
             task_goal=task_goal,
+            collaboration_active=getattr(context, "run_kind", None) == "child",
         )
         deferred = deferred_tool_names or set()
         if deferred:
@@ -307,8 +386,11 @@ class ToolVisibilityMiddleware(AgentMiddleware):
         tool_name = str(request.tool_call.get("name") or "")
         context = getattr(getattr(request, "runtime", None), "context", None)
         task_goal = getattr(context, "task_goal", None)
+        state = request.state if isinstance(request.state, dict) else {}
         if tool_name not in self.blocked_tool_names and tool_name not in _goal_hidden_tools(
-            task_goal
+            task_goal,
+            state.get("messages") or (),
+            collaboration_active=getattr(context, "run_kind", None) == "child",
         ):
             return None
         return ToolMessage(

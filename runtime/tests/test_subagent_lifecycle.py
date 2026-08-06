@@ -442,6 +442,67 @@ async def test_running_subagent_cancellation_is_durably_canceled(tmp_path: Path)
 
 
 @pytest.mark.asyncio
+async def test_failed_subagent_cancels_its_unstarted_descendant_receipts(
+    tmp_path: Path,
+) -> None:
+    store, run = await _store_and_run(tmp_path)
+    run_id = str(run["id"])
+    context = RuntimeContext(
+        store=store,
+        run_id=run_id,
+        execution_attempt_id="job-failed-descendant:1",
+    )
+    request = ToolCallRequest(
+        tool_call={
+            "id": "call-failed-parent",
+            "name": "task",
+            "args": {"subagent_type": "researcher", "description": "Fail after planning work"},
+            "type": "tool_call",
+        },
+        tool=None,
+        state={"messages": []},
+        runtime=SimpleNamespace(context=context),
+    )
+
+    async def fail_with_prepared_descendant(_request: ToolCallRequest) -> ToolMessage:
+        parent_operation_id = current_runtime_tool_execution().operation_id
+        await store.prepare_tool_receipt(
+            operation_id="toolop-unstarted-descendant",
+            parent_operation_id=parent_operation_id,
+            run_id=run_id,
+            execution_attempt_id="job-failed-descendant:1",
+            execution_namespace="child:researcher",
+            tool_call_id="call-unstarted-descendant",
+            tool_name="execute",
+            tool_version="graph-v1",
+            arguments_hash="unstarted-descendant-args",
+            arguments_json=json.dumps({"command": "true"}),
+            risk="sandboxed_command",
+        )
+        raise RuntimeError("provider unavailable")
+
+    try:
+        result = await ToolExecutionMiddleware().awrap_tool_call(
+            request,
+            fail_with_prepared_descendant,
+        )
+
+        assert isinstance(result, ToolMessage)
+        assert result.status == "error"
+        receipts = {
+            str(receipt["operation_id"]): receipt
+            for receipt in await store.list_tool_receipts_for_run(run_id)
+        }
+        parent = next(receipt for receipt in receipts.values() if receipt["tool_name"] == "task")
+        descendant = receipts["toolop-unstarted-descendant"]
+        assert parent["status"] == "failed"
+        assert descendant["status"] == "canceled"
+        assert descendant["error_type"] == "ParentSubagentFailed"
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
 async def test_cancel_committed_between_precheck_and_begin_fences_tool_start(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -484,6 +545,19 @@ async def test_cancel_committed_between_precheck_and_begin_fences_tool_start(
 
     async def cancel_then_begin(**kwargs: object) -> dict[str, object]:
         assert await store.request_run_cancel(run_id) == "leased"
+        await store.prepare_tool_receipt(
+            operation_id="toolop-canceled-descendant",
+            parent_operation_id=str(kwargs["operation_id"]),
+            run_id=run_id,
+            execution_attempt_id=attempt_id,
+            execution_namespace="child:writer",
+            tool_call_id="call-canceled-descendant",
+            tool_name="execute",
+            tool_version="graph-v1",
+            arguments_hash="canceled-descendant-args",
+            arguments_json=json.dumps({"command": "true"}),
+            risk="sandboxed_command",
+        )
         return await original_begin(**kwargs)  # type: ignore[arg-type]
 
     calls = 0
@@ -509,10 +583,14 @@ async def test_cancel_committed_between_precheck_and_begin_fences_tool_start(
                 await ToolExecutionMiddleware().awrap_tool_call(request, handler)
 
         assert calls == 0
-        [receipt] = await store.list_tool_receipts_for_run(run_id)
+        receipts = await store.list_tool_receipts_for_run(run_id)
+        receipt = next(item for item in receipts if item["tool_name"] == "task")
         assert receipt["status"] == "canceled"
         assert receipt["attempt_count"] == 0
         assert receipt["error_type"] == "RunCanceledBeforeToolStart"
+        descendant = next(item for item in receipts if item["tool_name"] == "execute")
+        assert descendant["status"] == "canceled"
+        assert descendant["error_type"] == "ParentSubagentCanceled"
         assert [event["event_type"] for event in await store.events_since(run_id)] == [
             "subagent.spawned",
             "subagent.canceled",

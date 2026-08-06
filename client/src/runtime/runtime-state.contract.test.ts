@@ -85,7 +85,7 @@ describe.skipIf(!BASE_URL)('flow:P1/P4/P12 > contract: Runtime-owned state (live
 
     const diagnostics = await getLocalRunDiagnostics(run.id, config)
     expect(diagnostics).toMatchObject({
-      schema_version: 1,
+      schema_version: 2,
       run: { id: run.id, status: 'completed' },
     })
     expect(diagnostics.events.map((event) => event.event_type)).toEqual(

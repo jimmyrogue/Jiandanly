@@ -116,7 +116,7 @@ def test_subagents_have_code_enforced_model_and_research_limits() -> None:
     assert all(
         any(
             isinstance(item, ModelCallLimitMiddleware)
-            and item.run_limit == 50
+            and item.run_limit == 12
             and item.exit_behavior == "end"
             for item in subagent["middleware"]
         )

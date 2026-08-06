@@ -523,6 +523,7 @@ describe('desktop shell', () => {
         assetRequests.push(url)
         return new Response(JSON.stringify({
           plugin_id: url.includes('browser-qa') ? 'org.shejane.browser-qa' : 'org.shejane.ocr',
+          available: true,
           downloaded: false,
         }), { status: 200, headers: { 'content-type': 'application/json' } })
       }

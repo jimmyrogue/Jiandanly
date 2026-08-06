@@ -76,7 +76,7 @@ The first reliability gate is now in place:
 
 - preset BYOK models run the same streamed `model → tool → model` loop used by the Agent before they become available;
 - deterministic Agent outcomes gate CI and Client releases, while `make eval` records real-provider trajectories and baseline deltas;
-- Runtime diagnostics export a redacted `run → model → tool/subagent → checkpoint → terminal` trace from durable records.
+- Runtime diagnostics v2 export build identity, effective execution policy, model retry attempts, Receipt lineage, and a redacted `run → model → tool/subagent → checkpoint → terminal` trace from durable records.
 
 Current work now focuses on tighter Runtime state ownership and production plugin/package release evidence. Auditable semantic memory, structured outputs, and recurring schedules remain later work.
 

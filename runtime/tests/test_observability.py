@@ -234,3 +234,80 @@ def test_durable_trace_links_redacted_model_tool_checkpoint_and_terminal_spans()
     assert spans["span:terminal:run-1"]["status"] == "completed"
     assert "arguments_json" not in str(trace)
     assert "private output" not in str(trace)
+
+
+def test_durable_trace_uses_receipt_lineage_for_subagent_model_and_tools() -> None:
+    trace = build_run_trace(
+        {
+            "id": "run-lineage",
+            "status": "failed",
+            "created_at": "2026-08-06T00:00:00+00:00",
+            "updated_at": "2026-08-06T00:00:04+00:00",
+            "completed_at": "2026-08-06T00:00:04+00:00",
+        },
+        model_calls=[
+            {
+                "id": "model-main",
+                "logical_call_id": "model-main",
+                "retry_attempt": 0,
+                "execution_attempt_id": "attempt-1",
+                "call_index": 1,
+                "model": "local:connection:model",
+                "purpose": "agent",
+                "status": "completed",
+                "output_started": 1,
+                "created_at": "2026-08-06T00:00:00.100000+00:00",
+                "completed_at": "2026-08-06T00:00:01+00:00",
+            },
+            {
+                "id": "model-child",
+                "logical_call_id": "model-child",
+                "retry_attempt": 0,
+                "execution_attempt_id": "attempt-1",
+                "parent_tool_operation_id": "operation-task",
+                "call_index": 2,
+                "model": "local:connection:model",
+                "purpose": "agent",
+                "status": "failed",
+                "output_started": 0,
+                "error_code": "service_unavailable",
+                "created_at": "2026-08-06T00:00:02+00:00",
+                "completed_at": "2026-08-06T00:00:03+00:00",
+            },
+        ],
+        tool_receipts=[
+            {
+                "operation_id": "operation-task",
+                "execution_attempt_id": "attempt-1",
+                "execution_namespace": "main",
+                "tool_call_id": "call-task",
+                "tool_name": "task",
+                "status": "failed",
+                "attempt_count": 1,
+                "created_at": "2026-08-06T00:00:01.100000+00:00",
+                "started_at": "2026-08-06T00:00:01.200000+00:00",
+                "completed_at": "2026-08-06T00:00:03.100000+00:00",
+            },
+            {
+                "operation_id": "operation-child-tool",
+                "parent_operation_id": "operation-task",
+                "execution_attempt_id": "attempt-1",
+                "execution_namespace": "child:researcher",
+                "tool_call_id": "call-child-tool",
+                "tool_name": "execute",
+                "status": "canceled",
+                "attempt_count": 0,
+                "created_at": "2026-08-06T00:00:02.500000+00:00",
+                "completed_at": "2026-08-06T00:00:03.100000+00:00",
+            },
+        ],
+        child_runs=[],
+        checkpoint=None,
+        event_count=4,
+    )
+
+    spans = {span["id"]: span for span in trace["spans"]}
+    assert spans["span:tool:operation-task"]["parent_id"] == "span:model:model-main"
+    assert spans["span:model:model-child"]["parent_id"] == "span:tool:operation-task"
+    assert spans["span:tool:operation-child-tool"]["parent_id"] == ("span:tool:operation-task")
+    assert spans["span:model:model-child"]["attributes"]["error_code"] == ("service_unavailable")

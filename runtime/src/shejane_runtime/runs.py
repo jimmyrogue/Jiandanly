@@ -45,11 +45,13 @@ from .agent.builder import build_agent, skill_catalog_fingerprint
 from .agent.child_runs import ChildRunControl
 from .agent.context_builder import RuntimeContext
 from .agent.mailbox import AgentMailboxControl, AgentMessageKind
+from .build_info import runtime_build_identity
 from .config import Settings, clamp_run_budget, get_settings
 from .event_translator import translate
 from .failure_policy import classify_failure_payload
 from .llm.errors import ModelServiceError
 from .llm.runtime import bind_runtime_model
+from .middleware.tool_visibility import execution_policy_for_task
 from .model_credentials import (
     CredentialStoreError,
     get_model_api_key,
@@ -1224,6 +1226,10 @@ class RunCoordinator:
                 else freeze_run_settings(self.settings, public_settings)
             )
             settings_snapshot["_model_binding"] = model_binding
+            settings_snapshot["_diagnostics_build"] = runtime_build_identity(
+                protocol_version=RUNTIME_PROTOCOL_VERSION
+            )
+            settings_snapshot["_execution_policy"] = execution_policy_for_task(goal)
             if settings_are_frozen:
                 capability_bindings = settings_snapshot.get("_capability_bindings")
                 required_tool_names = settings_snapshot.get("_required_tools")

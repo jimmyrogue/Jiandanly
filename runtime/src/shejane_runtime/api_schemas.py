@@ -1362,6 +1362,7 @@ class DiagnosticsFailure(BaseModel):
         "configuration",
         "workspace",
         "validation",
+        "execution_invariant",
         "fatal",
         "unknown",
     ]
@@ -1414,6 +1415,8 @@ class DiagnosticsToolReceipt(BaseModel):
     """Safe execution identity/status without raw tool arguments or output."""
 
     operation_id: str
+    execution_namespace: str
+    parent_operation_id: str | None = None
     tool_call_id: str
     tool_name: str
     tool_version: str
@@ -1432,6 +1435,9 @@ class DiagnosticsToolReceipt(BaseModel):
     attempt_count: int
     result_hash: str | None = None
     error_type: str | None = None
+    review_decision: str | None = None
+    review_source: str | None = None
+    review_reason_hash: str | None = None
     created_at: str
     started_at: str | None = None
     completed_at: str | None = None
@@ -1444,6 +1450,49 @@ class DiagnosticsWaitCandidate(BaseModel):
     status: Literal["pending", "resolved"]
     created_at: str
     resolved_at: str | None = None
+
+
+class DiagnosticsBuildIdentity(BaseModel):
+    runtime_version: str
+    client_release: str | None = None
+    build_commit: str | None = None
+    build_id: str | None = None
+    platform: str
+    arch: str
+    packaging_mode: str
+    protocol_version: int = Field(ge=1)
+
+
+class DiagnosticsExecutionPolicy(BaseModel):
+    complexity: Literal["simple", "complex"]
+    plan_mode: Literal["off", "auto", "always"]
+    plan_required: bool
+    subagent_allowed: bool
+    reason: str
+    max_model_calls: int = Field(ge=1)
+    max_subagent_tasks: int = Field(ge=0)
+    max_subagent_model_calls: int = Field(ge=0)
+
+
+class DiagnosticsModelCall(BaseModel):
+    id: str
+    logical_call_id: str
+    retry_attempt: int = Field(ge=0)
+    execution_attempt_id: str
+    parent_tool_operation_id: str | None = None
+    call_index: int = Field(ge=1)
+    model: str
+    purpose: str
+    status: str
+    output_started: bool
+    outcome_unknown: bool
+    provider_request_id: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    error_code: str | None = None
+    created_at: str
+    first_output_at: str | None = None
+    completed_at: str | None = None
 
 
 class DiagnosticsHandoff(BaseModel):
@@ -1498,12 +1547,15 @@ class FeatureLedger(BaseModel):
 
 
 class LocalRunDiagnostics(BaseModel):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     exported_at: str
     runtime_version: str | None = None
+    build: DiagnosticsBuildIdentity
+    execution_policy: DiagnosticsExecutionPolicy
     run: LocalRun
     events: list[DiagnosticsEvent]
     permissions: list[DiagnosticsPermission]
+    model_calls: list[DiagnosticsModelCall] = Field(default_factory=list)
     tool_receipts: list[DiagnosticsToolReceipt] = Field(default_factory=list)
     wait_candidates: list[DiagnosticsWaitCandidate] = Field(default_factory=list)
     artifacts: list[DiagnosticsArtifact]
@@ -1701,6 +1753,7 @@ class FixedRuntimeAssetStatus(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     plugin_id: Literal["org.shejane.browser-qa", "org.shejane.ocr"]
+    available: bool = True
     downloaded: bool
     downloading: bool | None = None
     download_progress: int | None = Field(default=None, ge=0, le=100)

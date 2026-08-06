@@ -139,6 +139,49 @@ def test_simple_weather_lookup_hides_filesystem_and_collaboration_tools() -> Non
     assert [item["function"]["name"] for item in filtered.tools] == ["web.fetch"]
 
 
+def test_simple_fact_lookup_hides_collaboration_but_keeps_direct_research_tools() -> None:
+    request = _request([], goal="去香港开通汇丰 one 账户，线上办理的话，补签名是必须的吗？")
+    request.tools = [
+        {"type": "function", "function": {"name": name}}
+        for name in ("web.search", "web.fetch", "task", "team.run", "child.spawn")
+    ]
+
+    filtered = ToolVisibilityMiddleware._apply(request)
+
+    assert [item["function"]["name"] for item in filtered.tools] == [
+        "web.search",
+        "web.fetch",
+    ]
+
+
+def test_complex_research_goal_keeps_collaboration_tools() -> None:
+    request = _request([], goal="请调研并比较香港三家银行的线上开户流程和签名要求")
+    request.tools = [web_search := {"type": "function", "function": {"name": "web.search"}}, task]
+
+    filtered = ToolVisibilityMiddleware._apply(request)
+
+    assert filtered.tools == [web_search, task]
+
+
+def test_explicit_delegation_goal_keeps_collaboration_tools() -> None:
+    request = _request([], goal="Use the task tool to delegate this question to the researcher")
+    request.tools = [workspace_read, task]
+
+    assert ToolVisibilityMiddleware._apply(request) is request
+
+
+@pytest.mark.parametrize(
+    "goal", ["什么是协作？", "What is a design pattern?", "How many children live in HK?"]
+)
+def test_definition_questions_do_not_enable_collaboration(goal: str) -> None:
+    request = _request([], goal=goal)
+    request.tools = [workspace_read, task]
+
+    filtered = ToolVisibilityMiddleware._apply(request)
+
+    assert [item.name for item in filtered.tools] == ["workspace.read"]
+
+
 def test_weather_file_request_keeps_filesystem_tools_but_not_collaboration_tools() -> None:
     request = _request([], goal="查询杭州天气并保存到 weather.md")
     request.tools = [
@@ -285,6 +328,38 @@ async def test_weather_hidden_tool_is_rejected_even_when_model_guesses_its_name(
     assert calls == 0
     assert result.status == "error"
     assert result.content == "Tool read_file is not available to this Agent."
+
+
+@pytest.mark.asyncio
+async def test_simple_fact_lookup_rejects_a_guessed_task_call() -> None:
+    middleware = ToolVisibilityMiddleware()
+    request = ToolCallRequest(
+        tool_call={
+            "id": "call-hidden-task",
+            "name": "task",
+            "args": {"subagent_type": "researcher", "description": "Look it up"},
+            "type": "tool_call",
+        },
+        tool=task,
+        state={"messages": []},
+        runtime=SimpleNamespace(
+            context=SimpleNamespace(
+                task_goal="去香港开通汇丰 one 账户，线上办理的话，补签名是必须的吗？"
+            )
+        ),
+    )
+    calls = 0
+
+    async def handler(_request: ToolCallRequest) -> ToolMessage:
+        nonlocal calls
+        calls += 1
+        return ToolMessage(content="delegated", name="task", tool_call_id="call-hidden-task")
+
+    result = await middleware.awrap_tool_call(request, handler)
+
+    assert calls == 0
+    assert result.status == "error"
+    assert result.content == "Tool task is not available to this Agent."
 
 
 @tool("docs_lookup")

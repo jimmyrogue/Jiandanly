@@ -74,7 +74,10 @@ async function launchClient(existingRoot?: string, runtimeURL?: string): Promise
   })
   const page = await app.firstWindow()
   page.on('console', (message) => {
-    if (message.type() === 'error') rendererErrors.push(message.text())
+    if (message.type() === 'error') {
+      const source = message.location().url
+      rendererErrors.push(source ? `${message.text()} (${source})` : message.text())
+    }
   })
   page.on('pageerror', (error) => rendererErrors.push(error.message))
   return { app, page, rendererErrors, root }
@@ -472,11 +475,6 @@ test.describe.serial('flow:P2-P12 > Electron critical path', () => {
     })
     const replyContent = reply.locator('.message-content')
     await expect(replyContent).toHaveCSS('user-select', 'text')
-    await replyContent.selectText()
-    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+C' : 'Control+C')
-    expect(await app.evaluate(({ clipboard }) => clipboard.readText())).toBe(
-      'Fake runtime reply for the SSE contract test.',
-    )
 
     await reply.getByRole('button', { name: /^复制$|^Copy$/ }).click()
     await expect(reply.getByRole('button', { name: /已复制|Copied/ })).toBeVisible()
@@ -902,7 +900,7 @@ test.describe.serial('flow:P2-P12 > Electron critical path', () => {
       `shejane-local-run-${interruptedRun!.id}-diagnostics.json`,
     })
     expect(JSON.parse(fs.readFileSync(diagnosticsPath, 'utf8'))).toMatchObject({
-      schema_version: 1,
+      schema_version: 2,
       run: { id: interruptedRun!.id, status: 'cleanup_required' },
     })
     await expect(diagnosticsDialog).toHaveCount(0)

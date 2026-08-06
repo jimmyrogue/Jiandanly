@@ -281,6 +281,22 @@ def test_plugin_source_api_and_commands_are_not_exposed(client: TestClient) -> N
     assert response.status_code == 422
 
 
+def test_missing_fixed_runtime_asset_package_is_a_normal_unavailable_status(
+    client: TestClient,
+) -> None:
+    response = client.get(
+        "/v1/plugins/org.shejane.browser-qa/runtime-asset",
+        headers=AUTH,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "plugin_id": "org.shejane.browser-qa",
+        "available": False,
+        "downloaded": False,
+    }
+
+
 def test_fixed_runtime_asset_release_sources_match_current_platform(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

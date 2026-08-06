@@ -76,7 +76,11 @@ from ..middleware.steering import SteeringMiddleware
 from ..middleware.tool_execution import ToolExecutionMiddleware
 from ..middleware.tool_result_retry import ToolResultRetryMiddleware
 from ..middleware.tool_review import ToolReviewMiddleware
-from ..middleware.tool_visibility import ToolVisibilityMiddleware, delivered_plugin_tool_name
+from ..middleware.tool_visibility import (
+    ToolVisibilityMiddleware,
+    delivered_plugin_tool_name,
+    execution_policy_for_task,
+)
 from ..model_credentials import CredentialStoreError, get_model_api_key
 from ..model_profiles import apply_known_model_profile_defaults
 from ..plugins.browser_qa import BrowserQAActionExecutor, BrowserQAService
@@ -115,7 +119,8 @@ log = logging.getLogger("shejane_runtime.agent.builder")
 
 _AGENT_DEFINITION_CACHE_MAX = 16
 _AGENT_STATE_SCHEMA_VERSION = 2
-_MAX_SUBAGENT_TASKS_PER_RUN = 5
+MAX_SUBAGENT_TASKS_PER_RUN = 2
+SIMPLE_MODEL_CALL_LIMIT = 12
 _MAX_TEAM_RUNS_PER_RUN = 2
 _MAX_CHILD_CONTROL_CALLS_PER_RUN = 16
 _PARENT_MODEL_CALL_RESERVE = 5
@@ -128,6 +133,15 @@ _SUMMARIZATION_MAX_OUTPUT_TOKENS = 1_024
 _VISION_MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024
 _VISION_MAX_IMAGE_PIXELS = 40_000_000
 _VISION_MEDIA_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+
+
+def _agent_model_call_limit(configured_limit: int, task_goal: str | None) -> int:
+    policy = execution_policy_for_task(task_goal)
+    if policy["reason"] == "simple_task" and task_goal:
+        return min(configured_limit, SIMPLE_MODEL_CALL_LIMIT)
+    return configured_limit
+
+
 _SKILLS_SYSTEM_PROMPT = """<skills>
 {skills_locations}
 {skills_load_warnings}
@@ -520,7 +534,7 @@ def _custom_middleware(
             ),
             ToolCallLimitMiddleware(
                 tool_name="task",
-                run_limit=_MAX_SUBAGENT_TASKS_PER_RUN,
+                run_limit=MAX_SUBAGENT_TASKS_PER_RUN,
             ),
             ToolCallLimitMiddleware(
                 tool_name="team.run",
@@ -1258,6 +1272,7 @@ async def build_agent(
         model_api_key=model_api_key,
     )
     _register_model_cleanup(provider_model, resource_stack)
+    agent_model_call_limit = _agent_model_call_limit(settings.max_model_calls, task_goal)
     model = (
         LedgerChatModel(
             delegate=provider_model,
@@ -1265,7 +1280,7 @@ async def build_agent(
             run_id=run_id,
             execution_attempt_id=execution_attempt_id,
             model_name=mode,
-            max_calls=settings.max_model_calls,
+            max_calls=agent_model_call_limit,
             profile=getattr(provider_model, "profile", None),
         )
         if execution_attempt_id is not None

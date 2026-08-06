@@ -51,7 +51,7 @@ from .context_builder import identity_safety_prompt
 log = logging.getLogger("shejane_runtime.agent.subagents")
 
 SUBAGENT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
-SUBAGENT_MODEL_CALL_LIMIT = 50
+SUBAGENT_MODEL_CALL_LIMIT = 12
 RESEARCHER_WEB_TOOL_LIMIT = 10
 DEEPAGENT_SUBAGENT_BASE_TOOL_NAMES = frozenset(
     {
@@ -239,15 +239,12 @@ def _builtin_subagents(
         {
             "name": "researcher",
             "description": (
-                "USE THIS FOR ANY INDEPENDENT RESEARCH QUESTION. Prefer "
-                "this when you have at least two independent research "
-                "questions that can be answered separately — emit multiple "
-                "`task` calls in one message to run them in parallel. Each "
-                "subagent has its own context window so raw search dumps "
-                "stay out of the main agent's context. Returns a 2-4 "
-                "paragraph synthesized summary with citations. Also use "
-                "this for a single research question that would otherwise "
-                "require many search/fetch calls (isolate the noise)."
+                "Use this only for at least two independent research questions "
+                "that can be answered separately, or for genuinely high-volume "
+                "research that cannot fit a few direct search/fetch calls. Do not "
+                "delegate ordinary factual lookups. Emit multiple `task` calls in "
+                "one message only when the questions are independent. Returns a "
+                "2-4 paragraph synthesized summary with citations."
             ),
             "system_prompt": _fenced_prompt(RESEARCHER_PROMPT),
             "model": main_model,

@@ -168,6 +168,7 @@ class PluginRegistry:
                 downloaded = True
         status: dict[str, Any] = {
             "plugin_id": plugin_id,
+            "available": True,
             "downloaded": downloaded,
         }
         progress = self._plugin_catalog.runtime_asset_download_progress(str(reference["digest"]))

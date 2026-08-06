@@ -84,6 +84,18 @@ def classify_failure_payload(event_type: str, payload: dict[str, Any]) -> dict[s
         suggested_action = "Connect the missing model service or API Key, then retry."
     elif _contains_any(
         haystack,
+        "executionsettlementerror",
+        "unsettled tool receipts",
+        "model calls are still active",
+        "tool calls are still active",
+        "unknown model outcomes",
+    ):
+        category = "execution_invariant"
+        suggested_action = (
+            "Export diagnostics and report this Runtime execution invariant before retrying."
+        )
+    elif _contains_any(
+        haystack,
         "timeout",
         "timed out",
         "temporarily",
@@ -258,7 +270,7 @@ def _action_kind(category: str, *, retryable: bool) -> str:
         return "user_action"
     if category == "validation":
         return "repair"
-    if category == "fatal":
+    if category in {"fatal", "execution_invariant"}:
         return "operator_action"
     return "inspect"
 

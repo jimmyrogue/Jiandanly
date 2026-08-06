@@ -356,6 +356,8 @@ CREATE TABLE IF NOT EXISTS local_model_calls (
     model TEXT NOT NULL,
     purpose TEXT NOT NULL DEFAULT 'agent',
     parent_tool_operation_id TEXT,
+    logical_call_id TEXT NOT NULL,
+    retry_attempt INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL CHECK (
         status IN (
             'reserved', 'streaming', 'completed', 'completed_unmetered',
@@ -1449,6 +1451,7 @@ class LocalStore:
         await LocalStore._ensure_tool_receipt_parent_column(conn)
         await LocalStore._ensure_model_call_purpose_column(conn)
         await LocalStore._ensure_model_call_parent_operation_column(conn)
+        await LocalStore._ensure_model_call_retry_columns(conn)
         await LocalStore._ensure_wait_candidates(conn)
         await LocalStore._ensure_artifact_storage_columns(conn)
         transient_placeholders = ",".join("?" for _ in TRANSIENT_RUN_EVENT_TYPES)
@@ -1733,6 +1736,24 @@ class LocalStore:
         await conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_local_model_calls_parent_tool "
             "ON local_model_calls(parent_tool_operation_id, call_index)"
+        )
+
+    @staticmethod
+    async def _ensure_model_call_retry_columns(conn: aiosqlite.Connection) -> None:
+        cursor = await conn.execute("PRAGMA table_info(local_model_calls)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "logical_call_id" not in columns:
+            await conn.execute("ALTER TABLE local_model_calls ADD COLUMN logical_call_id TEXT")
+            await conn.execute(
+                "UPDATE local_model_calls SET logical_call_id = id WHERE logical_call_id IS NULL"
+            )
+        if "retry_attempt" not in columns:
+            await conn.execute(
+                "ALTER TABLE local_model_calls ADD COLUMN retry_attempt INTEGER NOT NULL DEFAULT 0"
+            )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_local_model_calls_logical "
+            "ON local_model_calls(run_id, logical_call_id, retry_attempt)"
         )
 
     @staticmethod
@@ -2090,6 +2111,8 @@ class LocalStore:
         max_calls: int,
         purpose: str = "agent",
         parent_tool_operation_id: str | None = None,
+        logical_call_id: str | None = None,
+        retry_attempt: int = 0,
     ) -> dict[str, Any]:
         """Atomically reserve one durable model-call slot for a run."""
         if purpose not in {
@@ -2122,23 +2145,26 @@ class LocalStore:
                 raise ModelCallBudgetExceeded(
                     f"{purpose} model call budget exhausted for run {run_id}: {max_calls}"
                 )
+            call_id = _new_id("model_call")
             record = {
-                "id": _new_id("model_call"),
+                "id": call_id,
                 "run_id": run_id,
                 "execution_attempt_id": execution_attempt_id,
                 "call_index": call_index,
                 "model": model,
                 "purpose": purpose,
                 "parent_tool_operation_id": parent_tool_operation_id,
+                "logical_call_id": logical_call_id or call_id,
+                "retry_attempt": max(0, int(retry_attempt)),
                 "status": "reserved",
                 "created_at": _now(),
             }
             await conn.execute(
                 "INSERT INTO local_model_calls "
                 "(id, run_id, execution_attempt_id, call_index, model, purpose, "
-                "parent_tool_operation_id, status, created_at) "
+                "parent_tool_operation_id, logical_call_id, retry_attempt, status, created_at) "
                 "VALUES (:id, :run_id, :execution_attempt_id, :call_index, :model, :purpose, "
-                ":parent_tool_operation_id, :status, :created_at)",
+                ":parent_tool_operation_id, :logical_call_id, :retry_attempt, :status, :created_at)",
                 record,
             )
         return record
@@ -2285,13 +2311,15 @@ class LocalStore:
         call_id: str,
         outcome_unknown: bool,
         error_code: str | None = None,
+        provider_request_id: str | None = None,
     ) -> None:
         status = "outcome_unknown" if outcome_unknown else "failed"
         async with self.run_write_transaction(run_id) as conn:
             cursor = await conn.execute(
-                "UPDATE local_model_calls SET status = ?, error_code = ?, completed_at = ? "
+                "UPDATE local_model_calls SET status = ?, error_code = ?, "
+                "provider_request_id = ?, completed_at = ? "
                 "WHERE id = ? AND run_id = ? AND status IN ('reserved', 'streaming')",
-                (status, error_code, _now(), call_id, run_id),
+                (status, error_code, provider_request_id, _now(), call_id, run_id),
             )
             if cursor.rowcount != 1:
                 raise RuntimeError(f"model call {call_id} cannot be failed")
@@ -2919,6 +2947,14 @@ class LocalStore:
                 if job is None:
                     raise LeaseFenceError("tool execution lease is stale")
                 if job["cancel_requested_at"] is not None:
+                    if str(record["tool_name"]) == "task":
+                        await self._settle_task_descendants_uncommitted(
+                            conn,
+                            run_id=run_id,
+                            operation_id=operation_id,
+                            parent_status="canceled",
+                            now=now,
+                        )
                     await conn.execute(
                         "UPDATE local_tool_receipts SET status = 'canceled', "
                         "error_type = 'RunCanceledBeforeToolStart', completed_at = ?, "
@@ -3008,6 +3044,129 @@ class LocalStore:
             record = dict(row)
             await self._append_subagent_receipt_event_uncommitted(conn, record)
             return record
+
+    async def settle_task_receipt(
+        self,
+        *,
+        operation_id: str,
+        run_id: str,
+        status: str,
+        result_json: str | None = None,
+        result_hash: str | None = None,
+        error_type: str | None = None,
+    ) -> dict[str, Any]:
+        """Settle a task and fence every descendant receipt in the same transaction."""
+        if status not in {"completed", "failed", "canceled"}:
+            raise ValueError(f"invalid task receipt status: {status}")
+        async with self.run_write_transaction(run_id) as conn:
+            parent = await (
+                await conn.execute(
+                    "SELECT * FROM local_tool_receipts WHERE operation_id = ? AND run_id = ?",
+                    (operation_id, run_id),
+                )
+            ).fetchone()
+            if parent is None or str(parent["tool_name"]) != "task":
+                raise ToolReceiptStateError(f"task receipt {operation_id} is missing")
+
+            now = _now()
+            await self._settle_task_descendants_uncommitted(
+                conn,
+                run_id=run_id,
+                operation_id=operation_id,
+                parent_status=status,
+                now=now,
+            )
+
+            cursor = await conn.execute(
+                "UPDATE local_tool_receipts SET status = ?, result_json = ?, result_hash = ?, "
+                "error_type = ?, updated_at = ?, completed_at = ? "
+                "WHERE operation_id = ? AND run_id = ? AND (status = 'running' OR "
+                "(? = 'canceled' AND status IN ('prepared', 'paused')))",
+                (
+                    status,
+                    result_json,
+                    result_hash,
+                    error_type,
+                    now,
+                    now,
+                    operation_id,
+                    run_id,
+                    status,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ToolReceiptStateError(f"task operation {operation_id} is not running")
+            row = await (
+                await conn.execute(
+                    "SELECT * FROM local_tool_receipts WHERE operation_id = ?",
+                    (operation_id,),
+                )
+            ).fetchone()
+            assert row is not None
+            record = dict(row)
+            await self._append_subagent_receipt_event_uncommitted(conn, record)
+            return record
+
+    async def _settle_task_descendants_uncommitted(
+        self,
+        conn: aiosqlite.Connection,
+        *,
+        run_id: str,
+        operation_id: str,
+        parent_status: str,
+        now: str,
+    ) -> None:
+        descendant_error = {
+            "completed": "ParentSubagentCompleted",
+            "failed": "ParentSubagentFailed",
+            "canceled": "ParentSubagentCanceled",
+        }[parent_status]
+        descendants = await (
+            await conn.execute(
+                "WITH RECURSIVE descendants(operation_id, depth) AS ("
+                "SELECT operation_id, 1 FROM local_tool_receipts "
+                "WHERE run_id = ? AND parent_operation_id = ? UNION "
+                "SELECT child.operation_id, descendants.depth + 1 "
+                "FROM local_tool_receipts AS child JOIN descendants "
+                "ON child.parent_operation_id = descendants.operation_id "
+                "WHERE child.run_id = ? AND descendants.depth < 64"
+                ") SELECT receipt.*, descendants.depth FROM local_tool_receipts AS receipt "
+                "JOIN descendants ON descendants.operation_id = receipt.operation_id "
+                "ORDER BY descendants.depth DESC, receipt.created_at, receipt.operation_id",
+                (run_id, operation_id, run_id),
+            )
+        ).fetchall()
+        for row in descendants:
+            child = dict(row)
+            child_status = str(child["status"])
+            if child_status in {"prepared", "paused"}:
+                settled_status = "canceled"
+            elif child_status == "running":
+                settled_status = "outcome_unknown"
+            else:
+                continue
+            await conn.execute(
+                "UPDATE local_tool_receipts SET status = ?, error_type = ?, "
+                "completed_at = ?, updated_at = ? WHERE operation_id = ? AND run_id = ?",
+                (
+                    settled_status,
+                    descendant_error,
+                    now,
+                    now,
+                    child["operation_id"],
+                    run_id,
+                ),
+            )
+            await self._append_subagent_receipt_event_uncommitted(
+                conn,
+                {
+                    **child,
+                    "status": settled_status,
+                    "error_type": descendant_error,
+                    "completed_at": now,
+                    "updated_at": now,
+                },
+            )
 
     async def reconcile_tool_receipt(
         self,

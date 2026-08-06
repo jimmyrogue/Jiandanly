@@ -17,6 +17,7 @@ const path = require('node:path')
 const childProcess = require('node:child_process')
 const crypto = require('node:crypto')
 const net = require('node:net')
+const buildInfo = require('./build-info.cjs')
 const { installLocalRuntimeAuthorization } = require('./runtime-auth.cjs')
 const { materializeFileCopy } = require('./file-open.cjs')
 const { recordLocalCrash, recordRuntimeFailure } = require('./local-crash-reporting.cjs')
@@ -406,6 +407,10 @@ async function spawnBundledRuntime() {
   ], {
     env: runtimeEnv({
       PYTHONUNBUFFERED: '1',
+      SHEJANE_CLIENT_RELEASE: app.getVersion(),
+      SHEJANE_RUNTIME_BUILD_COMMIT: buildInfo.commit || '',
+      SHEJANE_RUNTIME_BUILD_ID: buildInfo.buildId || '',
+      SHEJANE_RUNTIME_PACKAGING_MODE: 'frozen',
       SHEJANE_RUNTIME_CRASH_DIRECTORY: crashDirectory,
       SHEJANE_MANAGED_WORKER_SANDBOX_COMMAND: managedWorkerSandboxCommand(),
       SHEJANE_RUNTIME_NODE_PATH: process.execPath,

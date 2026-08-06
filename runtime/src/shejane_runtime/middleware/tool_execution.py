@@ -566,8 +566,11 @@ class ToolExecutionMiddleware(AgentMiddleware):
                     status="error",
                 )
                 result_json = serialize_tool_result(result)
+                settle = (
+                    store.settle_task_receipt if tool_name == "task" else store.settle_tool_receipt
+                )
                 await asyncio.shield(
-                    store.settle_tool_receipt(
+                    settle(
                         operation_id=operation_id,
                         run_id=run_id,
                         status="failed",
@@ -577,8 +580,13 @@ class ToolExecutionMiddleware(AgentMiddleware):
                     )
                 )
                 return result
+            settle = (
+                store.settle_task_receipt
+                if tool_name == "task" and status == "canceled"
+                else store.settle_tool_receipt
+            )
             await asyncio.shield(
-                store.settle_tool_receipt(
+                settle(
                     operation_id=operation_id,
                     run_id=run_id,
                     status=status,
@@ -640,7 +648,12 @@ class ToolExecutionMiddleware(AgentMiddleware):
             if isinstance(result, ToolMessage) and str(result.status or "") == "error"
             else "completed"
         )
-        await store.settle_tool_receipt(
+        settle = (
+            store.settle_task_receipt
+            if str(request.tool_call.get("name") or "") == "task"
+            else store.settle_tool_receipt
+        )
+        await settle(
             operation_id=operation_id,
             run_id=run_id,
             status=status,
@@ -804,7 +817,12 @@ async def _cancel_before_tool_start(store: LocalStore, run_id: str, operation_id
         return
     receipt = await store.get_tool_receipt(operation_id)
     if receipt is not None and receipt.get("status") in {"prepared", "paused"}:
-        await store.settle_tool_receipt(
+        settle = (
+            store.settle_task_receipt
+            if str(receipt.get("tool_name") or "") == "task"
+            else store.settle_tool_receipt
+        )
+        await settle(
             operation_id=operation_id,
             run_id=run_id,
             status="canceled",

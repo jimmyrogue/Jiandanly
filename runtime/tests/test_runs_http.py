@@ -67,6 +67,7 @@ def client(monkeypatch) -> TestClient:
     os.environ["SHEJANE_RUNTIME_TOKEN"] = "tok"
     monkeypatch.delenv("SHEJANE_RUNTIME_MCP_SERVERS", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.delenv("SHEJANE_PLAN_FIRST", raising=False)
     monkeypatch.setenv("SHEJANE_RUNTIME_SKILLS_PATH", str(tmp / "empty-skills"))
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -142,6 +143,12 @@ def test_create_run_returns_run_record(client: TestClient) -> None:
         "streaming",
         "tool_calling",
     ]
+    assert snapshot["_diagnostics_build"]["protocol_version"] == 1
+    assert snapshot["_execution_policy"] == {
+        "complexity": "simple",
+        "subagent_allowed": False,
+        "reason": "simple_task",
+    }
     assert "capabilities" not in snapshot["_model_binding"]
     assert "test-cloud-token" not in stored["settings_json"]
 
@@ -2569,6 +2576,26 @@ def test_run_diagnostics_include_handoff_summary(client: TestClient) -> None:
     assert diag.status_code == 200
     body = diag.json()
 
+    assert body["schema_version"] == 2
+    assert body["build"]["runtime_version"]
+    assert body["build"]["platform"]
+    assert body["build"]["arch"]
+    assert body["build"]["packaging_mode"] == "dev"
+    assert body["build"]["protocol_version"] == 1
+    assert body["execution_policy"] == {
+        "complexity": "simple",
+        "plan_mode": "auto",
+        "plan_required": False,
+        "subagent_allowed": False,
+        "reason": "simple_task",
+        "max_model_calls": 12,
+        "max_subagent_tasks": 0,
+        "max_subagent_model_calls": 0,
+    }
+    agent_call = next(call for call in body["model_calls"] if call["purpose"] == "agent")
+    assert agent_call["logical_call_id"]
+    assert agent_call["retry_attempt"] == 0
+    assert agent_call["provider_request_id"] == "r"
     assert body["handoff"]["status"] == "completed"
     assert "completed" in body["handoff"]["headline"]
     assert body["handoff"]["ledger_state"] == "not_required"
@@ -2588,6 +2615,60 @@ def test_run_diagnostics_include_handoff_summary(client: TestClient) -> None:
     assert any(span["kind"] == "model" for span in spans.values())
     assert spans[f"span:checkpoint:{checkpoint['id']}"]["parent_id"] == trace["root_span_id"]
     assert spans[f"span:terminal:{run_id}"]["status"] == "completed"
+
+
+def test_run_diagnostics_include_tool_receipt_namespace_and_parent_lineage(
+    client: TestClient,
+) -> None:
+    store = client.app.state.store
+
+    async def prepare() -> str:
+        run = await store.create_run(
+            principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+            goal="Use the task tool to delegate research",
+            workspace_path=None,
+        )
+        run_id = str(run["id"])
+        await store.prepare_tool_receipt(
+            operation_id="toolop-diagnostics-parent",
+            run_id=run_id,
+            execution_attempt_id="job-diagnostics:1",
+            execution_namespace="main",
+            tool_call_id="call-diagnostics-parent",
+            tool_name="task",
+            arguments_hash="parent-args",
+            arguments_json='{"private":"parent"}',
+            risk="control_flow",
+        )
+        await store.prepare_tool_receipt(
+            operation_id="toolop-diagnostics-child",
+            parent_operation_id="toolop-diagnostics-parent",
+            run_id=run_id,
+            execution_attempt_id="job-diagnostics:1",
+            execution_namespace="child:researcher",
+            tool_call_id="call-diagnostics-child",
+            tool_name="web.search",
+            arguments_hash="child-args",
+            arguments_json='{"private":"child"}',
+            risk="read_only",
+        )
+        return run_id
+
+    run_id = asyncio.run(prepare())
+    body = client.get(
+        f"/v1/runs/{run_id}/diagnostics",
+        headers={"Authorization": "Bearer tok"},
+    ).json()
+
+    receipts = {receipt["operation_id"]: receipt for receipt in body["tool_receipts"]}
+    child = receipts["toolop-diagnostics-child"]
+    assert child["execution_namespace"] == "child:researcher"
+    assert child["parent_operation_id"] == "toolop-diagnostics-parent"
+    spans = {span["id"]: span for span in body["trace"]["spans"]}
+    assert spans["span:tool:toolop-diagnostics-child"]["parent_id"] == (
+        "span:tool:toolop-diagnostics-parent"
+    )
+    assert "private" not in json.dumps(body["tool_receipts"])
 
 
 def test_run_diagnostics_include_reflection_summary(client: TestClient) -> None:

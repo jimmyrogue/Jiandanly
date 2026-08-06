@@ -6065,7 +6065,7 @@ button.agent-progress-summary:focus-visible {
   padding: 6px 10px;
 }
 .composer-mode-model-item + .composer-mode-model-item {
-  margin-top: 1px;
+  margin-top: 2px;
 }
 .composer-mode-item.is-active {
   background: var(--surface-2, rgba(120, 120, 130, 0.08));

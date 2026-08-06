@@ -40,6 +40,21 @@ def test_transient_failures_remain_retryable() -> None:
     assert should_retry_failure_payload("run.failed", failure) is True
 
 
+def test_execution_settlement_failure_is_classified_as_an_invariant_bug() -> None:
+    failure = classify_failure_payload(
+        "run.failed",
+        {
+            "type": "ExecutionSettlementError",
+            "message": "completed run has unsettled tool receipts",
+        },
+    )
+
+    assert failure["category"] == "execution_invariant"
+    assert failure["retryable"] is False
+    assert failure["action_kind"] == "operator_action"
+    assert failure["recovery_action"] == "diagnostics"
+
+
 def test_api_connection_error_is_a_retryable_transient_failure() -> None:
     failure = classify_failure_payload(
         "run.failed",

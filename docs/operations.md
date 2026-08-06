@@ -44,7 +44,7 @@ Runtime 默认不要求用户环境变量。
 - Client Main 启动托管 Runtime 时，通过命令行传入本机地址、随机端口和配对 Token。
 - Client 不提供 Runtime 连接设置。开发者接入外部 loopback Runtime 时，地址与 Token 由 Electron Main 配置和保存，不回传明文 Token 给 Renderer。
 - 模型服务连接、模型资料和高级默认设置通过 Runtime API 保存。
-- 新 Run 默认最多使用 100 次主执行模型调用；单次最多派发 5 个子 Agent，每个子 Agent 最多使用 50 次模型调用。Runtime 为主 Agent 保留最后 5 次调用，researcher 单次最多执行 10 次网页搜索和 10 次 `web.fetch`，且不能调用 shell 或写文件。这些都是代码强制的上限，不依赖提示词自律。
+- 普通事实查询默认隐藏协作工具并把主执行模型调用限制为 12 次；复杂任务仍最多使用 100 次。单次最多派发 2 个子 Agent，每个子 Agent 最多使用 12 次模型调用。researcher 单次最多执行 10 次网页搜索和 10 次 `web.fetch`，且不能调用 shell 或写文件。用户明确要求 child、mailbox、team 或委派时不会套用简单查询限制。这些都是代码强制的上限，不依赖提示词自律。
 - `web.fetch` 保持 DNS 固定和 SSRF 私网拦截；当系统代理使用 RFC 2544 `198.18.0.0/15` fake-IP DNS 时，仅 HTTPS 请求可通过该代理网段，TLS 仍校验原始主机名。HTTP fake-IP 与其他私网、回环、链路本地地址继续拒绝。
 - BYOK 密钥写入操作系统凭据库，不写入 SQLite、Run 快照或环境变量。
 - `--data-dir` 可以修改 Runtime 数据目录。
@@ -245,7 +245,7 @@ Runtime 均完成真实官方授权：连接固定使用 `https://app.shejane.co
 
 Client 新对话默认使用“自动审批”。Runtime 会先执行确定性安全规则，只把外部或未知灰区交给当前 Run 已冻结的具体模型；审查器没有工具，也不能授予插件 capability、扩大工作区或绕过沙箱。审查超时、供应商失败、无效 JSON 或不完整决定都会回退到人工审批，不会自动放行或切换模型。
 
-审查调用和主 Agent 使用同一持久模型账本，但记录为独立的 `approval_review` purpose；每个 Run 最多 20 次，不占主执行模型的 100 次预算。自动决定保存在 Tool Receipt；诊断时可以通过 Run diagnostics 查看 `review_source`、`review_reason` 和 `review_model`。Client 时间线中的“规则自动允许”表示固定策略决定，“智能自动允许”表示当前模型决定。
+审查调用和主 Agent 使用同一持久模型账本，但记录为独立的 `approval_review` purpose；每个 Run 最多 20 次，不占主执行模型的 100 次预算。自动决定保存在 Tool Receipt；诊断时可以查看 `review_decision`、`review_source` 和脱敏后的 `review_reason_hash`。Client 时间线中的“规则自动允许”表示固定策略决定，“智能自动允许”表示当前模型决定。
 
 ## Agent Evals 与诊断 Trace
 
@@ -259,7 +259,7 @@ make eval
 
 默认报告写入 `.tmp/eval-report.json`。可用 `SHEJANE_EVAL_REPORT` 修改输出路径，用 `SHEJANE_EVAL_BASELINE` 指向上一份报告以计算通过率和 case 变化；报告包含 Runtime/模型版本、轨迹、工作区结果和 grader 结论，不保存 API Key。
 
-`GET /v1/runs/{run_id}/diagnostics` 的 `trace` 字段从持久 Run、模型账本、Tool Receipt、子 Run、最新 Checkpoint 和终态记录生成 `run → model → tool/subagent → checkpoint → terminal` 执行链。现有 diagnostics 导出会包含同一结构；Span 只包含状态、usage、耗时、错误分类和内容摘要哈希，不包含原始提示词、工具参数、附件正文、密钥或大结果。外部 Langfuse/LangSmith tracing 仍是可选出口，不是事实来源。
+`GET /v1/runs/{run_id}/diagnostics` 返回 schema v2：除持久 Trace 外，还包含 Client/Runtime 构建身份、平台、架构、实际生效的 Plan/协作/模型预算、每次模型尝试的逻辑调用 ID、重试序号和 provider request ID，以及 Tool Receipt 的 namespace 与父操作。子 Agent 模型和工具 Span 按 Receipt 父子关系挂载，不再按时间猜测。导出不包含原始提示词、工具参数、附件正文、密钥或大结果；外部 Langfuse/LangSmith tracing 仍是可选出口，不是事实来源。
 
 ## 插件安装与信任
 

@@ -1380,6 +1380,86 @@ def test_capability_2_subagent_task_surfaces_spawned_event(monkeypatch) -> None:
     assert spawn["status"] == "queued"
 
 
+def test_subagent_transient_model_failure_is_retried_and_contained(monkeypatch) -> None:
+    from shejane_runtime.llm import ledger
+
+    original_retry_decision = ledger.build_retry_decision
+
+    def immediate_retry(*args, **kwargs):
+        return {**original_retry_decision(*args, **kwargs), "delay_s": 0.0}
+
+    monkeypatch.setattr(ledger, "build_retry_decision", immediate_retry)
+    unavailable = [
+        (
+            "llm.error",
+            {
+                "request_id": "provider-unavailable",
+                "message": "Service temporarily unavailable",
+                "code": "service_unavailable",
+                "recoverable": True,
+                "retryable": True,
+            },
+        )
+    ]
+    handler = RecordingHandler(
+        scripts=[
+            [
+                (
+                    "llm.tool_call",
+                    {
+                        "id": "call_retrying_task",
+                        "name": "task",
+                        "arguments": {
+                            "subagent_type": "researcher",
+                            "description": "Check one source",
+                        },
+                    },
+                ),
+                ("llm.done", {"request_id": "parent-1", "finish_reason": "tool_calls"}),
+            ],
+            unavailable,
+            unavailable,
+            unavailable,
+            [
+                ("llm.delta", {"content_delta": "I could not reach the source, so I stopped."}),
+                ("llm.done", {"request_id": "parent-2", "finish_reason": "stop"}),
+            ],
+        ]
+    )
+
+    with _make_client(monkeypatch, handler) as client:
+        headers = {"Authorization": "Bearer tok"}
+        run = client.post(
+            "/v1/runs",
+            headers=headers,
+            json=run_command("Use the task tool to delegate this question to the researcher"),
+        ).json()
+        with client.stream(
+            "GET",
+            f"/v1/runs/{run['id']}/stream",
+            headers=headers,
+        ) as response:
+            events = _parse_sse(response.read().decode("utf-8"))
+        diagnostics = client.get(
+            f"/v1/runs/{run['id']}/diagnostics",
+            headers=headers,
+        ).json()
+
+    assert "run.completed" in {name for name, _payload in events}
+    assert "ExecutionSettlementError" not in json.dumps(events)
+    task_receipt = next(
+        receipt for receipt in diagnostics["tool_receipts"] if receipt["tool_name"] == "task"
+    )
+    assert task_receipt["status"] == "failed"
+    retries = [
+        call
+        for call in diagnostics["model_calls"]
+        if call["provider_request_id"] == "provider-unavailable"
+    ]
+    assert [call["retry_attempt"] for call in retries] == [0, 1, 2]
+    assert len({call["logical_call_id"] for call in retries}) == 1
+
+
 def test_capability_2c_subagent_tools_share_review_and_receipt_boundary(
     monkeypatch,
     tmp_path,

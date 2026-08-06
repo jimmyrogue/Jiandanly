@@ -382,10 +382,10 @@ MCP Server 只从 Runtime 自有配置读取，不会隐式启动 Claude Desktop
 | 工具异常重试 | `wrap_tool_call` 内，白名单工具的 transient exception 按 `max_tool_retries` 重试 | `test_middleware` |
 | 工具结果重试 | `wrap_tool_call` 内，白名单工具返回 `{ok:false,retryable:true}` envelope 时走 `failure_policy.build_retry_decision`，按 `max_tool_retries` 做有界退避；用户/配置/账单/工作区/校验/实现类错误即使误带 `retryable:true` 也 fail-fast | `test_middleware` / `test_agent_builder` |
 | Run budget clamps | Settings/env 和 per-run Advanced 覆盖都限制 model calls、tool retries 和 search limit 的安全范围 | `test_advanced_overrides` |
-| 模型重试防重复 | 不装配通用 `ModelRetryMiddleware`，错误直接交给运行时结束路径 | `test_agent_builder` |
+| 模型重试防重复 | 不装配通用 `ModelRetryMiddleware`；仅在模型账本边界对“尚无可见输出、结果确定未产生、失败策略判定为 transient”的同模型调用最多重试 2 次。每次尝试独立记账并共享 `logical_call_id`；已输出、取消、认证、额度、配置、校验和结果不明错误不重试 | `test_model_ledger` / `test_e2e_capabilities` / `test_agent_builder` |
 | 步上限 | `before_model` 计数 | `test_middleware` |
 | 上下文压缩 | Runtime 把已接纳历史原样交给 Deep Agents 的令牌感知摘要；不再按消息数二次截断或生成关键词摘要。旧对话首次迁入 Runtime 时，client 只保留 256 条 / 750000 字符的传输安全边界 | `test_runs_http` / `conversationHistory.test` |
-| 工具结构可见性 | 完整工具集固定属于图定义；Runtime 只在模型请求副本中按当前目标、保留历史和既有工具调用确定性隐藏无关的 Office 工具结构，并在供应商边界覆盖所有子 Agent，不改变 checkpoint 或图指纹。明确 blocked 的工具同时在 `wrap_tool_call` 拒绝，即使模型猜中隐藏工具名也不能执行 | `test_tool_visibility` / `test_model_ledger` / `test_agent_builder` |
+| 工具结构可见性 | 完整工具集固定属于图定义；Runtime 在模型请求副本中确定性隐藏无关工具。普通事实查询隐藏 `task/team/child/mailbox` 并限制为 12 次模型调用；复杂任务、明确协作意图和 durable child 保留协作工具。明确 blocked 或策略隐藏的工具同时在 `wrap_tool_call` 拒绝，即使模型猜中名字也不能执行 | `test_tool_visibility` / `test_model_ledger` / `test_agent_builder` / `test_e2e_capabilities` |
 | 供应商上下文硬限制 | 每次真实模型调用前按声明窗口扣除工具结构并裁剪请求副本；剩余空间不足最小合法请求时在预留调用账本和联系供应商之前明确失败 | `test_model_ledger` |
 | 输出、时间与用量边界 | 模型资料限制最大输出，所有模型服务调用有硬超时；Runtime 记录 token，并用调用次数、输出和时间限制资源 | `test_model_ledger` / model-service tests |
 | research 收敛 | `before_model` per-tool 计数 | `test_middleware` |
@@ -413,7 +413,7 @@ MCP Server 只从 Runtime 自有配置读取，不会隐式启动 Claude Desktop
 | 文件系统沙箱 | `FilesystemMiddleware` + backend；项目目录是可写根目录，本次附件仅通过 `/attachments/` 暴露被选中的单个文件并保持只读；PDF 在读取边界转换为 UTF-8 文本，不把 Base64 二进制交给模型 | `test_agent_builder` / `test_memory` / `test_runs_http` |
 | Shell execute | `FilesystemMiddleware` execute tool | `test_agent_builder` |
 | 进展账本与交接新鲜度 | `task.progress` 写入 `progress_ledger` artifact，diagnostics 暴露最新 ledger，并在 handoff 标记 `not_required` / `fresh` / `missing` / `stale`；`run.waiting` 也携带同样的轻量 pause snapshot，client timeline 会保留 missing/stale 状态并在等待中的聊天进度行提示暂停交接风险 | `test_smoke` / `test_runs_http` / `test_user_ask` / `chatStore.test` / `AgentProgress.test` |
-| 错误分类诊断 | `handoff.failure` 将最近 `run.failed` / `tool.failed` 归类并标记 recoverable / retryable / action_kind / recovery_action / suggested action；同一模块也输出 runtime retry decision（`should_retry` / `delay_s` / fail-fast reason） | `test_runs_http` / `test_failure_policy` |
+| 错误分类诊断 | `handoff.failure` 将最近 `run.failed` / `tool.failed` 归类并标记 recoverable / retryable / action_kind / recovery_action / suggested action；结算不变量错误单独归为 `execution_invariant`。Diagnostics v2 同时导出构建身份、有效执行策略、模型重试链与 Receipt 父子关系 | `test_runs_http` / `test_failure_policy` / `test_observability` |
 | 确定性工具失败熔断 | 同一工具连续两次返回完全相同的非临时错误时，CompletionRouter 在下一次模型调用前停止循环并提交 `repeated_tool_failure`，避免耗尽模型调用预算 | `test_middleware` / `test_e2e_capabilities` |
 | 文本读取 | `read_file` 未指定 `offset` / `limit` 时读取后端默认的最多 2000 行，显式分页参数保持不变，工具输出仍受上下文长度上限保护 | `test_e2e_capabilities` |
 | 文件名冲突 | `write_file` 保持只新建语义。首次撞名返回结构化 `file_exists` 和已探测可用的 `suggested_path`，模型可直接换名或改用读后编辑；同一用户轮次再次提交相同路径时，工具执行暂停并询问“自动换名 / 覆盖原文件 / 取消写入”。选择自动换名后，本轮后续对原路径的读写编辑复用实际新路径；覆盖分支读取当前文本后以精确内容匹配编辑，Runtime 核心不猜测用户意图 | `test_e2e_capabilities` / `test_user_ask` |

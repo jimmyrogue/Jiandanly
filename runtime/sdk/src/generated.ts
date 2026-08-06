@@ -1441,6 +1441,25 @@ export interface components {
             /** Tool Name */
             tool_name?: string | null;
         };
+        /** DiagnosticsBuildIdentity */
+        DiagnosticsBuildIdentity: {
+            /** Arch */
+            arch: string;
+            /** Build Commit */
+            build_commit?: string | null;
+            /** Build Id */
+            build_id?: string | null;
+            /** Client Release */
+            client_release?: string | null;
+            /** Packaging Mode */
+            packaging_mode: string;
+            /** Platform */
+            platform: string;
+            /** Protocol Version */
+            protocol_version: number;
+            /** Runtime Version */
+            runtime_version: string;
+        };
         /**
          * DiagnosticsEvent
          * @description One row from the `local_events` table after payload parsing.
@@ -1465,6 +1484,31 @@ export interface components {
             /** Seq */
             seq: number;
         };
+        /** DiagnosticsExecutionPolicy */
+        DiagnosticsExecutionPolicy: {
+            /**
+             * Complexity
+             * @enum {string}
+             */
+            complexity: "simple" | "complex";
+            /** Max Model Calls */
+            max_model_calls: number;
+            /** Max Subagent Model Calls */
+            max_subagent_model_calls: number;
+            /** Max Subagent Tasks */
+            max_subagent_tasks: number;
+            /**
+             * Plan Mode
+             * @enum {string}
+             */
+            plan_mode: "off" | "auto" | "always";
+            /** Plan Required */
+            plan_required: boolean;
+            /** Reason */
+            reason: string;
+            /** Subagent Allowed */
+            subagent_allowed: boolean;
+        };
         /**
          * DiagnosticsFailure
          * @description Structured classification for the latest failed run/tool event.
@@ -1479,7 +1523,7 @@ export interface components {
              * Category
              * @enum {string}
              */
-            category: "transient" | "auth" | "quota" | "permission" | "configuration" | "workspace" | "validation" | "fatal" | "unknown";
+            category: "transient" | "auth" | "quota" | "permission" | "configuration" | "workspace" | "validation" | "execution_invariant" | "fatal" | "unknown";
             /** Code */
             code?: string | null;
             /** Message */
@@ -1529,6 +1573,45 @@ export interface components {
             /** Status */
             status: string;
             verification?: components["schemas"]["DiagnosticsVerification"] | null;
+        };
+        /** DiagnosticsModelCall */
+        DiagnosticsModelCall: {
+            /** Call Index */
+            call_index: number;
+            /** Completed At */
+            completed_at?: string | null;
+            /** Created At */
+            created_at: string;
+            /** Error Code */
+            error_code?: string | null;
+            /** Execution Attempt Id */
+            execution_attempt_id: string;
+            /** First Output At */
+            first_output_at?: string | null;
+            /** Id */
+            id: string;
+            /** Input Tokens */
+            input_tokens?: number | null;
+            /** Logical Call Id */
+            logical_call_id: string;
+            /** Model */
+            model: string;
+            /** Outcome Unknown */
+            outcome_unknown: boolean;
+            /** Output Started */
+            output_started: boolean;
+            /** Output Tokens */
+            output_tokens?: number | null;
+            /** Parent Tool Operation Id */
+            parent_tool_operation_id?: string | null;
+            /** Provider Request Id */
+            provider_request_id?: string | null;
+            /** Purpose */
+            purpose: string;
+            /** Retry Attempt */
+            retry_attempt: number;
+            /** Status */
+            status: string;
         };
         /** DiagnosticsPermission */
         DiagnosticsPermission: {
@@ -1603,10 +1686,20 @@ export interface components {
             created_at: string;
             /** Error Type */
             error_type?: string | null;
+            /** Execution Namespace */
+            execution_namespace: string;
             /** Operation Id */
             operation_id: string;
+            /** Parent Operation Id */
+            parent_operation_id?: string | null;
             /** Result Hash */
             result_hash?: string | null;
+            /** Review Decision */
+            review_decision?: string | null;
+            /** Review Reason Hash */
+            review_reason_hash?: string | null;
+            /** Review Source */
+            review_source?: string | null;
             /** Risk */
             risk: string;
             /** Started At */
@@ -1733,6 +1826,11 @@ export interface components {
         };
         /** FixedRuntimeAssetStatus */
         FixedRuntimeAssetStatus: {
+            /**
+             * Available
+             * @default true
+             */
+            available: boolean;
             /** Download Progress */
             download_progress?: number | null;
             /** Downloaded */
@@ -2438,13 +2536,17 @@ export interface components {
         LocalRunDiagnostics: {
             /** Artifacts */
             artifacts: components["schemas"]["DiagnosticsArtifact"][];
+            build: components["schemas"]["DiagnosticsBuildIdentity"];
             /** Events */
             events: components["schemas"]["DiagnosticsEvent"][];
+            execution_policy: components["schemas"]["DiagnosticsExecutionPolicy"];
             /** Exported At */
             exported_at: string;
             feature_ledger?: components["schemas"]["FeatureLedger"] | null;
             handoff: components["schemas"]["DiagnosticsHandoff"];
             latest_checkpoint?: components["schemas"]["LatestCheckpoint"] | null;
+            /** Model Calls */
+            model_calls?: components["schemas"]["DiagnosticsModelCall"][];
             /** Permissions */
             permissions: components["schemas"]["DiagnosticsPermission"][];
             reflection?: components["schemas"]["DiagnosticsReflection"] | null;
@@ -2453,10 +2555,10 @@ export interface components {
             runtime_version?: string | null;
             /**
              * Schema Version
-             * @default 1
+             * @default 2
              * @constant
              */
-            schema_version: 1;
+            schema_version: 2;
             /** Tool Receipts */
             tool_receipts?: components["schemas"]["DiagnosticsToolReceipt"][];
             trace: components["schemas"]["DiagnosticsTrace"];

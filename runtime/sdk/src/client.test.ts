@@ -769,7 +769,7 @@ describe('SheJaneRuntimeClient', () => {
   })
 
   it('reads and prepares a fixed Runtime Asset without exposing its URL or digest', async () => {
-    const missing = { plugin_id: 'org.shejane.browser-qa', downloaded: false }
+    const missing = { plugin_id: 'org.shejane.browser-qa', available: true, downloaded: false }
     const downloaded = { ...missing, downloaded: true }
     const fetcher = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify(missing), { status: 200 }))

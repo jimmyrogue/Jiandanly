@@ -2986,6 +2986,8 @@ function useAppContentViewModel() {
     const connectionID = selected?.split(':', 3)[1]
     if (!runtimeConnection || !connectionID) return
     try {
+      const services = await listModelServices(runtimeConnection)
+      if (!services.some((service) => service.id === connectionID)) return
       await refreshModelService(connectionID, runtimeConnection)
       setModelCatalogVersion((current) => current + 1)
     } catch {

@@ -833,6 +833,73 @@
         "title": "DiagnosticsArtifact",
         "type": "object"
       },
+      "DiagnosticsBuildIdentity": {
+        "properties": {
+          "arch": {
+            "title": "Arch",
+            "type": "string"
+          },
+          "build_commit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Build Commit"
+          },
+          "build_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Build Id"
+          },
+          "client_release": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Release"
+          },
+          "packaging_mode": {
+            "title": "Packaging Mode",
+            "type": "string"
+          },
+          "platform": {
+            "title": "Platform",
+            "type": "string"
+          },
+          "protocol_version": {
+            "minimum": 1.0,
+            "title": "Protocol Version",
+            "type": "integer"
+          },
+          "runtime_version": {
+            "title": "Runtime Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "runtime_version",
+          "platform",
+          "arch",
+          "packaging_mode",
+          "protocol_version"
+        ],
+        "title": "DiagnosticsBuildIdentity",
+        "type": "object"
+      },
       "DiagnosticsEvent": {
         "description": "One row from the `local_events` table after payload parsing.\n\nMatches the AgentRunEvent envelope the client's\n`parseAgentSSEChunk` produces (intentional, so the diagnostics\npanel can reuse the live-stream renderer).",
         "properties": {
@@ -873,6 +940,66 @@
         "title": "DiagnosticsEvent",
         "type": "object"
       },
+      "DiagnosticsExecutionPolicy": {
+        "properties": {
+          "complexity": {
+            "enum": [
+              "simple",
+              "complex"
+            ],
+            "title": "Complexity",
+            "type": "string"
+          },
+          "max_model_calls": {
+            "minimum": 1.0,
+            "title": "Max Model Calls",
+            "type": "integer"
+          },
+          "max_subagent_model_calls": {
+            "minimum": 0.0,
+            "title": "Max Subagent Model Calls",
+            "type": "integer"
+          },
+          "max_subagent_tasks": {
+            "minimum": 0.0,
+            "title": "Max Subagent Tasks",
+            "type": "integer"
+          },
+          "plan_mode": {
+            "enum": [
+              "off",
+              "auto",
+              "always"
+            ],
+            "title": "Plan Mode",
+            "type": "string"
+          },
+          "plan_required": {
+            "title": "Plan Required",
+            "type": "boolean"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "subagent_allowed": {
+            "title": "Subagent Allowed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "complexity",
+          "plan_mode",
+          "plan_required",
+          "subagent_allowed",
+          "reason",
+          "max_model_calls",
+          "max_subagent_tasks",
+          "max_subagent_model_calls"
+        ],
+        "title": "DiagnosticsExecutionPolicy",
+        "type": "object"
+      },
       "DiagnosticsFailure": {
         "description": "Structured classification for the latest failed run/tool event.",
         "properties": {
@@ -896,6 +1023,7 @@
               "configuration",
               "workspace",
               "validation",
+              "execution_invariant",
               "fatal",
               "unknown"
             ],
@@ -1050,6 +1178,148 @@
           "headline"
         ],
         "title": "DiagnosticsHandoff",
+        "type": "object"
+      },
+      "DiagnosticsModelCall": {
+        "properties": {
+          "call_index": {
+            "minimum": 1.0,
+            "title": "Call Index",
+            "type": "integer"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "execution_attempt_id": {
+            "title": "Execution Attempt Id",
+            "type": "string"
+          },
+          "first_output_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Output At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Tokens"
+          },
+          "logical_call_id": {
+            "title": "Logical Call Id",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "outcome_unknown": {
+            "title": "Outcome Unknown",
+            "type": "boolean"
+          },
+          "output_started": {
+            "title": "Output Started",
+            "type": "boolean"
+          },
+          "output_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tokens"
+          },
+          "parent_tool_operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Tool Operation Id"
+          },
+          "provider_request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Request Id"
+          },
+          "purpose": {
+            "title": "Purpose",
+            "type": "string"
+          },
+          "retry_attempt": {
+            "minimum": 0.0,
+            "title": "Retry Attempt",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "logical_call_id",
+          "retry_attempt",
+          "execution_attempt_id",
+          "call_index",
+          "model",
+          "purpose",
+          "status",
+          "output_started",
+          "outcome_unknown",
+          "created_at"
+        ],
+        "title": "DiagnosticsModelCall",
         "type": "object"
       },
       "DiagnosticsPermission": {
@@ -1267,9 +1537,24 @@
             ],
             "title": "Error Type"
           },
+          "execution_namespace": {
+            "title": "Execution Namespace",
+            "type": "string"
+          },
           "operation_id": {
             "title": "Operation Id",
             "type": "string"
+          },
+          "parent_operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Operation Id"
           },
           "result_hash": {
             "anyOf": [
@@ -1281,6 +1566,39 @@
               }
             ],
             "title": "Result Hash"
+          },
+          "review_decision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Decision"
+          },
+          "review_reason_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Reason Hash"
+          },
+          "review_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Source"
           },
           "risk": {
             "title": "Risk",
@@ -1330,6 +1648,7 @@
         },
         "required": [
           "operation_id",
+          "execution_namespace",
           "tool_call_id",
           "tool_name",
           "tool_version",
@@ -1659,6 +1978,11 @@
       "FixedRuntimeAssetStatus": {
         "additionalProperties": false,
         "properties": {
+          "available": {
+            "default": true,
+            "title": "Available",
+            "type": "boolean"
+          },
           "download_progress": {
             "anyOf": [
               {
@@ -3577,12 +3901,18 @@
             "title": "Artifacts",
             "type": "array"
           },
+          "build": {
+            "$ref": "#/components/schemas/DiagnosticsBuildIdentity"
+          },
           "events": {
             "items": {
               "$ref": "#/components/schemas/DiagnosticsEvent"
             },
             "title": "Events",
             "type": "array"
+          },
+          "execution_policy": {
+            "$ref": "#/components/schemas/DiagnosticsExecutionPolicy"
           },
           "exported_at": {
             "title": "Exported At",
@@ -3610,6 +3940,13 @@
                 "type": "null"
               }
             ]
+          },
+          "model_calls": {
+            "items": {
+              "$ref": "#/components/schemas/DiagnosticsModelCall"
+            },
+            "title": "Model Calls",
+            "type": "array"
           },
           "permissions": {
             "items": {
@@ -3643,8 +3980,8 @@
             "title": "Runtime Version"
           },
           "schema_version": {
-            "const": 1,
-            "default": 1,
+            "const": 2,
+            "default": 2,
             "title": "Schema Version",
             "type": "integer"
           },
@@ -3668,6 +4005,8 @@
         },
         "required": [
           "exported_at",
+          "build",
+          "execution_policy",
           "run",
           "events",
           "permissions",

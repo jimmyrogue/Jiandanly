@@ -173,7 +173,7 @@ function useSettingsViewModel({
   const [clearingMemory, setClearingMemory] = useState(false)
   const [clientUpdate, setClientUpdate] = useState<ClientUpdateState | null>(null)
   const [runtimeAssetDownloads, setRuntimeAssetDownloads] = useState<Partial<
-    Record<FixedRuntimeAssetPluginID, 'downloading' | 'downloaded' | 'deleting' | 'error' | 'delete_error'>
+    Record<FixedRuntimeAssetPluginID, 'unavailable' | 'downloading' | 'downloaded' | 'deleting' | 'error' | 'delete_error'>
   >>({})
   const [runtimeAssetProgress, setRuntimeAssetProgress] = useState<Partial<
     Record<FixedRuntimeAssetPluginID, number | null>
@@ -260,7 +260,8 @@ function useSettingsViewModel({
           setRuntimeAssetDownloads((current) => {
             if (current[pluginID] === 'downloading' || current[pluginID] === 'deleting') return current
             const next = { ...current }
-            if (status.downloaded) next[pluginID] = 'downloaded'
+            if (status.available === false) next[pluginID] = 'unavailable'
+            else if (status.downloaded) next[pluginID] = 'downloaded'
             else if (status.downloading) next[pluginID] = 'downloading'
             else delete next[pluginID]
             return next
@@ -586,6 +587,7 @@ function SettingsViewContent({ view }: { view: ReturnType<typeof useSettingsView
                 ) : null}
                 {isDesktop ? FIXED_RUNTIME_ASSETS.map(({ pluginID, name }) => {
                   const status = runtimeAssetDownloads[pluginID]
+                  if (status === 'unavailable') return null
                   const progress = runtimeAssetProgress[pluginID]
                   const downloaded = status === 'downloaded' || status === 'deleting' || status === 'delete_error'
                   const action = status === 'downloading'
