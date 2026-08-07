@@ -11,7 +11,7 @@ def test_dev_runtime_passes_built_browser_qa_and_ocr_packages() -> None:
         "--ocr-runtime-asset",
     ):
         assert flag in script
-    assert "ocr-0.1.3-darwin-arm64.shejane-plugin" in script
+    assert "ocr-0.1.4-darwin-arm64.shejane-plugin" in script
     assert script.count("prepare_fixed_capability_args") == 3
 
 

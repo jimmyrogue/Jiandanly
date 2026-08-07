@@ -59,4 +59,33 @@ describe('local crash reporting', () => {
     const content = await readFile(join(directory, 'shejane-local-crash-events.jsonl'), 'utf8')
     expect(JSON.parse(content.trim()).category).toBe('launch_error')
   })
+
+  it('persists the bounded Runtime startup error that explains the launcher failure', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'shejane-crash-test-'))
+    const child = {
+      exitCode: 3,
+      signalCode: null,
+      runtimeStartupErrorOutput: [
+        'PluginVersionConflictError: plugin org.shejane.ocr failed',
+        'Authorization: Bearer top-secret',
+        'https://user:password@example.test/path?token=query-secret',
+      ].join('\n'),
+    }
+
+    expect(recordRuntimeFailure({
+      child,
+      directory,
+      release: '0.1.29',
+      wasReady: false,
+      isQuitting: false,
+    })).toBe(true)
+
+    const content = await readFile(join(directory, 'shejane-runtime-startup.log'), 'utf8')
+    expect(content).toContain('release=0.1.29')
+    expect(content).toContain('exit_code=3')
+    expect(content).toContain('PluginVersionConflictError')
+    expect(content).not.toContain('top-secret')
+    expect(content).not.toContain('password')
+    expect(content).not.toContain('query-secret')
+  })
 })

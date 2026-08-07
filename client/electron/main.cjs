@@ -20,8 +20,13 @@ const net = require('node:net')
 const buildInfo = require('./build-info.cjs')
 const { installLocalRuntimeAuthorization } = require('./runtime-auth.cjs')
 const { materializeFileCopy } = require('./file-open.cjs')
-const { recordLocalCrash, recordRuntimeFailure } = require('./local-crash-reporting.cjs')
 const {
+  recordLocalCrash,
+  recordRuntimeFailure,
+  runtimeFailureLogPath,
+} = require('./local-crash-reporting.cjs')
+const {
+  classifyRuntimeStartupFailure,
   fixedRuntimeAssetBaseURL,
   installUpdateAfterRuntimeStop,
   isPortConflictError,
@@ -134,6 +139,7 @@ let desktopInitializationComplete = false
 let runtimeSessionReady = false
 let runtimeTarget = { mode: 'bundled', source: 'default' }
 let runtimeConnectionError = null
+let lastRuntimeStartupFailure = null
 let clientAutoUpdater = null
 let promptedUpdateVersion = null
 let clientUpdateState = {
@@ -394,6 +400,7 @@ function runtimeArgs() {
 }
 
 async function spawnBundledRuntime() {
+  lastRuntimeStartupFailure = null
   const port = await pickFreePort()
   runtimeToken = crypto.randomBytes(32).toString('hex')
   runtimeURL = `http://127.0.0.1:${port}`
@@ -426,13 +433,16 @@ async function spawnBundledRuntime() {
   let startupErrorOutput = ''
   child.stdout.on('data', (chunk) => process.stdout.write(`[runtime] ${chunk}`))
   child.stderr.on('data', (chunk) => {
-    startupErrorOutput = `${startupErrorOutput}${chunk}`.slice(-2048)
+    startupErrorOutput = `${startupErrorOutput}${chunk}`.slice(-32_768)
+    child.runtimeStartupErrorOutput = startupErrorOutput
     if (isPortConflictError(startupErrorOutput)) {
       child.runtimePortConflict = true
     }
     process.stderr.write(`[runtime] ${chunk}`)
   })
   child.on('error', (err) => {
+    child.runtimeSpawnError = err instanceof Error ? err.message : String(err)
+    lastRuntimeStartupFailure = classifyRuntimeStartupFailure(child)
     recordRuntimeFailure({
       child,
       directory: crashDirectory,
@@ -447,6 +457,9 @@ async function spawnBundledRuntime() {
       runtimeProcess = null
     }
     const wasReady = runtimeReady
+    if (!wasReady && !child.runtimeStopRequested) {
+      lastRuntimeStartupFailure = classifyRuntimeStartupFailure(child)
+    }
     runtimeReady = false
     runtimeSessionReady = false
     recordRuntimeFailure({
@@ -472,6 +485,7 @@ async function stopBundledRuntime(child = runtimeProcess) {
     return
   }
   if (child.exitCode === null) {
+    child.runtimeStopRequested = true
     await stopRuntimeProcess(child, {
       forceKill: async (pid) => {
         if (process.platform === 'win32') {
@@ -786,6 +800,21 @@ app.whenReady().then(async () => {
       !runtimeConnection.token ||
       !runtimeAvailable
     ) {
+      if (lastRuntimeStartupFailure?.kind === 'spawn_error') {
+        throw new Error(desktopText(currentLocale, 'runtime.startSpawnFailed', {
+          message: lastRuntimeStartupFailure.detail,
+          logPath: runtimeFailureLogPath(crashDirectory),
+        }))
+      }
+      if (lastRuntimeStartupFailure?.kind === 'process_exit') {
+        const reason = Number.isInteger(lastRuntimeStartupFailure.code)
+          ? `code ${lastRuntimeStartupFailure.code}`
+          : lastRuntimeStartupFailure.signal || 'unknown'
+        throw new Error(desktopText(currentLocale, 'runtime.startExited', {
+          reason,
+          logPath: runtimeFailureLogPath(crashDirectory),
+        }))
+      }
       throw new Error(desktopText(currentLocale, 'runtime.startTimeout'))
     }
     runtimeReady = Boolean(ownedProcess)

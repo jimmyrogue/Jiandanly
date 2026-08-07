@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 const require = createRequire(import.meta.url)
 const {
   BUNDLED_RUNTIME_START_TIMEOUT_MS,
+  classifyRuntimeStartupFailure,
   fixedRuntimeAssetBaseURL,
   installUpdateAfterRuntimeStop,
   isPortConflictError,
@@ -14,6 +15,12 @@ const {
   waitForRuntimeProcessClose,
 } = require('./runtime-process.cjs') as {
   BUNDLED_RUNTIME_START_TIMEOUT_MS: number
+  classifyRuntimeStartupFailure: (child: {
+    exitCode: number | null
+    signalCode?: string | null
+    runtimeSpawnError?: string
+    runtimeStopRequested?: boolean
+  }) => { kind: 'spawn_error' | 'process_exit' | 'timeout', detail?: string, code?: number, signal?: string }
   fixedRuntimeAssetBaseURL: (version: string) => string
   installUpdateAfterRuntimeStop: (options: {
     stopRuntime: () => Promise<void>
@@ -104,6 +111,22 @@ describe('Electron local Runtime process lifecycle', () => {
     expect(isPortConflictError("ERROR: [Errno 48] address already in use")).toBe(true)
     expect(isPortConflictError('OSError: [WinError 10048] only one usage is permitted')).toBe(true)
     expect(isPortConflictError('Runtime database migration failed')).toBe(false)
+  })
+
+  it('distinguishes an immediate Runtime exit from a real readiness timeout', () => {
+    expect(classifyRuntimeStartupFailure({ exitCode: 3, signalCode: null })).toEqual({
+      kind: 'process_exit',
+      code: 3,
+    })
+    expect(classifyRuntimeStartupFailure({
+      exitCode: null,
+      runtimeSpawnError: 'spawn EACCES',
+    })).toEqual({ kind: 'spawn_error', detail: 'spawn EACCES' })
+    expect(classifyRuntimeStartupFailure({
+      exitCode: null,
+      signalCode: 'SIGTERM',
+      runtimeStopRequested: true,
+    })).toEqual({ kind: 'timeout' })
   })
 
   it('retries a new port only when the previous Runtime already stopped', async () => {

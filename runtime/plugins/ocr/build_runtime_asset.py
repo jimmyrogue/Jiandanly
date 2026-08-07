@@ -16,7 +16,7 @@ from shejane_runtime.plugins.runtime_assets import RuntimeAssetStore
 
 BASE_ASSET_VERSION = "3.9.1+ppocrv6-small.1"
 ASSET_VERSION = "3.9.1+ppocrv6-small.2"
-WORKER_COMPONENT_VERSION = "0.1.3"
+WORKER_COMPONENT_VERSION = "0.1.4"
 PLATFORMS = ("darwin/arm64", "windows/amd64")
 
 

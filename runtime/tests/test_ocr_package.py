@@ -11,7 +11,7 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from shejane_runtime.plugins.manifest import PluginManifest, load_plugin_manifest
-from shejane_runtime.plugins.ocr import is_allowed_ocr_package
+from shejane_runtime.plugins.ocr import OCR_PLUGIN_VERSION, is_allowed_ocr_package
 from shejane_runtime.plugins.package import extract_plugin_archive
 from shejane_runtime.plugins.runtime_assets import RuntimeAssetStore
 
@@ -22,9 +22,10 @@ ASSET_BUILDER = ROOT / "build_runtime_asset.py"
 
 
 def test_runtime_accepts_only_the_current_ocr_package_version() -> None:
+    assert OCR_PLUGIN_VERSION == "0.1.4"
     assert is_allowed_ocr_package(
         plugin_id="org.shejane.ocr",
-        version="0.1.3",
+        version="0.1.4",
         handler="ocr",
     )
     assert not is_allowed_ocr_package(
@@ -77,7 +78,7 @@ def test_ocr_package_is_deterministic_and_metadata_only(
     extracted = tmp_path / "extracted"
     extract_plugin_archive(outputs[0], extracted)
     manifest = load_plugin_manifest(extracted)
-    assert manifest.version == "0.1.3"
+    assert manifest.version == "0.1.4"
     assert manifest.runtime.execution.platforms == [target_platform]
     assert not (extracted / "payload").exists()
 
@@ -182,7 +183,7 @@ def test_ocr_runtime_asset_owns_worker_payload(
     metadata = installed.root / ".shejane-runtime-asset"
     sbom = json.loads((metadata / "sbom.spdx.json").read_text(encoding="utf-8"))
     worker_package = next(item for item in sbom["packages"] if item["name"] == "SheJane OCR Worker")
-    assert worker_package["versionInfo"] == "0.1.3"
+    assert worker_package["versionInfo"] == "0.1.4"
     assert worker_package["licenseDeclared"] == "AGPL-3.0-only"
     assert (installed.root / "licenses" / "LICENSE.shejane-ocr-worker").is_file()
 
@@ -254,7 +255,7 @@ def test_release_does_not_package_builtin_ocr_as_a_linux_worker() -> None:
     )
 
     assert "ocr-0.1.0-" not in workflow
-    assert "ocr-0.1.3-linux-arm64.shejane-plugin" not in workflow
+    assert "ocr-0.1.4-linux-arm64.shejane-plugin" not in workflow
 
 
 def test_release_publishes_browser_and_ocr_assets_outside_installers() -> None:
@@ -266,6 +267,29 @@ def test_release_publishes_browser_and_ocr_assets_outside_installers() -> None:
     assert "builtin-assets" not in spec
     assert "Stage on-demand Runtime Assets outside the installer" in workflow
     assert "client/release/*.shejane-runtime-asset" in workflow
+
+
+def test_release_replays_previous_frozen_runtime_data_before_publishing() -> None:
+    workflow = (REPO_ROOT / ".github" / "workflows" / "release-client.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Run previous Client Runtime data upgrade smoke" in workflow
+    assert "test-packaged-runtime-upgrade.mjs" in workflow
+
+
+def test_ocr_distribution_version_is_aligned() -> None:
+    for relative in (
+        ".github/workflows/release-client.yml",
+        "runtime/shejane-runtime.spec",
+        "runtime/src/shejane_runtime/config.py",
+        "scripts/build-ocr-builtin.sh",
+        "scripts/build-ocr-windows-amd64.ps1",
+        "scripts/dev.sh",
+    ):
+        content = (REPO_ROOT / relative).read_text(encoding="utf-8")
+        assert "ocr-0.1.4" in content, relative
+        assert "ocr-0.1.3" not in content, relative
 
 
 def test_runtime_collection_strips_native_dependencies_safely() -> None:

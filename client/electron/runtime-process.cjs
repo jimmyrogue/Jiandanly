@@ -15,6 +15,22 @@ function isPortConflictError(output) {
   return normalized.includes('address already in use') || normalized.includes('winerror 10048')
 }
 
+function classifyRuntimeStartupFailure(child) {
+  if (child?.runtimeStopRequested) {
+    return { kind: 'timeout' }
+  }
+  if (typeof child?.runtimeSpawnError === 'string' && child.runtimeSpawnError) {
+    return { kind: 'spawn_error', detail: child.runtimeSpawnError }
+  }
+  if (Number.isInteger(child?.exitCode)) {
+    return { kind: 'process_exit', code: child.exitCode }
+  }
+  if (typeof child?.signalCode === 'string' && child.signalCode) {
+    return { kind: 'process_exit', signal: child.signalCode }
+  }
+  return { kind: 'timeout' }
+}
+
 function waitForRuntimeProcessClose(child, timeoutMs = 2000) {
   if (child.runtimeClosed) {
     return Promise.resolve(true)
@@ -171,6 +187,7 @@ async function installUpdateAfterRuntimeStop({ stopRuntime, quitAndInstall }) {
 
 module.exports = {
   BUNDLED_RUNTIME_START_TIMEOUT_MS,
+  classifyRuntimeStartupFailure,
   fixedRuntimeAssetBaseURL,
   installUpdateAfterRuntimeStop,
   isPortConflictError,

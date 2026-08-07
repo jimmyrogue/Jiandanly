@@ -376,9 +376,11 @@ Runtime 正常关闭时会在现有关闭期限内等待已启动的终态上报
 终态和错误类型，不记录远端响应正文或用户内容。
 
 Electron crash reporter 与 Agent 诊断完全分离。当前只在操作系统 crash 目录本地收集 dump，
-`uploadToServer=false`；Runtime native fault 写入同一私有目录，Launcher 和更新器只追加固定枚举
-的组件、错误分类、版本和时间，不记录错误文本、参数、环境变量或路径。打包 smoke 会让一个隔离
-的 Runtime 进程主动 native crash，验证真实 dump 已生成且不含环境 canary。所有远端 crash
+`uploadToServer=false`；Runtime native fault 写入同一私有目录，Launcher 和更新器继续追加固定枚举
+的组件、错误分类、版本和时间。Runtime 在就绪前失败时还会覆盖写入本机私有的
+`shejane-runtime-startup.log`：最多保留最后 32 KiB stderr，并过滤 Bearer 与 URL credential；
+错误弹窗会区分无法执行、进程提前退出和真实超时，并给出该日志路径。该日志不会自动上传。
+打包 smoke 会让一个隔离的 Runtime 进程主动 native crash，验证真实 dump 已生成且不含环境 canary。所有远端 crash
 上报必须等 crash vendor、endpoint、隐私告知、采样和保留期确定后再接入，不能复用 `st-` 或
 LangSmith service key。
 
@@ -412,6 +414,12 @@ macOS 正式分发必须配置以下全部 GitHub Actions secrets：
 Client 构建只把 Electron Main 运行时依赖放进 `app.asar`，Renderer/Vite 依赖属于开发依赖；Electron locale 只保留英文、简体中文和繁体中文。DMG、ZIP 和 Windows EXE 必须各自带同名 `.blockmap`，发布工作流缺少任一 sidecar 都会失败，并把 blockmap 与 `latest*.yml` 一起上传。客户端在可用时执行差分更新，旧包或 sidecar 不可用时由 `electron-updater` 回退到完整下载。
 
 Client 发布会把锁定的 macOS/Windows 固定能力和 RapidOCR Runtime Asset 按平台与源码摘要缓存在 GitHub Actions。相关构建文件合入 `main` 时会预热这些缓存；tag 发布只读取 `main` 的精确缓存，命中后仍检查插件和 Runtime Asset 身份，未命中则执行原来的可复现构建。Browser QA 与 RapidOCR 的四个按需 Runtime Asset 随 DMG/ZIP/EXE 一起上传到同一 tag 的 GitHub Release，但不进入安装包；打包 smoke 明确拒绝冻结 Runtime 中出现 `_internal/builtin-assets`。缓存不会包含最终 DMG/EXE、签名证书或 keychain，也不会替代安装包 smoke 和签名验证。
+
+tag 发布还会下载上一公开 Client 的 ZIP/EXE，提取旧冻结 Runtime，并通过
+`scripts/test-packaged-runtime-upgrade.mjs` 让旧、新 Runtime 依次使用同一个临时数据目录。
+候选版本必须在 Client 启动期限内到达 `/v1/health`；固定插件复用旧 `(plugin_id, version)`
+但 canonical digest 改变时，该门禁会在创建 Release 前失败。不得通过清理旧 `plugin_versions`
+或放宽 digest 校验让门禁通过。
 
 普通 tag 发布不会构建可选的 Linux arm64 Worker/Runtime Asset。需要复核这些候选资产时，手动运行 `Release Client` 并开启 `extended_asset_verification`；这项开关只构建并检查资产，不会构建 VM、执行 Managed Worker，或改变 Registry Gate。
 

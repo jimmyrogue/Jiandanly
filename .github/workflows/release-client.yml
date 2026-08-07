@@ -18,6 +18,7 @@ on:
       - scripts/build-computer-use-builtin.sh
       - scripts/build-ocr-builtin.sh
       - scripts/build-ocr-windows-amd64.ps1
+      - scripts/test-packaged-runtime-upgrade.mjs
   workflow_dispatch:
     inputs:
       extended_asset_verification:
@@ -594,7 +595,7 @@ jobs:
           cp runtime/plugins/computer-use/dist/computer-use-0.2.2-darwin-arm64.shejane-plugin "${output}/"
           cp runtime/plugins/browser-qa/dist/browser-qa-0.1.3-darwin-arm64.shejane-plugin "${output}/"
           cp runtime/plugins/browser-qa/dist/browser-qa-runtime-1.61.1-darwin-arm64.shejane-runtime-asset "${output}/"
-          cp runtime/plugins/ocr/dist/ocr-0.1.3-darwin-arm64.shejane-plugin "${output}/"
+          cp runtime/plugins/ocr/dist/ocr-0.1.4-darwin-arm64.shejane-plugin "${output}/"
           cp runtime/plugins/ocr/dist/rapidocr-runtime-3.9.1-darwin-arm64.shejane-runtime-asset "${output}/"
       - name: Verify macOS fixed capability cache
         working-directory: runtime
@@ -605,7 +606,7 @@ jobs:
           packages=(
             computer-use-0.2.2-darwin-arm64.shejane-plugin
             browser-qa-0.1.3-darwin-arm64.shejane-plugin
-            ocr-0.1.3-darwin-arm64.shejane-plugin
+            ocr-0.1.4-darwin-arm64.shejane-plugin
           )
           for filename in "${packages[@]}"; do
             package="${output}/${filename}"
@@ -695,7 +696,7 @@ jobs:
           $output = Join-Path $env:RUNNER_TEMP "shejane-fixed-capabilities"
           @(
             "browser-qa-0.1.3-windows-amd64.shejane-plugin",
-            "ocr-0.1.3-windows-amd64.shejane-plugin"
+            "ocr-0.1.4-windows-amd64.shejane-plugin"
           ) | ForEach-Object {
             $package = Join-Path $output $_
             if (-not (Test-Path $package -PathType Leaf)) {
@@ -1377,11 +1378,11 @@ jobs:
               runtime/plugins/computer-use/dist/
             cp "${RUNNER_TEMP}/shejane-fixed-plugins-darwin/browser-qa-0.1.3-darwin-arm64.shejane-plugin" \
               runtime/plugins/browser-qa/dist/
-            cp "${RUNNER_TEMP}/shejane-fixed-plugins-darwin/ocr-0.1.3-darwin-arm64.shejane-plugin" \
+            cp "${RUNNER_TEMP}/shejane-fixed-plugins-darwin/ocr-0.1.4-darwin-arm64.shejane-plugin" \
               runtime/plugins/ocr/dist/
           elif [[ "${{ matrix.platform }}" == "windows" && "${{ matrix.arch }}" == "x64" ]]; then
             mkdir -p runtime/plugins/ocr/dist
-            cp "${RUNNER_TEMP}/shejane-fixed-plugins-windows/ocr-0.1.3-windows-amd64.shejane-plugin" \
+            cp "${RUNNER_TEMP}/shejane-fixed-plugins-windows/ocr-0.1.4-windows-amd64.shejane-plugin" \
               runtime/plugins/ocr/dist/
             mkdir -p runtime/plugins/browser-qa/dist
             cp "${RUNNER_TEMP}/shejane-fixed-plugins-windows/browser-qa-0.1.3-windows-amd64.shejane-plugin" \
@@ -1466,6 +1467,54 @@ jobs:
           fi
           test -n "${packaged}"
           node scripts/test-packaged-client-runtime.mjs "${packaged}"
+      - name: Run previous Client Runtime data upgrade smoke
+        if: github.ref_type == 'tag' && (matrix.platform == 'macos' || matrix.platform == 'windows')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          current_tag="${GITHUB_REF_NAME}"
+          previous_tag="$(
+            gh release list --repo "${GITHUB_REPOSITORY}" --limit 100 \
+              --json tagName,isDraft,isPrerelease \
+              --jq '.[] | select(.isDraft == false and .isPrerelease == false) | .tagName' \
+              | grep '^client-v[0-9]' \
+              | grep -Fxv "${current_tag}" \
+              | sed -n '1p'
+          )"
+          test -n "${previous_tag}"
+          previous_version="${previous_tag#client-v}"
+          previous_root="${RUNNER_TEMP}/shejane-previous-client"
+          mkdir -p "${previous_root}"
+
+          if [[ "${{ matrix.platform }}" == "macos" ]]; then
+            previous_asset="SheJane-${previous_version}-arm64.zip"
+            gh release download "${previous_tag}" --repo "${GITHUB_REPOSITORY}" \
+              --pattern "${previous_asset}" --dir "${previous_root}"
+            ditto -x -k "${previous_root}/${previous_asset}" "${previous_root}/unpacked"
+            previous_runtime="$(find "${previous_root}/unpacked" -type f \
+              -path '*/Contents/Resources/runtime/shejane-runtime' -print -quit)"
+            current_runtime="runtime/dist/shejane-runtime/shejane-runtime"
+          else
+            previous_asset="SheJane-${previous_version}-x64.exe"
+            gh release download "${previous_tag}" --repo "${GITHUB_REPOSITORY}" \
+              --pattern "${previous_asset}" --dir "${previous_root}"
+            7z x -y "${previous_root}/${previous_asset}" "-o${previous_root}/installer" \
+              '$PLUGINSDIR/app-64.7z' >/dev/null
+            embedded="$(find "${previous_root}/installer" -type f -name 'app-64.7z' -print -quit)"
+            test -n "${embedded}"
+            7z x -y "${embedded}" "-o${previous_root}/unpacked" \
+              'resources/runtime/*' >/dev/null
+            previous_runtime="$(find "${previous_root}/unpacked" -type f \
+              -path '*/resources/runtime/shejane-runtime.exe' -print -quit)"
+            current_runtime="runtime/dist/shejane-runtime/shejane-runtime.exe"
+          fi
+
+          test -f "${previous_runtime}"
+          test -f "${current_runtime}"
+          node scripts/test-packaged-runtime-upgrade.mjs \
+            "${previous_runtime}" "${current_runtime}" "${previous_tag}" "${current_tag}"
       - name: Verify differential-update metadata
         shell: bash
         run: |

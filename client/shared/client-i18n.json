@@ -30,6 +30,8 @@
     },
     "runtime": {
       "startFailed": "无法启动本地引擎：{message}",
+      "startSpawnFailed": "本地引擎无法执行：{message}。详细日志：{logPath}",
+      "startExited": "本地引擎在启动时退出（{reason}）。详细日志：{logPath}",
       "exited": "本地引擎已退出（code={code}, signal={signal}），请重启应用。",
       "startTimeout": "本地引擎启动超时，请重启应用。"
     },
@@ -87,6 +89,8 @@
     },
     "runtime": {
       "startFailed": "Could not start the local engine: {message}",
+      "startSpawnFailed": "The local engine could not be executed: {message}. Details: {logPath}",
+      "startExited": "The local engine exited during startup ({reason}). Details: {logPath}",
       "exited": "The local engine exited (code={code}, signal={signal}). Restart the app.",
       "startTimeout": "The local engine timed out while starting. Restart the app."
     },

@@ -88,7 +88,7 @@ def test_windows_locked_package_names_resolve_to_canonical_pypi_projects() -> No
 def test_frozen_windows_runtime_discovers_only_fixed_ocr_plugin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    plugin = tmp_path / "builtin-plugins" / "ocr-0.1.3-windows-amd64.shejane-plugin"
+    plugin = tmp_path / "builtin-plugins" / "ocr-0.1.4-windows-amd64.shejane-plugin"
     plugin.parent.mkdir()
     plugin.write_bytes(b"plugin")
     monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
