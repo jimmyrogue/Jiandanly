@@ -79,6 +79,30 @@ async function startAndVerify(runtime, tag) {
     stderr = `${stderr}${chunk}`.slice(-32_768)
   })
 
+  async function fetchJson(path, label) {
+    let lastError
+    for (let attempt = 1; attempt <= 5 && child.exitCode === null; attempt += 1) {
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}${path}`, {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: AbortSignal.timeout(5_000),
+        })
+        if (!response.ok) {
+          throw new Error(`${tag} ${label} returned HTTP ${response.status}`)
+        }
+        return await response.json()
+      } catch (error) {
+        lastError = error
+        if (attempt < 5 && child.exitCode === null) await wait(250)
+      }
+    }
+    throw new Error(
+      `${tag} ${label} failed after Runtime became healthy: ${lastError}`
+      + ` (exit=${child.exitCode}, signal=${child.signalCode})`
+      + `\nstdout:\n${stdout}\nstderr:\n${stderr}`,
+    )
+  }
+
   try {
     const deadline = Date.now() + 120_000
     while (Date.now() < deadline && child.exitCode === null) {
@@ -93,22 +117,15 @@ async function startAndVerify(runtime, tag) {
         // The frozen Runtime may still be opening or migrating its data.
       }
       if (healthy) {
-        const headers = { Authorization: `Bearer ${token}` }
-        const pluginsResponse = await fetch(`http://127.0.0.1:${port}/v1/plugins`, { headers })
-        if (!pluginsResponse.ok) {
-          throw new Error(`${tag} plugin catalog returned HTTP ${pluginsResponse.status}`)
+        const summaries = (await fetchJson('/v1/plugins', 'plugin catalog')).plugins
+        const details = []
+        for (const { id } of summaries) {
+          details.push(await fetchJson(
+            `/v1/plugins/${encodeURIComponent(id)}`,
+            `plugin ${id}`,
+          ))
         }
-        const summaries = (await pluginsResponse.json()).plugins
-        return Promise.all(summaries.map(async ({ id }) => {
-          const detailResponse = await fetch(
-            `http://127.0.0.1:${port}/v1/plugins/${encodeURIComponent(id)}`,
-            { headers },
-          )
-          if (!detailResponse.ok) {
-            throw new Error(`${tag} plugin ${id} returned HTTP ${detailResponse.status}`)
-          }
-          return detailResponse.json()
-        }))
+        return details
       }
       await wait(100)
     }
