@@ -278,6 +278,20 @@ def test_release_replays_previous_frozen_runtime_data_before_publishing() -> Non
     assert "test-packaged-runtime-upgrade.mjs" in workflow
 
 
+def test_release_requires_stable_developer_id_signature() -> None:
+    workflow = (REPO_ROOT / ".github" / "workflows" / "release-client.yml").read_text(
+        encoding="utf-8"
+    )
+    builder = (REPO_ROOT / "client" / "electron-builder.yml").read_text(encoding="utf-8")
+
+    assert "APPLE_API_KEY_P8_BASE64" in workflow
+    assert "Identifier=com.shejane.runtime" in workflow
+    assert "codesign -dr -" in workflow
+    assert "Signature=adhoc" not in workflow
+    assert "SHEJANE_CODESIGN_IDENTITY=-" not in workflow
+    assert "sign: ./electron/macos-sign.cjs" in builder
+
+
 def test_ocr_distribution_version_is_aligned() -> None:
     for relative in (
         ".github/workflows/release-client.yml",

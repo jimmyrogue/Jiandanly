@@ -69,6 +69,12 @@ make test-contract
 - Never fix a same-version digest conflict by weakening digest validation or deleting user data. Preserve the old `plugin_versions` row and install the rebuilt package under its new version.
 - Before a Client release, `scripts/test-packaged-runtime-upgrade.mjs` must start the previous published frozen Runtime and the candidate frozen Runtime against the same temporary data directory. It must retain the old fixed-plugin versions, activate the new digests, and reach `/v1/health` within the Client startup deadline; never skip or downgrade this release gate.
 
+## macOS Release Signing Discipline
+
+- Public Client releases must fail closed unless all Developer ID and notarization secrets are present; never publish an ad-hoc fallback.
+- The nested Runtime must keep signing identifier `com.shejane.runtime`, use the Client's Apple Team ID, and have a certificate-based designated requirement rather than a version-specific `cdhash` requirement.
+- Keep `.p12` and `.p8` material only in GitHub Actions secrets and runner-private temporary files. Never commit, log, or pass their contents through Runtime or Client configuration.
+
 ## Frontend Rules
 
 Client UI expectations:

@@ -404,10 +404,17 @@ macOS 正式分发必须配置以下全部 GitHub Actions secrets：
 
 - `MACOS_DEVELOPER_ID_P12_BASE64`：Developer ID Application `.p12` 的 base64；
 - `MACOS_DEVELOPER_ID_P12_PASSWORD`：该 `.p12` 的密码；
-- `APPLE_API_KEY`：App Store Connect API `.p8` 的 base64；
+- `APPLE_API_KEY_P8_BASE64`：App Store Connect API `.p8` 的 base64；
 - `APPLE_API_KEY_ID`、`APPLE_API_ISSUER`、`APPLE_TEAM_ID`。
 
-全部凭据存在时，发布 job 会验证 `.app` 与 DMG 的 staple ticket、Gatekeeper、Hardened Runtime、secure timestamp 和 Developer ID。全部凭据缺失时仍会生成 ad-hoc 签名、未公证的预览 DMG/ZIP，并验证包内 Runtime 生命周期；两条路径都必须确认 `.app` 不含 `sandbox/vm-assets`。预览产物会触发 Gatekeeper 警告，且不构成 `release_ci_gate` 的发布证据。macOS 原地自动更新同样要求 Developer ID 签名；预览包只能在设置页检查失败后转到 GitHub Releases 手动安装。凭据只配置一部分会 fail closed。配置依据见 [electron-builder macOS signing](https://www.electron.build/mac/)、[electron-builder auto update](https://www.electron.build/docs/features/auto-update/)、[electron-builder notarization](https://www.electron.build/docs/notarization/) 与 [Apple notarization requirements](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)。
+macOS 发布缺少任一凭据都会 fail closed，不再生成 ad-hoc 正式产物。CI 把 `.p8` base64
+还原到 runner 私有临时文件，公证结束后删除。发布 job 会验证 `.app` 与 DMG 的 staple ticket、
+Gatekeeper、Hardened Runtime、secure timestamp 和 Developer ID；内置 Runtime 还必须使用稳定
+identifier `com.shejane.runtime`、相同 Team ID，且 designated requirement 不能退化为单版本
+`cdhash`。这使钥匙串可把“始终允许”授权继承给同一团队签发的后续版本。配置依据见
+[electron-builder macOS signing](https://www.electron.build/mac/)、
+[electron-builder notarization](https://www.electron.build/docs/notarization/) 与
+[Apple notarization requirements](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)。
 
 手动运行 Client 发布工作流只生成 GitHub Actions 产物。推送 `client-vX.Y.Z` 标签才会创建 GitHub Release。
 

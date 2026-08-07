@@ -39,6 +39,7 @@ asarUnpack:
 # Client CI does the same on a native runner for each target OS and architecture.
 #
 mac:
+  sign: ./electron/macos-sign.cjs
   files:
     - '!node_modules/@anthropic-ai/sandbox-runtime/vendor/seccomp/**/*'
   category: public.app-category.productivity
