@@ -29,7 +29,7 @@ def default_computer_use_package() -> Path | None:
     frozen_root = getattr(sys, "_MEIPASS", None)
     if not frozen_root:
         return None
-    name = "computer-use-0.2.2-darwin-arm64.shejane-plugin"
+    name = "computer-use-0.2.3-darwin-arm64.shejane-plugin"
     package = Path(frozen_root) / "builtin-plugins" / name
     return package if package.is_file() else None
 

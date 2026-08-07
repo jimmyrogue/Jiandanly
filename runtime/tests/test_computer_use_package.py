@@ -213,6 +213,20 @@ def test_computer_use_builtin_requires_the_fixed_runtime_identity() -> None:
     assert not is_allowed_computer_use_package(**{**identity, "version": "9.9.9"})
 
 
+def test_computer_use_service_exposes_the_frozen_helper_app(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = tmp_path / "package"
+    package.mkdir()
+    helper = tmp_path / "computer-use-helper" / "pi-computer-use.app"
+    helper.mkdir(parents=True)
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
+
+    service = ComputerUseService(package, workspace_root=tmp_path)
+
+    assert service._extra_environment()["SHEJANE_COMPUTER_USE_HELPER_APP"] == str(helper)
+
+
 @pytest.mark.asyncio
 async def test_computer_use_executor_preserves_plugin_result_identity(tmp_path: Path) -> None:
     class FakeService:

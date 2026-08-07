@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import plistlib
 import re
 import shutil
 import subprocess
@@ -23,13 +24,16 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--platform", choices=PLATFORMS, required=True)
     parser.add_argument("--upstream", type=Path, required=True)
-    parser.add_argument("--version", default="0.2.2")
+    parser.add_argument("--version", default="0.2.3")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--helper-app-output", type=Path, required=True)
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?", args.version):
         parser.error("--version must be semantic version text")
     if args.output.suffix != ".shejane-plugin":
         parser.error("--output must end in .shejane-plugin")
+    if args.helper_app_output.suffix != ".app":
+        parser.error("--helper-app-output must end in .app")
     upstream = args.upstream.resolve(strict=True)
     head = subprocess.run(
         ["git", "-C", str(upstream), "rev-parse", "HEAD"],
@@ -53,7 +57,7 @@ def main() -> None:
         build_bridge(upstream, payload / "bridge-server.mjs")
         copy_upstream_runtime(upstream, payload / "upstream")
         patch_upstream_runtime(payload / "upstream")
-        build_native_helper(payload / "upstream", args.platform)
+        build_native_helper_app(payload / "upstream", args.platform, args.helper_app_output)
         manifest = (ROOT / ".shejane-plugin" / "plugin.template.json").read_text(encoding="utf-8")
         manifest = manifest.replace("__PLUGIN_VERSION__", args.version).replace(
             "__PLATFORM__", args.platform
@@ -164,6 +168,17 @@ def patch_upstream_runtime(upstream: Path) -> None:
 
     setup = upstream / "scripts/setup-helper.mjs"
     setup_source = setup.read_text(encoding="utf-8")
+    old_helper_path = """function prebuiltAppPathForArch(arch) {
+	return path.join(rootDir, "prebuilt", "macos", arch, "pi-computer-use.app");
+}
+"""
+    new_helper_path = """function prebuiltAppPathForArch(arch) {
+	return process.env.SHEJANE_COMPUTER_USE_HELPER_APP || path.join(rootDir, "prebuilt", "macos", arch, "pi-computer-use.app");
+}
+"""
+    if old_helper_path not in setup_source:
+        raise RuntimeError("pinned macOS helper path changed")
+    setup_source = setup_source.replace(old_helper_path, new_helper_path)
     marker = "<key>LSMinimumSystemVersion</key><string>14.0</string>"
     usage = (
         marker
@@ -175,11 +190,12 @@ def patch_upstream_runtime(upstream: Path) -> None:
     setup.write_text(setup_source.replace(marker, usage), encoding="utf-8")
 
 
-def build_native_helper(upstream: Path, platform: str) -> None:
+def build_native_helper_app(upstream: Path, platform: str, output: Path) -> None:
     if platform != "darwin/arm64":
         raise RuntimeError(f"unsupported Computer Use platform: {platform}")
-    output = upstream / "prebuilt/macos/arm64/bridge"
-    output.parent.mkdir(parents=True, exist_ok=True)
+    shutil.rmtree(output, ignore_errors=True)
+    executable = output / "Contents" / "MacOS" / "bridge"
+    executable.parent.mkdir(parents=True)
     with tempfile.TemporaryDirectory(prefix="computer-use-swift-cache-") as cache:
         subprocess.run(
             [
@@ -204,10 +220,26 @@ def build_native_helper(upstream: Path, platform: str) -> None:
                 str(upstream / "native/macos/agent_cursor_motion.swift"),
                 str(upstream / "native/macos/bridge.swift"),
                 "-o",
-                str(output),
+                str(executable),
             ],
             check=True,
         )
+    info = {
+        "CFBundleIdentifier": "com.injaneity.pi-computer-use",
+        "CFBundleName": "pi-computer-use",
+        "CFBundleDisplayName": "pi-computer-use",
+        "CFBundleExecutable": "bridge",
+        "CFBundlePackageType": "APPL",
+        "CFBundleShortVersionString": UPSTREAM_VERSION,
+        "CFBundleVersion": UPSTREAM_VERSION,
+        "LSMinimumSystemVersion": "14.0",
+        "LSUIElement": True,
+        "NSScreenCaptureUsageDescription": (
+            "SheJane uses screen capture only when Computer Use is enabled."
+        ),
+    }
+    with (output / "Contents" / "Info.plist").open("wb") as handle:
+        plistlib.dump(info, handle, fmt=plistlib.FMT_XML, sort_keys=True)
 
 
 def pack(source: Path, output: Path) -> None:

@@ -10,11 +10,12 @@ Build on macOS:
 uv run --project runtime python runtime/plugins/computer-use/build_package.py \
   --platform darwin/arm64 \
   --upstream /path/to/pi-computer-use-at-9f59ed0 \
-  --output /tmp/computer-use-0.2.2-darwin-arm64.shejane-plugin
+  --helper-app-output /tmp/computer-use-helper-0.2.3-darwin-arm64/pi-computer-use.app \
+  --output /tmp/computer-use-0.2.3-darwin-arm64.shejane-plugin
 ```
 
 Normal development and packaging use `scripts/build-computer-use-builtin.sh`. The Runtime provisions that archive automatically; users cannot import or remove it. Enabling it opens SheJane's three-step setup flow: install the signed helper, grant Screen Recording, then grant Accessibility. Permission requests remain user-triggered and are never exposed as model actions.
 
-The `.shejane-plugin` publisher signature is intentionally not part of this fixed internal distribution path. The macOS helper code signature remains required for a stable TCC identity and must not be removed.
+The `.shejane-plugin` publisher signature is intentionally not part of this fixed internal distribution path. The helper app is packaged beside the immutable plugin archive so Electron can apply the release's Developer ID signature, secure timestamp, and hardened runtime before notarization. Runtime passes that sealed app to the pinned installer without re-signing it.
 
 The first release exposes desktop tools only. Upstream CDP browser actions are intentionally omitted because SheJane already owns browser/MCP integration separately.

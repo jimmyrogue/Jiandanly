@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import shutil
+import sys
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -14,7 +15,7 @@ from .executor import ActionExecutor
 
 MAX_FRAME_BYTES = 24 * 1024 * 1024
 COMPUTER_USE_PLUGIN_ID = "org.shejane.computer-use"
-COMPUTER_USE_PLUGIN_VERSION = "0.2.2"
+COMPUTER_USE_PLUGIN_VERSION = "0.2.3"
 _CHILD_ENVIRONMENT_KEYS = (
     "HOME",
     "PATH",
@@ -260,10 +261,22 @@ class ComputerUseService:
         return self.error_type(f"{self.service_name} {message}")
 
     def _extra_environment(self) -> dict[str, str]:
-        return {
+        environment = {
             "SHEJANE_COMPUTER_USE_PACKAGE_ROOT": str(self._package_root),
             "SHEJANE_COMPUTER_USE_WORKSPACE": str(self._workspace_root),
         }
+        configured_helper = os.environ.get("SHEJANE_COMPUTER_USE_HELPER_APP", "").strip()
+        frozen_root = getattr(sys, "_MEIPASS", None)
+        helper = (
+            Path(configured_helper)
+            if configured_helper
+            else Path(frozen_root) / "computer-use-helper" / "pi-computer-use.app"
+            if frozen_root
+            else None
+        )
+        if helper is not None and helper.is_dir():
+            environment["SHEJANE_COMPUTER_USE_HELPER_APP"] = str(helper)
+        return environment
 
     def _bridge_path(self) -> Path:
         return self._package_root / "payload" / "bridge-server.mjs"

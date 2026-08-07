@@ -289,9 +289,40 @@ def test_release_requires_stable_developer_id_signature() -> None:
     assert "codesign -dr -" in workflow
     assert "Signature=adhoc" not in workflow
     assert "SHEJANE_CODESIGN_IDENTITY=-" not in workflow
-    assert 'Developer ID Application: \\([^\"]*\\)' in workflow
-    assert '\\(Developer ID Application:[^\"]*\\)' not in workflow
+    assert 'Developer ID Application: \\([^"]*\\)' in workflow
+    assert '\\(Developer ID Application:[^"]*\\)' not in workflow
     assert "sign: ./electron/macos-sign.cjs" in builder
+
+
+def test_release_packages_and_verifies_the_signed_computer_use_helper() -> None:
+    workflow = (REPO_ROOT / ".github" / "workflows" / "release-client.yml").read_text(
+        encoding="utf-8"
+    )
+    spec = (REPO_ROOT / "runtime" / "shejane-runtime.spec").read_text(encoding="utf-8")
+
+    assert "computer-use-helper-0.2.3-darwin-arm64" in workflow
+    assert "computer-use-helper/pi-computer-use.app" in spec
+    assert "Identifier=com.injaneity.pi-computer-use" in workflow
+    assert 'identifier "com.injaneity.pi-computer-use"' in workflow
+    assert 'helper_requirement="$(codesign -dr - "${helper}" 2>&1)"' in workflow
+
+
+def test_computer_use_distribution_version_is_aligned() -> None:
+    for relative in (
+        ".github/workflows/release-client.yml",
+        "runtime/shejane-runtime.spec",
+        "runtime/src/shejane_runtime/config.py",
+        "runtime/plugins/computer-use/README.md",
+        "scripts/build-computer-use-builtin.sh",
+        "scripts/dev.sh",
+    ):
+        content = (REPO_ROOT / relative).read_text(encoding="utf-8")
+        assert "computer-use-0.2.3" in content, relative
+        assert "computer-use-0.2.2" not in content, relative
+    runtime = (
+        REPO_ROOT / "runtime" / "src" / "shejane_runtime" / "plugins" / "computer_use.py"
+    ).read_text(encoding="utf-8")
+    assert 'COMPUTER_USE_PLUGIN_VERSION = "0.2.3"' in runtime
 
 
 def test_ocr_distribution_version_is_aligned() -> None:

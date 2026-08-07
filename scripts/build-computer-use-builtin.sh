@@ -6,7 +6,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 UPSTREAM_COMMIT="9f59ed0eeac09b115897732c46b794ee8ca4e5b0"
 UPSTREAM_DIR="${SHEJANE_COMPUTER_USE_UPSTREAM:-${ROOT_DIR}/.tmp/computer-use-upstream}"
-OUTPUT="${ROOT_DIR}/runtime/plugins/computer-use/dist/computer-use-0.2.2-darwin-arm64.shejane-plugin"
+OUTPUT="${ROOT_DIR}/runtime/plugins/computer-use/dist/computer-use-0.2.3-darwin-arm64.shejane-plugin"
+HELPER_APP_OUTPUT="${ROOT_DIR}/runtime/plugins/computer-use/dist/computer-use-helper-0.2.3-darwin-arm64/pi-computer-use.app"
 
 if [[ ! -d "${UPSTREAM_DIR}/.git" ]]; then
   mkdir -p "$(dirname "${UPSTREAM_DIR}")"
@@ -24,4 +25,5 @@ cd "${ROOT_DIR}"
 uv run --project runtime python runtime/plugins/computer-use/build_package.py \
   --platform darwin/arm64 \
   --upstream "${UPSTREAM_DIR}" \
+  --helper-app-output "${HELPER_APP_OUTPUT}" \
   --output "${OUTPUT}"

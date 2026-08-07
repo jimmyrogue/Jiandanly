@@ -30,6 +30,7 @@ RUNTIME_FIXED_CAPABILITY_ARGS=()
 [[ -n "${SHEJANE_RUNTIME_MCP_SERVERS:-}" ]] && RUNTIME_ENV+=("SHEJANE_RUNTIME_MCP_SERVERS=$SHEJANE_RUNTIME_MCP_SERVERS")
 [[ -n "${SHEJANE_RUNTIME_SKILLS_PATH:-}" ]] && RUNTIME_ENV+=("SHEJANE_RUNTIME_SKILLS_PATH=$SHEJANE_RUNTIME_SKILLS_PATH")
 RUNTIME_ENV+=("SHEJANE_RUNTIME_NODE_PATH=$(command -v node)")
+RUNTIME_ENV+=("SHEJANE_COMPUTER_USE_HELPER_APP=${ROOT_DIR}/runtime/plugins/computer-use/dist/computer-use-helper-0.2.3-darwin-arm64/pi-computer-use.app")
 if [[ -n "$NODE_BIN" ]]; then
   RUNTIME_ENV+=("SHEJANE_MANAGED_WORKER_SANDBOX_COMMAND=[\"${NODE_BIN}\",\"${SRT_DEV_CLI}\"]")
 fi
@@ -64,7 +65,7 @@ prepare_fixed_capability_args() {
   while IFS='|' read -r flag path; do
     [[ -f "$path" ]] && RUNTIME_FIXED_CAPABILITY_ARGS+=("$flag" "$path")
   done <<EOF
---computer-use-package|${ROOT_DIR}/runtime/plugins/computer-use/dist/computer-use-0.2.2-darwin-arm64.shejane-plugin
+--computer-use-package|${ROOT_DIR}/runtime/plugins/computer-use/dist/computer-use-0.2.3-darwin-arm64.shejane-plugin
 --browser-qa-package|${ROOT_DIR}/runtime/plugins/browser-qa/dist/browser-qa-0.1.3-darwin-arm64.shejane-plugin
 --browser-qa-runtime-asset|${ROOT_DIR}/runtime/plugins/browser-qa/dist/browser-qa-runtime-1.61.1-darwin-arm64.shejane-runtime-asset
 --ocr-package|${ROOT_DIR}/runtime/plugins/ocr/dist/ocr-0.1.4-darwin-arm64.shejane-plugin

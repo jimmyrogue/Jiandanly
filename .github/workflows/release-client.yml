@@ -592,7 +592,8 @@ jobs:
           ./scripts/build-ocr-builtin.sh
           output="${RUNNER_TEMP}/shejane-fixed-capabilities"
           mkdir -p "${output}"
-          cp runtime/plugins/computer-use/dist/computer-use-0.2.2-darwin-arm64.shejane-plugin "${output}/"
+          cp runtime/plugins/computer-use/dist/computer-use-0.2.3-darwin-arm64.shejane-plugin "${output}/"
+          cp -R runtime/plugins/computer-use/dist/computer-use-helper-0.2.3-darwin-arm64 "${output}/"
           cp runtime/plugins/browser-qa/dist/browser-qa-0.1.3-darwin-arm64.shejane-plugin "${output}/"
           cp runtime/plugins/browser-qa/dist/browser-qa-runtime-1.61.1-darwin-arm64.shejane-runtime-asset "${output}/"
           cp runtime/plugins/ocr/dist/ocr-0.1.4-darwin-arm64.shejane-plugin "${output}/"
@@ -604,7 +605,7 @@ jobs:
           set -euo pipefail
           output="${RUNNER_TEMP}/shejane-fixed-capabilities"
           packages=(
-            computer-use-0.2.2-darwin-arm64.shejane-plugin
+            computer-use-0.2.3-darwin-arm64.shejane-plugin
             browser-qa-0.1.3-darwin-arm64.shejane-plugin
             ocr-0.1.4-darwin-arm64.shejane-plugin
           )
@@ -613,6 +614,10 @@ jobs:
             test -f "${package}"
             uv run shejane-plugin inspect "${package}"
           done
+          helper="${output}/computer-use-helper-0.2.3-darwin-arm64/pi-computer-use.app"
+          test -f "${helper}/Contents/MacOS/bridge"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${helper}/Contents/Info.plist")" = \
+            "com.injaneity.pi-computer-use"
           uv run python - "${output}" <<'PY'
           import sys
           import tempfile
@@ -1370,8 +1375,12 @@ jobs:
           set -euo pipefail
           if [[ "${{ matrix.platform }}" == "macos" && "${{ matrix.arch }}" == "arm64" ]]; then
             mkdir -p runtime/plugins/computer-use/dist runtime/plugins/browser-qa/dist runtime/plugins/ocr/dist
-            cp "${RUNNER_TEMP}/shejane-fixed-plugins-darwin/computer-use-0.2.2-darwin-arm64.shejane-plugin" \
+            cp "${RUNNER_TEMP}/shejane-fixed-plugins-darwin/computer-use-0.2.3-darwin-arm64.shejane-plugin" \
               runtime/plugins/computer-use/dist/
+            cp -R "${RUNNER_TEMP}/shejane-fixed-plugins-darwin/computer-use-helper-0.2.3-darwin-arm64" \
+              runtime/plugins/computer-use/dist/
+            chmod 755 \
+              runtime/plugins/computer-use/dist/computer-use-helper-0.2.3-darwin-arm64/pi-computer-use.app/Contents/MacOS/bridge
             cp "${RUNNER_TEMP}/shejane-fixed-plugins-darwin/browser-qa-0.1.3-darwin-arm64.shejane-plugin" \
               runtime/plugins/browser-qa/dist/
             cp "${RUNNER_TEMP}/shejane-fixed-plugins-darwin/ocr-0.1.4-darwin-arm64.shejane-plugin" \
@@ -1432,6 +1441,7 @@ jobs:
           dmg="$(find release -maxdepth 1 -type f -name '*.dmg' -print -quit)"
           test -n "${dmg}"
           runtime="${app}/Contents/Resources/runtime/shejane-runtime"
+          helper="${app}/Contents/Resources/runtime/_internal/computer-use-helper/pi-computer-use.app"
           codesign -d --verbose=4 "${app}" 2>&1 \
             | grep -Fq "TeamIdentifier=${APPLE_TEAM_ID}"
           codesign -d --verbose=4 "${app}" 2>&1 | grep -Eq 'flags=.*runtime'
@@ -1440,6 +1450,17 @@ jobs:
           codesign -d --verbose=4 "${runtime}" 2>&1 | grep -Fq 'Identifier=com.shejane.runtime'
           codesign -d --verbose=4 "${runtime}" 2>&1 \
             | grep -Fq "TeamIdentifier=${APPLE_TEAM_ID}"
+          codesign --verify --deep --strict --verbose=2 "${helper}"
+          codesign -d --verbose=4 "${helper}" 2>&1 \
+            | grep -Fq 'Identifier=com.injaneity.pi-computer-use'
+          codesign -d --verbose=4 "${helper}" 2>&1 \
+            | grep -Fq "TeamIdentifier=${APPLE_TEAM_ID}"
+          codesign -d --verbose=4 "${helper}" 2>&1 | grep -Eq 'flags=.*runtime'
+          codesign -d --verbose=4 "${helper}" 2>&1 | grep -Fq 'Authority=Developer ID Application:'
+          codesign -d --verbose=4 "${helper}" 2>&1 | grep -Fq 'Timestamp='
+          helper_requirement="$(codesign -dr - "${helper}" 2>&1)"
+          grep -Fq 'identifier "com.injaneity.pi-computer-use"' <<<"${helper_requirement}"
+          ! grep -Fq 'cdhash H' <<<"${helper_requirement}"
           requirement="$(codesign -dr - "${runtime}" 2>&1)"
           grep -Fq 'identifier "com.shejane.runtime"' <<<"${requirement}"
           ! grep -Fq 'cdhash H' <<<"${requirement}"

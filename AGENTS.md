@@ -73,6 +73,7 @@ make test-contract
 
 - Public Client releases must fail closed unless all Developer ID and notarization secrets are present; never publish an ad-hoc fallback.
 - The nested Runtime must keep signing identifier `com.shejane.runtime`, use the Client's Apple Team ID, and have a certificate-based designated requirement rather than a version-specific `cdhash` requirement.
+- Native executables needed by fixed plugins must remain outside immutable `.shejane-plugin` archives so the final app signer can discover them. Verify every nested helper has Developer ID, secure timestamp, Hardened Runtime, and the expected stable identifier before notarization.
 - Keep `.p12` and `.p8` material only in GitHub Actions secrets and runner-private temporary files. Never commit, log, or pass their contents through Runtime or Client configuration.
 
 ## Frontend Rules
