@@ -1125,7 +1125,7 @@ jobs:
             -s -k "${keychain_password}" "${keychain}"
           security list-keychains -d user -s "${keychain}"
           identity="$(security find-identity -v -p codesigning "${keychain}" \
-            | sed -n 's/.*"\(Developer ID Application:[^"]*\)".*/\1/p' \
+            | sed -n 's/.*"Developer ID Application: \([^"]*\)".*/\1/p' \
             | head -1)"
           test -n "${identity}" || { echo "Developer ID Application identity is unavailable" >&2; exit 1; }
           rm -f "${certificate}"

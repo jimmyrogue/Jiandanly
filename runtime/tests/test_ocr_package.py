@@ -289,6 +289,8 @@ def test_release_requires_stable_developer_id_signature() -> None:
     assert "codesign -dr -" in workflow
     assert "Signature=adhoc" not in workflow
     assert "SHEJANE_CODESIGN_IDENTITY=-" not in workflow
+    assert 'Developer ID Application: \\([^\"]*\\)' in workflow
+    assert '\\(Developer ID Application:[^\"]*\\)' not in workflow
     assert "sign: ./electron/macos-sign.cjs" in builder
 
 
