@@ -280,6 +280,60 @@ async def test_build_agent_injects_runtime_owned_plugin_resources(
     }
 
 
+async def test_build_agent_normalizes_workspace_for_computer_use_plugin(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from langchain_core.tools import tool
+
+    import shejane_runtime.agent.builder as builder_module
+    from shejane_runtime.agent.builder import build_agent, open_checkpointer
+    from shejane_runtime.agent.context_builder import RuntimeContext
+
+    @tool("plugin.test.computer-use")
+    async def plugin_tool() -> str:
+        """Test Computer Use plugin tool."""
+        return "ok"
+
+    monkeypatch.setattr(builder_module, "create_deep_agent", lambda **_kwargs: object())
+    monkeypatch.setattr(
+        builder_module,
+        "build_plugin_tool",
+        lambda _action, **_kwargs: plugin_tool,
+    )
+    settings = reset_settings_for_tests(data_dir=tmp_path, SHEJANE_FAKE_LLM=True)
+    store = await LocalStore.open(tmp_path / "store.db")
+    saver, stack = await open_checkpointer(settings)
+    lease = SimpleNamespace(
+        actions=(
+            SimpleNamespace(
+                execution_kind="builtin",
+                execution_handler="computer_use",
+                package_root=tmp_path,
+                action_id="computer-use.test",
+            ),
+        ),
+        action_catalog_hash="computer-use-catalog",
+    )
+    try:
+        agent = await build_agent(
+            store=store,
+            checkpointer=saver,
+            workspace_root=str(tmp_path),
+            run_id="run_computer_use",
+            settings=settings,
+            mcp_enabled=False,
+            plugin_lease=lease,
+            resource_stack=stack,
+            runtime_context=RuntimeContext(run_id="run_computer_use", store=store),
+        )
+    finally:
+        await store.close()
+        await stack.aclose()
+
+    assert agent is not None
+
+
 async def test_cached_definition_keeps_mcp_implementations_attempt_local(
     tmp_path: Path,
     monkeypatch,

@@ -1194,7 +1194,7 @@ async def build_agent(
             if handler == "computer_use":
                 service: ComputerUseService = ComputerUseService(
                     action.package_root,
-                    workspace_root=workspace_root or settings.data_dir,
+                    workspace_root=Path(workspace_root) if workspace_root else settings.data_dir,
                 )
             elif handler == "browser_qa":
                 if len(action.runtime_assets) != 1:
