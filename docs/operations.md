@@ -408,7 +408,10 @@ macOS 正式分发必须配置以下全部 GitHub Actions secrets：
 - `APPLE_API_KEY_ID`、`APPLE_API_ISSUER`、`APPLE_TEAM_ID`。
 
 macOS 发布缺少任一凭据都会 fail closed，不再生成 ad-hoc 正式产物。CI 把 `.p8` base64
-还原到 runner 私有临时文件，公证结束后删除。发布 job 会验证 `.app` 与 DMG 的 staple ticket、
+还原到 runner 私有临时文件，公证结束后删除。Electron Builder 完成 Developer ID 签名后，
+`client/electron/macos-notarize.cjs` 只提交一次安装包并记录 Submission ID；Apple 状态查询遇到
+`NSURLErrorDomain -1001/-1005/-1009` 等临时网络错误时继续查询同一 submission，不会重复上传。
+成功后先 staple `.app`，再生成 DMG/ZIP。发布 job 会验证 `.app` 与 DMG 的 staple ticket、
 Gatekeeper、Hardened Runtime、secure timestamp 和 Developer ID；内置 Runtime 还必须使用稳定
 identifier `com.shejane.runtime`、相同 Team ID，且 designated requirement 不能退化为单版本
 `cdhash`。这使钥匙串可把“始终允许”授权继承给同一团队签发的后续版本。配置依据见

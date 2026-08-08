@@ -1,5 +1,6 @@
 const { signAsync } = require('@electron/osx-sign')
 const { join, resolve } = require('node:path')
+const macosNotarize = require('./macos-notarize.cjs')
 
 const RUNTIME_SIGNING_IDENTIFIER = 'com.shejane.runtime'
 
@@ -32,9 +33,13 @@ function withStableRuntimeIdentifier(options) {
 async function macosSign(options) {
   const signedOptions = withStableRuntimeIdentifier(options)
   let lastError
+  let result
+  let signed = false
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
-      return await signAsync(signedOptions)
+      result = await signAsync(signedOptions)
+      signed = true
+      break
     } catch (error) {
       lastError = error
       if (attempt < 3) {
@@ -42,7 +47,9 @@ async function macosSign(options) {
       }
     }
   }
-  throw lastError
+  if (!signed) throw lastError
+  await macosNotarize(options.app)
+  return result
 }
 
 macosSign.RUNTIME_SIGNING_IDENTIFIER = RUNTIME_SIGNING_IDENTIFIER
