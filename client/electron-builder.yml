@@ -60,6 +60,9 @@ mac:
   # entitlements: build/entitlements.mac.plist
   # entitlementsInherit: build/entitlements.mac.inherit.plist
 
+dmg:
+  sign: true
+
 win:
   # electron-builder generates the .ico from the 1024px PNG.
   icon: electron/assets/app-icon.png

@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
 import { describe, expect, it, vi } from 'vitest'
 
 import artifactHook from './macos-notarize-artifact.cjs'
@@ -25,6 +28,18 @@ describe('macOS DMG notarization', () => {
       `${event.file}.blockmap`,
     )
     expect(event.updateInfo).toEqual({ size: 42, sha512: 'stapled-dmg-sha512' })
+    expect(notarize.mock.invocationCallOrder[0]).toBeLessThan(
+      buildBlockMap.mock.invocationCallOrder[0],
+    )
+  })
+
+  it('enables electron-builder Developer ID signing for the DMG', () => {
+    const config = readFileSync(
+      resolve(process.cwd(), 'electron-builder.yml'),
+      'utf8',
+    )
+
+    expect(config).toContain('\ndmg:\n  sign: true\n')
   })
 
   it('ignores non-DMG artifacts', async () => {
