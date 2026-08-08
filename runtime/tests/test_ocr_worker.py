@@ -92,7 +92,7 @@ pathlib.Path(sys.argv[2]).write_text(json.dumps(response), encoding="utf-8")
     sbom.write_text("{}", encoding="utf-8")
     return RuntimeAssetHandle(
         asset_id="org.rapidocr.runtime",
-        version="3.9.1+ppocrv6-small.2",
+        version="3.9.1+ppocrv6-small.3",
         platform="darwin/arm64",
         digest="sha256:" + "a" * 64,
         root=root,
@@ -116,7 +116,7 @@ def test_windows_ocr_executor_selects_native_worker_entrypoint(tmp_path: Path) -
     sbom.write_text("{}", encoding="utf-8")
     asset = RuntimeAssetHandle(
         asset_id="org.rapidocr.runtime",
-        version="3.9.1+ppocrv6-small.2",
+        version="3.9.1+ppocrv6-small.3",
         platform="windows/amd64",
         digest="sha256:" + "a" * 64,
         root=asset_root,
@@ -291,7 +291,7 @@ async def test_ocr_runtime_tool_e2e_persists_text_and_json_artifacts(tmp_path: P
     assert result["provenance"]["runtime_assets"] == [
         {
             "id": "org.rapidocr.runtime",
-            "version": "3.9.1+ppocrv6-small.2",
+            "version": "3.9.1+ppocrv6-small.3",
             "digest": "sha256:" + "a" * 64,
             "platform": "darwin/arm64",
         }

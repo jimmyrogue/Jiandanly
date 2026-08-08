@@ -15,8 +15,8 @@ from pathlib import Path
 from shejane_runtime.plugins.runtime_assets import RuntimeAssetStore
 
 BASE_ASSET_VERSION = "3.9.1+ppocrv6-small.1"
-ASSET_VERSION = "3.9.1+ppocrv6-small.2"
-WORKER_COMPONENT_VERSION = "0.1.4"
+ASSET_VERSION = "3.9.1+ppocrv6-small.3"
+WORKER_COMPONENT_VERSION = "0.1.5"
 PLATFORMS = ("darwin/arm64", "windows/amd64")
 
 
@@ -46,7 +46,9 @@ def main() -> None:
             parser.error("--base-asset identity is incompatible")
         stage = work / "stage"
         shutil.copytree(installed.root, stage, symlinks=True)
-        shutil.copytree(worker, stage / "payload" / "worker", symlinks=True)
+        staged_worker = stage / "payload" / "worker"
+        shutil.copytree(worker, staged_worker, symlinks=True)
+        normalize_python_library(staged_worker / "_internal" / "base_library.zip")
 
         metadata = stage / ".shejane-runtime-asset"
         manifest_path = metadata / "asset.json"
@@ -60,7 +62,7 @@ def main() -> None:
             json.dumps(manifest, sort_keys=True, separators=(",", ":")),
             encoding="utf-8",
         )
-        worker_digest = tree_digest(worker)
+        worker_digest = tree_digest(staged_worker)
         update_sbom(stage, manifest, worker_digest, args.platform, parser)
         licenses = stage / "licenses"
         licenses.mkdir(exist_ok=True)
@@ -189,6 +191,28 @@ def tree_digest(root: Path) -> str:
                 for chunk in iter(lambda: source.read(1024 * 1024), b""):
                     digest.update(chunk)
     return "sha256:" + digest.hexdigest()
+
+
+def normalize_python_library(path: Path) -> None:
+    if not path.is_file():
+        return
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    try:
+        with zipfile.ZipFile(path) as source:
+            entries = sorted(
+                ((item.filename, source.read(item)) for item in source.infolist()),
+                key=lambda item: item[0],
+            )
+        with zipfile.ZipFile(temporary, "w") as target:
+            for name, content in entries:
+                info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+                info.compress_type = zipfile.ZIP_STORED
+                info.create_system = 3
+                info.external_attr = (stat.S_IFREG | 0o600) << 16
+                target.writestr(info, content)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def pack_asset(source: Path, output: Path) -> None:

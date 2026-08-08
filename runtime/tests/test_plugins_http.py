@@ -103,7 +103,7 @@ def _pack_ocr_builtin(
     digest: str,
     *,
     version: str = OCR_PLUGIN_VERSION,
-    asset_version: str = "3.9.1+ppocrv6-small.2",
+    asset_version: str = "3.9.1+ppocrv6-small.3",
 ) -> None:
     manifest = {
         "schema_version": 1,
@@ -706,7 +706,7 @@ def test_rebuilt_fixed_package_upgrades_existing_runtime_data(
         (old_browser_asset, "org.shejane.browser-qa.runtime", "1.61.1+chromium1228.2"),
         (new_browser_asset, "org.shejane.browser-qa.runtime", "1.61.1+chromium1228.3"),
         (old_ocr_asset, "org.rapidocr.runtime", "3.9.1+ppocrv6-small.1"),
-        (new_ocr_asset, "org.rapidocr.runtime", "3.9.1+ppocrv6-small.2"),
+        (new_ocr_asset, "org.rapidocr.runtime", "3.9.1+ppocrv6-small.3"),
     ):
         _pack_runtime_asset(asset, asset_id=asset_id, version=version, platform="darwin/arm64")
 
@@ -870,7 +870,7 @@ def test_ocr_asset_and_plugin_are_runtime_managed_and_cannot_be_removed(
     _pack_runtime_asset(
         asset,
         asset_id="org.rapidocr.runtime",
-        version="3.9.1+ppocrv6-small.2",
+        version="3.9.1+ppocrv6-small.3",
         platform="darwin/arm64",
     )
     digest = (
@@ -904,7 +904,7 @@ def test_ocr_asset_and_plugin_are_runtime_managed_and_cannot_be_removed(
         with pytest.raises(InvalidPluginPackage, match="not installed"):
             RuntimeAssetStore(settings.data_dir).resolve(
                 asset_id="org.rapidocr.runtime",
-                version="3.9.1+ppocrv6-small.2",
+                version="3.9.1+ppocrv6-small.3",
                 platform="darwin/arm64",
                 digest=digest,
             )

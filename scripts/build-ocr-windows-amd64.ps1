@@ -22,7 +22,7 @@ $firstAsset = Join-Path $workRoot "rapidocr-runtime-windows-amd64-a.shejane-runt
 $secondAsset = Join-Path $workRoot "rapidocr-runtime-windows-amd64-b.shejane-runtime-asset"
 $finalAsset = Join-Path $workRoot "rapidocr-runtime-windows-amd64-final.shejane-runtime-asset"
 $worker = Join-Path $workRoot "ocr-worker"
-$plugin = Join-Path $workRoot "ocr-0.1.4-windows-amd64.shejane-plugin"
+$plugin = Join-Path $workRoot "ocr-0.1.5-windows-amd64.shejane-plugin"
 
 Push-Location $repoRoot
 try {
@@ -84,7 +84,7 @@ try {
         Join-Path $OutputDirectory "rapidocr-runtime-3.9.1-windows-amd64.shejane-runtime-asset"
     )
     Copy-Item $plugin (
-        Join-Path $OutputDirectory "ocr-0.1.4-windows-amd64.shejane-plugin"
+        Join-Path $OutputDirectory "ocr-0.1.5-windows-amd64.shejane-plugin"
     )
 }
 finally {

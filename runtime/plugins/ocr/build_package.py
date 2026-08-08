@@ -19,7 +19,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--platform", choices=PLATFORMS, required=True)
     parser.add_argument("--runtime-asset-digest", required=True)
-    parser.add_argument("--version", default="0.1.4")
+    parser.add_argument("--version", default="0.1.5")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", args.runtime_asset_digest):

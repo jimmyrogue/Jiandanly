@@ -22,10 +22,10 @@ ASSET_BUILDER = ROOT / "build_runtime_asset.py"
 
 
 def test_runtime_accepts_only_the_current_ocr_package_version() -> None:
-    assert OCR_PLUGIN_VERSION == "0.1.4"
+    assert OCR_PLUGIN_VERSION == "0.1.5"
     assert is_allowed_ocr_package(
         plugin_id="org.shejane.ocr",
-        version="0.1.4",
+        version="0.1.5",
         handler="ocr",
     )
     assert not is_allowed_ocr_package(
@@ -78,7 +78,7 @@ def test_ocr_package_is_deterministic_and_metadata_only(
     extracted = tmp_path / "extracted"
     extract_plugin_archive(outputs[0], extracted)
     manifest = load_plugin_manifest(extracted)
-    assert manifest.version == "0.1.4"
+    assert manifest.version == "0.1.5"
     assert manifest.runtime.execution.platforms == [target_platform]
     assert not (extracted / "payload").exists()
 
@@ -146,16 +146,25 @@ def test_ocr_runtime_asset_owns_worker_payload(
             ),
         )
         archive.writestr(f"payload/bin/{engine}", b"engine")
-    worker_root = tmp_path / "worker"
-    worker_root.mkdir()
-    (worker_root / worker).write_bytes(b"worker")
-    (worker_root / "_internal").mkdir()
-    (worker_root / "_internal/runtime").write_bytes(b"python")
+    worker_roots = [tmp_path / "worker-first", tmp_path / "worker-second"]
+    for worker_root, names in zip(
+        worker_roots,
+        [("a.pyc", "b.pyc"), ("b.pyc", "a.pyc")],
+        strict=True,
+    ):
+        worker_root.mkdir()
+        (worker_root / worker).write_bytes(b"worker")
+        internal = worker_root / "_internal"
+        internal.mkdir()
+        (internal / "runtime").write_bytes(b"python")
+        with zipfile.ZipFile(internal / "base_library.zip", "w") as archive:
+            for name in names:
+                archive.writestr(name, name.encode())
     outputs = [
         tmp_path / "first.shejane-runtime-asset",
         tmp_path / "second.shejane-runtime-asset",
     ]
-    for output in outputs:
+    for output, worker_root in zip(outputs, worker_roots, strict=True):
         subprocess.run(
             [
                 sys.executable,
@@ -176,14 +185,14 @@ def test_ocr_runtime_asset_owns_worker_payload(
     installed = RuntimeAssetStore(tmp_path / "asset-store").install(
         outputs[0], target_platform=target_platform
     )
-    assert installed.version == "3.9.1+ppocrv6-small.2"
+    assert installed.version == "3.9.1+ppocrv6-small.3"
     assert installed.license == "Apache-2.0 AND AGPL-3.0-only"
     assert (installed.payload / "bin" / engine).read_bytes() == b"engine"
     assert (installed.payload / "worker" / worker).read_bytes() == b"worker"
     metadata = installed.root / ".shejane-runtime-asset"
     sbom = json.loads((metadata / "sbom.spdx.json").read_text(encoding="utf-8"))
     worker_package = next(item for item in sbom["packages"] if item["name"] == "SheJane OCR Worker")
-    assert worker_package["versionInfo"] == "0.1.4"
+    assert worker_package["versionInfo"] == "0.1.5"
     assert worker_package["licenseDeclared"] == "AGPL-3.0-only"
     assert (installed.root / "licenses" / "LICENSE.shejane-ocr-worker").is_file()
 
@@ -255,7 +264,7 @@ def test_release_does_not_package_builtin_ocr_as_a_linux_worker() -> None:
     )
 
     assert "ocr-0.1.0-" not in workflow
-    assert "ocr-0.1.4-linux-arm64.shejane-plugin" not in workflow
+    assert "ocr-0.1.5-linux-arm64.shejane-plugin" not in workflow
 
 
 def test_release_publishes_browser_and_ocr_assets_outside_installers() -> None:
@@ -335,7 +344,7 @@ def test_ocr_distribution_version_is_aligned() -> None:
         "scripts/dev.sh",
     ):
         content = (REPO_ROOT / relative).read_text(encoding="utf-8")
-        assert "ocr-0.1.4" in content, relative
+        assert "ocr-0.1.5" in content, relative
         assert "ocr-0.1.3" not in content, relative
 
 

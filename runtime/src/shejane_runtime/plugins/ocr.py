@@ -10,7 +10,7 @@ from .platforms import prepare_managed_worker_entrypoint
 from .runtime_assets import RuntimeAssetHandle
 
 OCR_PLUGIN_ID = "org.shejane.ocr"
-OCR_PLUGIN_VERSION = "0.1.4"
+OCR_PLUGIN_VERSION = "0.1.5"
 
 
 def is_allowed_ocr_package(*, plugin_id: str, version: str, handler: str) -> bool:
