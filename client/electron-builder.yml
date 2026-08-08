@@ -53,7 +53,7 @@ mac:
     - from: electron/srt-launcher.mjs
       to: sandbox/srt-launcher.mjs
   hardenedRuntime: true
-  # macos-sign.cjs runs the resilient submit/poll/staple flow after signing.
+  # macos-sign.cjs runs the resilient app submit/poll/staple flow after signing.
   notarize: false
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.inherit.plist
@@ -88,3 +88,7 @@ publish:
   provider: github
   owner: jimmyrogue
   repo: SheJane
+
+# Notarize/staple the completed DMG, then replace its blockmap and updateInfo
+# before electron-builder writes latest-mac.yml.
+artifactBuildCompleted: ./electron/macos-notarize-artifact.cjs

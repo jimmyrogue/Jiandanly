@@ -1,7 +1,7 @@
 const { execFile } = require('node:child_process')
 const { mkdtemp, rm } = require('node:fs/promises')
 const { tmpdir } = require('node:os')
-const { basename, dirname, join } = require('node:path')
+const { basename, dirname, extname, join } = require('node:path')
 const { promisify } = require('node:util')
 
 const execFileAsync = promisify(execFile)
@@ -135,18 +135,25 @@ async function macosNotarize(appPath) {
     console.info('Skipped macOS notarization because Apple API credentials are unavailable')
     return
   }
-  const temporaryDirectory = await mkdtemp(join(tmpdir(), 'shejane-notarize-'))
-  const archivePath = join(temporaryDirectory, `${basename(appPath)}.zip`)
+  const isAppBundle = extname(appPath) === '.app'
+  const temporaryDirectory = isAppBundle
+    ? await mkdtemp(join(tmpdir(), 'shejane-notarize-'))
+    : null
+  const submissionPath = temporaryDirectory
+    ? join(temporaryDirectory, `${basename(appPath)}.zip`)
+    : appPath
   try {
-    await execFileAsync('ditto', [
-      '-c',
-      '-k',
-      '--sequesterRsrc',
-      '--keepParent',
-      basename(appPath),
-      archivePath,
-    ], { cwd: dirname(appPath) })
-    await notarizeSubmission(archivePath, {
+    if (temporaryDirectory) {
+      await execFileAsync('ditto', [
+        '-c',
+        '-k',
+        '--sequesterRsrc',
+        '--keepParent',
+        basename(appPath),
+        submissionPath,
+      ], { cwd: dirname(appPath) })
+    }
+    await notarizeSubmission(submissionPath, {
       authorizationArgs,
       runNotarytool,
       timeoutMs: Number(process.env.SHEJANE_NOTARIZATION_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS,
@@ -154,7 +161,9 @@ async function macosNotarize(appPath) {
     await stapleApp(appPath)
     console.info(`Apple notarization ticket stapled: ${appPath}`)
   } finally {
-    await rm(temporaryDirectory, { recursive: true, force: true })
+    if (temporaryDirectory) {
+      await rm(temporaryDirectory, { recursive: true, force: true })
+    }
   }
 }
 
