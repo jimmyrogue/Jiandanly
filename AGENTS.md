@@ -31,22 +31,32 @@ See CLAUDE.md for the architecture map and critical invariants. Use the canonica
 
 ## Commands
 
-Use these before handing work back:
+Run before handing work back:
 
 ```bash
-make test
+make ci          # everything CI runs locally: lint + test + build + test-e2e
 make build
 git diff --check
 ```
 
-Useful focused checks:
+Focused checks by fault domain:
 
 ```bash
-make test-client
-make test-runtime
-make test-runtime-sdk
-make test-contract
+make test-client         # Vitest (pnpm --filter @shejane/client test --run)
+make test-runtime        # pytest (cd runtime && uv run python -m pytest)
+make test-runtime-sdk    # SDK Vitest (pnpm --filter @shejane/runtime-sdk test)
+make test-contract       # real Runtime HTTP/SSE ↔ SDK, no Electron
+make eval-gate           # deterministic Agent outcome gate (CI + releases)
+make test-e2e-real MODEL=local:<connection>:<model>   # real BYOK LLM; manual/release gate only
 ```
+
+Gotchas an agent will otherwise get wrong:
+
+- **Schema drift**: editing `runtime/src/shejane_runtime/api_schemas.py` or a handler's `response_model=` requires `make schemas` and committing `runtime/sdk/openapi.json` + `runtime/sdk/src/generated.ts`. The CI lint job fails on drift. Never hand-edit those two files.
+- **Stale Runtime**: after Python edits, restart with `make restart-runtime`, not `pkill` — Uvicorn traps SIGTERM and can leave stale code running. `make dev` always hard-restarts too (opt out: `SHEJANE_DEV_REUSE=1`).
+- **`make dev-client` alone** needs `SHEJANE_RUNTIME_URL` and `SHEJANE_RUNTIME_TOKEN` set; `make dev` wires everything itself.
+- **`make package-runtime`** must run on the OS/arch where the frozen Runtime will run — PyInstaller cannot cross-compile (output in `runtime/dist/shejane-runtime/`).
+- First stop when the local stack misbehaves: `make doctor`.
 
 ## Environment And Secrets
 
@@ -113,4 +123,3 @@ Add or update tests when touching:
 - Do not commit or reset unless the user asks.
 - Do not check in build output from `client/dist`.
 - Prefer `rg` and `rg --files` for repository searches.
-- Use `apply_patch` for manual edits.
