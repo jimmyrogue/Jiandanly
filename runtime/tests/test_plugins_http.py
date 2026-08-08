@@ -587,6 +587,7 @@ def test_browser_qa_is_runtime_managed_and_cannot_be_removed(
                 "plugin_id": plugin["id"],
                 "version": plugin["version"],
                 "digest": plugin["digest"],
+                "required": True,
                 "action_catalog_hash": plugin_action_catalog_hash(
                     manifest, plugin_digest=plugin["digest"]
                 ),
@@ -914,6 +915,7 @@ def test_ocr_asset_and_plugin_are_runtime_managed_and_cannot_be_removed(
                 "plugin_id": plugin["id"],
                 "version": plugin["version"],
                 "digest": plugin["digest"],
+                "required": True,
                 "action_catalog_hash": plugin_action_catalog_hash(
                     manifest, plugin_digest=plugin["digest"]
                 ),
@@ -1649,3 +1651,74 @@ def test_signed_install_uses_deployment_trust_store_and_rejects_revoked_key(
     )
     assert rejected.status_code == 409
     assert rejected.json()["detail"]["code"] == "plugin_signer_revoked"
+
+
+def test_missing_fixed_capability_package_disables_stale_installation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """L1: when a fixed-capability package is not provided at startup, any
+    previously-installed `runtime_builtin` installation must be disabled so it
+    cannot be bound into unrelated runs."""
+    asset = tmp_path / "rapidocr.shejane-runtime-asset"
+    _pack_runtime_asset(
+        asset,
+        asset_id="org.rapidocr.runtime",
+        version="3.9.1+ppocrv6-small.3",
+        platform="darwin/arm64",
+    )
+    digest = (
+        RuntimeAssetStore(tmp_path / "asset-store")
+        .install(asset, target_platform="darwin/arm64")
+        .digest
+    )
+    package = tmp_path / "ocr.shejane-plugin"
+    _pack_ocr_builtin(package, digest)
+
+    for target in (
+        "shejane_runtime.server.current_managed_worker_platform",
+        "shejane_runtime.plugins.registry.current_managed_worker_platform",
+        "shejane_runtime.plugins.catalog.current_managed_worker_platform",
+    ):
+        monkeypatch.setattr(target, lambda: "darwin/arm64")
+
+    data_dir = tmp_path / "runtime"
+
+    # First boot: OCR package provided -> installed.  Enable it explicitly
+    # (fixed capabilities install disabled by default), then confirm enabled.
+    with_ocr = reset_settings_for_tests(
+        SHEJANE_RUNTIME_TOKEN="tok",
+        data_dir=data_dir,
+        computer_use_package=None,
+        ocr_runtime_asset=asset,
+        ocr_package=package,
+    )
+    with TestClient(create_app(with_ocr)) as client:
+        plugins = client.get("/v1/plugins", headers=AUTH).json()["plugins"]
+        ocr = next(plugin for plugin in plugins if plugin["id"] == "org.shejane.ocr")
+        assert ocr["enabled"] is False
+        enable = client.post(
+            "/v1/commands",
+            headers=AUTH,
+            json={
+                "type": "plugin.enable",
+                "command_id": "cmd_enable_ocr",
+                "plugin_id": "org.shejane.ocr",
+                "expected_digest": ocr["digest"],
+            },
+        )
+        assert enable.status_code == 200, enable.text
+        plugins = client.get("/v1/plugins", headers=AUTH).json()["plugins"]
+        ocr = next(plugin for plugin in plugins if plugin["id"] == "org.shejane.ocr")
+        assert ocr["enabled"] is True
+
+    # Second boot: OCR package not provided -> stale installation disabled.
+    without_ocr = reset_settings_for_tests(
+        SHEJANE_RUNTIME_TOKEN="tok",
+        data_dir=data_dir,
+        computer_use_package=None,
+    )
+    with TestClient(create_app(without_ocr)) as client:
+        plugins = client.get("/v1/plugins", headers=AUTH).json()["plugins"]
+        ocr = next(plugin for plugin in plugins if plugin["id"] == "org.shejane.ocr")
+        assert ocr["enabled"] is False

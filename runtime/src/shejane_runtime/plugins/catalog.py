@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import shutil
 import threading
 from collections.abc import AsyncIterator, Mapping
@@ -31,6 +32,8 @@ from .runtime_assets import (
     RuntimeAssetHandle,
     RuntimeAssetResolver,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class PluginCatalogError(RuntimeError):
@@ -421,10 +424,17 @@ class PluginCatalog:
                     or is_allowed_browser_qa_package(**identity)
                     or is_allowed_ocr_package(**identity)
                 ):
-                    raise PluginCatalogError(
-                        "plugin_version_unavailable",
-                        f"plugin {binding['plugin_id']} is not an allowlisted built-in package",
+                    if binding.get("required"):
+                        raise PluginCatalogError(
+                            "plugin_version_unavailable",
+                            f"plugin {binding['plugin_id']} is not an allowlisted built-in package",
+                        )
+                    logger.warning(
+                        "Skipping non-required built-in plugin %s v%s: not allowlisted",
+                        binding["plugin_id"],
+                        binding["version"],
                     )
+                    continue
                 execution_platform = current_managed_worker_platform()
                 if execution_platform is None or execution["platforms"] != [execution_platform]:
                     raise PluginCatalogError(
@@ -539,7 +549,6 @@ class PluginCatalog:
                     ),
                 }
             )
-
         canonical = json.dumps(
             {"protocol": "plugin-catalog-v1", "bindings": catalog_bindings},
             ensure_ascii=False,

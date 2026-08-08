@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import shutil
 import tempfile
@@ -39,6 +40,10 @@ from .platforms import (
 from .policy import PluginTrustError, verify_trusted_package
 from .runtime_assets import RuntimeAssetStore
 from .sandbox_runtime import managed_worker_release_gate
+
+logger = logging.getLogger(__name__)
+
+_BUILTIN_FIXED_PLUGIN_IDS = frozenset((COMPUTER_USE_PLUGIN_ID, BROWSER_QA_PLUGIN_ID, OCR_PLUGIN_ID))
 
 
 class PluginRegistryError(RuntimeError):
@@ -191,6 +196,7 @@ class PluginRegistry:
             "plugin_id": record["plugin_id"],
             "version": record["version"],
             "digest": record["digest"],
+            "required": True,
             "action_catalog_hash": plugin_action_catalog_hash(
                 record["manifest"],
                 plugin_digest=record["digest"],
@@ -811,6 +817,28 @@ class PluginRegistry:
             for plugin_id, source in self._fixed_packages.items():
                 if source.is_file():
                     await self._ensure_fixed_plugin(principal_id, plugin_id, source)
+            # Disable any fixed-capability installation whose source package
+            # was not provided during this startup.  Otherwise a stale
+            # (e.g. older-version) built-in stays enabled and gets bound to
+            # every run, where allowlist validation then fails the whole run.
+            for plugin_id in _BUILTIN_FIXED_PLUGIN_IDS:
+                if plugin_id in self._fixed_packages:
+                    continue
+                try:
+                    disabled = await self._store.discard_stale_fixed_capability(
+                        principal_id=principal_id,
+                        plugin_id=plugin_id,
+                    )
+                    if disabled:
+                        logger.warning(
+                            "Fixed capability %s package not available; installation disabled",
+                            plugin_id,
+                        )
+                except Exception:
+                    logger.exception(
+                        "Failed to disable stale fixed capability %s",
+                        plugin_id,
+                    )
             self._fixed_capabilities_ready_for.add(principal_id)
 
     async def _ensure_fixed_plugin(self, principal_id: str, plugin_id: str, source: Path) -> Path:

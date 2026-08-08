@@ -5379,6 +5379,44 @@ class LocalStore:
                     digests.add(digest)
         return digests
 
+    async def discard_stale_fixed_capability(
+        self,
+        *,
+        principal_id: str,
+        plugin_id: str,
+    ) -> bool:
+        """Disable a `runtime_builtin` plugin installation whose source
+        package is no longer available.  Returns `True` when a change
+        was committed.  User-installed plugins are never touched."""
+        async with aiosqlite.connect(str(self._db_path)) as conn:
+            await _configure_connection(conn)
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = await (
+                    await conn.execute(
+                        "SELECT enabled, source FROM plugin_installations "
+                        "WHERE principal_id = ? AND plugin_id = ?",
+                        (principal_id, plugin_id),
+                    )
+                ).fetchone()
+                if row is None or not bool(row["enabled"]):
+                    await conn.rollback()
+                    return False
+                if row["source"] != "runtime_builtin":
+                    await conn.rollback()
+                    return False
+                await conn.execute(
+                    "UPDATE plugin_installations SET enabled = 0, "
+                    "revision = revision + 1, updated_at = ? "
+                    "WHERE principal_id = ? AND plugin_id = ?",
+                    (_now(), principal_id, plugin_id),
+                )
+                await conn.commit()
+                return True
+            except BaseException:
+                await conn.rollback()
+                raise
+
     async def get_plugin_setup_flow(self, *, principal_id: str, plugin_id: str) -> dict[str, Any]:
         row = await (
             await self._conn.execute(

@@ -316,3 +316,68 @@ async def test_catalog_missing_exact_digest_never_falls_back_to_active_version(
             pass
 
     assert raised.value.code == "plugin_version_unavailable"
+
+
+def _builtin_binding(data_dir: Path, *, required: bool) -> dict[str, object]:
+    """Copy the WASI fixture and rewrite it as a non-allowlisted built-in
+    package.  Used to exercise the allowlist branch of `_load_snapshot`
+    without depending on a real fixed-capability payload."""
+    staging = data_dir / "plugins" / "packages" / "builtin-staging"
+    staging.parent.mkdir(parents=True, exist_ok=True)
+    if staging.exists():
+        shutil.rmtree(staging)
+    shutil.copytree(ARCHIVE_FIXTURE, staging)
+    manifest_path = staging / ".shejane-plugin" / "plugin.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["id"] = "org.shejane.not-a-real-builtin"
+    manifest["runtime"]["execution"] = {
+        "kind": "builtin",
+        "handler": "ocr",
+        "platforms": ["darwin/arm64"],
+    }
+    manifest_path.write_text(json.dumps(manifest))
+    digest = canonical_package_digest(staging)
+    package_root = data_dir / "plugins" / "packages" / digest.removeprefix("sha256:")
+    if package_root.exists():
+        shutil.rmtree(package_root)
+    shutil.move(str(staging), package_root)
+    loaded = load_plugin_manifest(package_root).model_dump(mode="json")
+    return {
+        "run_id": "run_catalog",
+        "plugin_id": loaded["id"],
+        "version": loaded["version"],
+        "digest": digest,
+        "selection_source": "enabled",
+        "required": required,
+        "command_id": None,
+        "action_catalog_hash": plugin_action_catalog_hash(
+            loaded,
+            plugin_digest=digest,
+        ),
+    }
+
+
+@pytest.mark.asyncio
+async def test_catalog_skips_non_required_non_allowlisted_builtin(tmp_path: Path) -> None:
+    binding = _builtin_binding(tmp_path, required=False)
+
+    async with PluginCatalog(tmp_path).acquire_snapshot(
+        [binding],
+        execution_context=object(),
+    ) as lease:
+        assert lease.packages == ()
+        assert lease.actions == ()
+
+
+@pytest.mark.asyncio
+async def test_catalog_rejects_required_non_allowlisted_builtin(tmp_path: Path) -> None:
+    binding = _builtin_binding(tmp_path, required=True)
+
+    with pytest.raises(PluginCatalogError) as raised:
+        async with PluginCatalog(tmp_path).acquire_snapshot(
+            [binding],
+            execution_context=object(),
+        ):
+            pass
+
+    assert raised.value.code == "plugin_version_unavailable"
