@@ -1,14 +1,19 @@
 import { describe, expect, it } from 'vitest'
+import type { AgentRunEvent } from '@shejane/runtime-sdk'
 import type { LocalThreadSnapshot } from '../../runtime/client'
 import { createTranslator } from '../../shared/i18n/i18n'
-import type { ChatMessage, Conversation } from '../../shared/local-data/types'
+import type { ChatMessage, Conversation, LocalFileRef } from '../../shared/local-data/types'
 import { timelineItem } from './chatStore'
 import { findConversationPendingApproval } from './pendingApproval'
 import {
+  appendLocalDelta,
   applyRunPresentationEvent,
   applySubagentLifecycleEvent,
+  latestRunFailedLabel,
+  processStreamEvent,
   projectLegacyRunPresentation,
   projectRuntimeThread,
+  recordLocalEventCursor,
 } from './runtimeProjection'
 
 describe('Runtime thread projection', () => {
@@ -1064,5 +1069,133 @@ describe('Runtime thread projection', () => {
     expect(projectRuntimeThread(snapshot).messages).toMatchObject([
       { role: 'assistant', content: 'Recovered' },
     ])
+  })
+})
+
+describe('processStreamEvent (merged stream projection)', () => {
+  const t = createTranslator('zh')
+
+  function event(partial: Partial<AgentRunEvent> & { event_type: string }): AgentRunEvent {
+    return {
+      run_id: 'run-stream',
+      ...partial,
+    }
+  }
+
+  function emptyMessage(): ChatMessage {
+    return {
+      id: 'msg-stream',
+      role: 'assistant',
+      content: '',
+      createdAt: '2026-08-04T00:00:00Z',
+      status: 'streaming',
+    }
+  }
+
+  it('accumulates llm.usage tokens and marks the id seen', () => {
+    const message = emptyMessage()
+    const seen = new Set<string>()
+    const cache = new Map<string, Record<string, unknown>>()
+    processStreamEvent(message, event({ event_type: 'llm.usage', id: 'u1', payload: { input_tokens: 10, output_tokens: 20 } }), seen, cache, t)
+    processStreamEvent(message, event({ event_type: 'llm.usage', id: 'u1', payload: { input_tokens: 999, output_tokens: 999 } }), seen, cache, t)
+    expect(message.tokens).toBe(30)
+    expect(seen.has('u1')).toBe(true)
+  })
+
+  it('overrides tokens with the run.completed totals', () => {
+    const message = emptyMessage()
+    message.tokens = 30
+    const seen = new Set<string>()
+    const cache = new Map<string, Record<string, unknown>>()
+    processStreamEvent(message, event({ event_type: 'run.completed', id: 'done', payload: { input_tokens: 100, output_tokens: 40 } }), seen, cache, t)
+    expect(message.tokens).toBe(140)
+  })
+
+  it('records model.selected into message.runMode', () => {
+    const message = emptyMessage()
+    const seen = new Set<string>()
+    const cache = new Map<string, Record<string, unknown>>()
+    processStreamEvent(message, event({ event_type: 'model.selected', payload: { label: 'deepseek-v4-flash', reason: 'catalog' } }), seen, cache, t)
+    expect(message.runMode).toEqual({ resolved: 'deepseek-v4-flash', reason: 'catalog' })
+  })
+
+  it('enriches tool.completed args from the tool.requested cache', () => {
+    const message = emptyMessage()
+    const seen = new Set<string>()
+    const cache = new Map<string, Record<string, unknown>>()
+    processStreamEvent(message, event({ event_type: 'tool.requested', id: 'r1', payload: { tool_call_id: 'call-1', arguments: { path: '/tmp/a.md' } } }), seen, cache, t)
+    processStreamEvent(message, event({ event_type: 'tool.completed', id: 'c1', payload: { tool_call_id: 'call-1' } }), seen, cache, t)
+    const completed = message.agentEvents?.find((item) => item.type === 'tool.completed')
+    expect(completed?.toolDetail?.kind).toBeDefined()
+  })
+
+  it('dedupes replayed events by id without appending the timeline row twice', () => {
+    const message = emptyMessage()
+    const seen = new Set<string>()
+    const cache = new Map<string, Record<string, unknown>>()
+    processStreamEvent(message, event({ event_type: 'tool.completed', id: 'x1', payload: { tool: 'read_file' } }), seen, cache, t)
+    processStreamEvent(message, event({ event_type: 'tool.completed', id: 'x1', payload: { tool: 'read_file' } }), seen, cache, t)
+    expect(message.agentEvents?.filter((item) => item.type === 'tool.completed')).toHaveLength(1)
+  })
+
+  it('calls onOfficeFileOpened once for a fresh office write completion', () => {
+    const message = emptyMessage()
+    const seen = new Set<string>()
+    const cache = new Map<string, Record<string, unknown>>()
+    const opened: LocalFileRef[] = []
+    processStreamEvent(
+      message,
+      event({
+        event_type: 'tool.completed',
+        id: 'office-1',
+        payload: { tool: 'office.update_paragraph', result: { ok: 'true', edited_path: '/tmp/report.docx', kind: 'word' } },
+      }),
+      seen,
+      cache,
+      t,
+      (ref) => opened.push(ref),
+    )
+    expect(opened).toEqual([{ path: '/tmp/report.docx', kind: 'word', name: 'report.docx' }])
+  })
+
+  it('does not fire onOfficeFileOpened for a replayed office completion', () => {
+    const message = emptyMessage()
+    const seen = new Set<string>()
+    const cache = new Map<string, Record<string, unknown>>()
+    const opened: LocalFileRef[] = []
+    const office = event({
+      event_type: 'tool.completed',
+      id: 'office-replay',
+      payload: { tool: 'office.update_paragraph', result: { ok: 'true', edited_path: '/tmp/report.docx', kind: 'word' } },
+    })
+    processStreamEvent(message, office, seen, cache, t, (ref) => opened.push(ref))
+    processStreamEvent(message, office, seen, cache, t, (ref) => opened.push(ref))
+    expect(opened).toHaveLength(1)
+  })
+
+  it('appends the transient delta through appendLocalDelta only once per id', () => {
+    const message = emptyMessage()
+    const seen = new Set<string>()
+    const cache = new Map<string, Record<string, unknown>>()
+    appendLocalDelta(message, 'Hello', event({ event_type: 'llm.delta', id: 'd1' }), seen)
+    appendLocalDelta(message, 'Hello again', event({ event_type: 'llm.delta', id: 'd1' }), seen)
+    expect(message.content).toContain('Hello')
+    expect(message.content).not.toContain('Hello again')
+  })
+
+  it('moves lastEventSeq forward monotonically through recordLocalEventCursor', () => {
+    const message = emptyMessage()
+    recordLocalEventCursor(message, event({ event_type: 'llm.delta', seq: 5 }))
+    recordLocalEventCursor(message, event({ event_type: 'llm.delta', seq: 3 }))
+    expect(message.lastEventSeq).toBe(5)
+  })
+
+  it('latestRunFailedLabel returns the last failure label', () => {
+    const message = emptyMessage()
+    message.agentEvents = [
+      { type: 'tool.completed', label: 'ok' },
+      { type: 'run.failed', label: 'boom' },
+    ]
+    expect(latestRunFailedLabel(message)).toBe('boom')
   })
 })

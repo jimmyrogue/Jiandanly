@@ -4,6 +4,9 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
 import { LocalConversationStore } from './shared/local-data/localConversations'
+import { conversationStoreActions } from './features/app/state/conversationStore'
+import { runtimeStoreActions } from './features/app/state/runtimeStore'
+import { workspaceStoreActions } from './features/app/state/workspaceStore'
 
 function truncatedPermissionSnapshot(input: {
   threadID: string
@@ -102,6 +105,9 @@ describe('desktop shell', () => {
   beforeEach(() => {
     window.localStorage.clear()
     indexedDB = new IDBFactory()
+    conversationStoreActions.resetForTests()
+    runtimeStoreActions.resetForTests()
+    workspaceStoreActions.resetForTests()
     Object.defineProperty(window, 'shejaneClient', {
       configurable: true,
       value: {
