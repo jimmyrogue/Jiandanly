@@ -34,6 +34,7 @@ class _Authorization:
     redirect_uri: str
     expires_at: datetime
     server: asyncio.AbstractServer
+    authorization_url: str
     expiry_task: asyncio.Task[None] | None = None
     work_task: asyncio.Task[None] | None = None
     status: str = "pending"
@@ -66,11 +67,22 @@ class SheJaneAuthorizationManager:
         self._app_version = app_version
         self._ttl_seconds = ttl_seconds
         self._authorizations: dict[str, _Authorization] = {}
+        self._principal_authorizations: dict[str, str] = {}
+        self._principal_locks: dict[str, asyncio.Lock] = {}
 
     async def start(self, principal_id: str) -> dict[str, Any]:
         if not self._cloud_origin:
             raise OfficialServiceUnavailable("official SheJane Cloud origin is not configured")
 
+        lock = self._principal_locks.setdefault(principal_id, asyncio.Lock())
+        async with lock:
+            current_id = self._principal_authorizations.get(principal_id)
+            current = self._authorizations.get(current_id or "")
+            if current is not None and current.status == "pending":
+                return self._start_payload(current_id or "", current)
+            return await self._start_new(principal_id)
+
+    async def _start_new(self, principal_id: str) -> dict[str, Any]:
         authorization_id = f"auth_{uuid.uuid4().hex}"
         state = _base64url(secrets.token_bytes(32))
         verifier = _base64url(secrets.token_bytes(32))
@@ -86,17 +98,6 @@ class SheJaneAuthorizationManager:
         port = int(socket.getsockname()[1])
         redirect_uri = f"http://127.0.0.1:{port}{CALLBACK_PATH}"
         expires_at = datetime.now(UTC) + timedelta(seconds=self._ttl_seconds)
-        authorization = _Authorization(
-            principal_id=principal_id,
-            state=state,
-            verifier=verifier,
-            redirect_uri=redirect_uri,
-            expires_at=expires_at,
-            server=server,
-        )
-        self._authorizations[authorization_id] = authorization
-        authorization.expiry_task = asyncio.create_task(self._expire(authorization_id))
-
         challenge = _base64url(hashlib.sha256(verifier.encode("ascii")).digest())
         authorize_url = f"{self._cloud_origin}/shejane/authorize?" + urlencode(
             {
@@ -111,10 +112,26 @@ class SheJaneAuthorizationManager:
                 "app_version": self._app_version,
             }
         )
+        authorization = _Authorization(
+            principal_id=principal_id,
+            state=state,
+            verifier=verifier,
+            redirect_uri=redirect_uri,
+            expires_at=expires_at,
+            server=server,
+            authorization_url=authorize_url,
+        )
+        self._authorizations[authorization_id] = authorization
+        self._principal_authorizations[principal_id] = authorization_id
+        authorization.expiry_task = asyncio.create_task(self._expire(authorization_id))
+        return self._start_payload(authorization_id, authorization)
+
+    @staticmethod
+    def _start_payload(authorization_id: str, authorization: _Authorization) -> dict[str, Any]:
         return {
             "authorization_id": authorization_id,
-            "authorization_url": authorize_url,
-            "expires_at": expires_at,
+            "authorization_url": authorization.authorization_url,
+            "expires_at": authorization.expires_at,
         }
 
     def status(self, authorization_id: str, principal_id: str) -> dict[str, Any]:
@@ -204,15 +221,25 @@ class SheJaneAuthorizationManager:
             authorization.state = ""
             if authorization.expiry_task is not None:
                 authorization.expiry_task.cancel()
-            if set(values) == {"error", "state"} and values["error"] == "access_denied":
-                authorization.status = "denied"
-                authorization.error_code = "access_denied"
-                authorization.verifier = ""
-                authorization.server.close()
-                await _reply(writer, 200, "Authorization was declined. You can return to SheJane.")
+            if set(values) == {"error", "state"}:
+                if values["error"] == "access_denied":
+                    authorization.status = "denied"
+                    authorization.error_code = "access_denied"
+                    authorization.verifier = ""
+                    authorization.server.close()
+                    await _reply(
+                        writer,
+                        200,
+                        "Authorization was declined. You can return to SheJane.",
+                    )
+                    return
+                await self._fail(authorization, "authorization_failed")
+                await _reply(writer, 400, "Authorization could not be completed.")
                 return
             if set(values) != {"code", "state"} or not values["code"]:
-                raise ValueError
+                await self._fail(authorization, "invalid_callback")
+                await _reply(writer, 400, "Authorization could not be completed.")
+                return
         except (
             ValueError,
             UnicodeDecodeError,

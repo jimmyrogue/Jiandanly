@@ -816,6 +816,134 @@ def test_rebuilt_fixed_package_upgrades_existing_runtime_data(
     ]
 
 
+@pytest.mark.parametrize("invalid_path_kind", ["missing", "directory"])
+def test_invalid_configured_fixed_package_fails_startup_and_preserves_enabled_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    invalid_path_kind: str,
+) -> None:
+    package = tmp_path / "ocr.shejane-plugin"
+    _pack_ocr_builtin(package, "sha256:" + "a" * 64)
+    package_bytes = package.read_bytes()
+    data_dir = tmp_path / "runtime"
+    monkeypatch.setattr(
+        "shejane_runtime.plugins.registry.current_managed_worker_platform",
+        lambda: "darwin/arm64",
+    )
+
+    settings = reset_settings_for_tests(
+        SHEJANE_RUNTIME_TOKEN="tok",
+        data_dir=data_dir,
+        computer_use_package=None,
+        browser_qa_package=None,
+        ocr_package=package,
+    )
+    with TestClient(create_app(settings)) as client:
+        installed = client.get("/v1/plugins", headers=AUTH).json()["plugins"]
+        assert [(item["id"], item["enabled"]) for item in installed] == [("org.shejane.ocr", False)]
+        enable = client.post(
+            "/v1/commands",
+            headers=AUTH,
+            json={
+                "type": "plugin.enable",
+                "command_id": "cmd_enable_ocr_before_missing_path",
+                "plugin_id": "org.shejane.ocr",
+                "expected_digest": installed[0]["digest"],
+            },
+        )
+        assert enable.status_code == 200, enable.text
+
+    package.unlink()
+    if invalid_path_kind == "directory":
+        package.mkdir()
+    missing_settings = reset_settings_for_tests(
+        SHEJANE_RUNTIME_TOKEN="tok",
+        data_dir=data_dir,
+        computer_use_package=None,
+        browser_qa_package=None,
+        ocr_package=package,
+    )
+    with pytest.raises(RuntimeError, match=r"fixed capability package.*regular file"):
+        with TestClient(create_app(missing_settings)):
+            pass
+
+    if invalid_path_kind == "directory":
+        package.rmdir()
+    package.write_bytes(package_bytes)
+    restored_settings = reset_settings_for_tests(
+        SHEJANE_RUNTIME_TOKEN="tok",
+        data_dir=data_dir,
+        computer_use_package=None,
+        browser_qa_package=None,
+        ocr_package=package,
+    )
+    with TestClient(create_app(restored_settings)) as client:
+        restored = client.get("/v1/plugins", headers=AUTH).json()["plugins"]
+        assert [(item["id"], item["version"], item["enabled"]) for item in restored] == [
+            ("org.shejane.ocr", OCR_PLUGIN_VERSION, True)
+        ]
+
+
+def test_failed_stale_fixed_package_disable_fails_startup_and_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = tmp_path / "ocr.shejane-plugin"
+    _pack_ocr_builtin(package, "sha256:" + "a" * 64)
+    data_dir = tmp_path / "runtime"
+    monkeypatch.setattr(
+        "shejane_runtime.plugins.registry.current_managed_worker_platform",
+        lambda: "darwin/arm64",
+    )
+    installed_settings = reset_settings_for_tests(
+        SHEJANE_RUNTIME_TOKEN="tok",
+        data_dir=data_dir,
+        computer_use_package=None,
+        browser_qa_package=None,
+        ocr_package=package,
+    )
+    with TestClient(create_app(installed_settings)) as client:
+        installed = client.get("/v1/plugins", headers=AUTH).json()["plugins"]
+        enable = client.post(
+            "/v1/commands",
+            headers=AUTH,
+            json={
+                "type": "plugin.enable",
+                "command_id": "cmd_enable_ocr_before_failed_cleanup",
+                "plugin_id": "org.shejane.ocr",
+                "expected_digest": installed[0]["digest"],
+            },
+        )
+        assert enable.status_code == 200, enable.text
+
+    original_discard = LocalStore.discard_stale_fixed_capability
+
+    async def fail_ocr_discard(store: LocalStore, *, principal_id: str, plugin_id: str) -> bool:
+        if plugin_id == "org.shejane.ocr":
+            raise RuntimeError("simulated fixed capability cleanup failure")
+        return await original_discard(
+            store,
+            principal_id=principal_id,
+            plugin_id=plugin_id,
+        )
+
+    monkeypatch.setattr(LocalStore, "discard_stale_fixed_capability", fail_ocr_discard)
+    missing_settings = reset_settings_for_tests(
+        SHEJANE_RUNTIME_TOKEN="tok",
+        data_dir=data_dir,
+        computer_use_package=None,
+        browser_qa_package=None,
+        ocr_package=None,
+    )
+    with pytest.raises(RuntimeError, match="simulated fixed capability cleanup failure"):
+        with TestClient(create_app(missing_settings)):
+            pass
+
+    monkeypatch.setattr(LocalStore, "discard_stale_fixed_capability", original_discard)
+    with TestClient(create_app(missing_settings)) as client:
+        retried = client.get("/v1/plugins", headers=AUTH).json()["plugins"]
+        assert [(item["id"], item["enabled"]) for item in retried] == [("org.shejane.ocr", False)]
+
+
 def test_plugin_list_reads_registry_without_activating_fixed_package(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

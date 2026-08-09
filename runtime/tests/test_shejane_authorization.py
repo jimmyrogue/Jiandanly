@@ -5,6 +5,7 @@ import base64
 import hashlib
 import sqlite3
 import time
+from contextlib import asynccontextmanager
 from functools import partial
 from urllib.parse import parse_qs, urlsplit
 
@@ -15,10 +16,35 @@ from fastapi.testclient import TestClient
 
 import shejane_runtime.server as server_module
 import shejane_runtime.shejane_authorization as authorization_module
+import shejane_runtime.store.sqlite as sqlite_store_module
+from shejane_runtime.auth import LOCAL_OWNER_PRINCIPAL_ID
 from shejane_runtime.config import reset_settings_for_tests
 from shejane_runtime.runs import RunCoordinator
 from shejane_runtime.server import create_app
 from shejane_runtime.shejane_authorization import SheJaneAuthorizationManager
+
+
+def _official_chat_models() -> list[dict[str, object]]:
+    return [
+        {
+            "model_id": "official-chat",
+            "display_name": "Official Chat",
+            "source": "discovered",
+            "verification": "unverified",
+            "recommended": True,
+            "recommended_for": ["agent_chat"],
+            "capabilities": [
+                {
+                    "capability": "agent_chat",
+                    "protocol": "openai_chat_completions",
+                    "verification": "unverified",
+                }
+            ],
+            "tool_calling": True,
+            "streaming": True,
+            "image_inputs": False,
+        }
+    ]
 
 
 def test_official_authorization_cleans_up_when_response_validation_fails(
@@ -90,6 +116,89 @@ def test_official_authorization_cleans_up_when_response_validation_fails(
         )
 
     assert connections == []
+    assert credential_vault == {}
+
+
+@pytest.mark.asyncio
+async def test_official_authorization_cleans_completed_keyring_write_after_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credential_vault: dict[str, str] = {}
+    monkeypatch.setattr(
+        keyring,
+        "set_password",
+        lambda _service, account, password: credential_vault.__setitem__(account, password),
+    )
+    monkeypatch.setattr(
+        keyring,
+        "delete_password",
+        lambda _service, account: credential_vault.pop(account, None),
+    )
+    write_started = asyncio.Event()
+    release_write = asyncio.Event()
+    original_set_model_api_key = server_module.set_model_api_key
+
+    async def delayed_write(*args, **kwargs):
+        write_started.set()
+        try:
+            await release_write.wait()
+        except asyncio.CancelledError:
+            await original_set_model_api_key(*args, **kwargs)
+            raise
+        await original_set_model_api_key(*args, **kwargs)
+
+    async def unexpected_catalog(**_kwargs):
+        raise AssertionError("canceled authorization must not refresh the catalog")
+
+    monkeypatch.setattr(server_module, "set_model_api_key", delayed_write)
+    monkeypatch.setattr(server_module, "_refresh_model_service_models", unexpected_catalog)
+    task = asyncio.create_task(
+        server_module._complete_shejane_authorization(
+            object(),
+            LOCAL_OWNER_PRINCIPAL_ID,
+            "canceled-token",
+        )
+    )
+    await write_started.wait()
+    task.cancel()
+    release_write.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert credential_vault == {}
+
+
+@pytest.mark.asyncio
+async def test_official_authorization_cleans_partial_keyring_write_after_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credential_vault: dict[str, str] = {}
+    monkeypatch.setattr(
+        keyring,
+        "set_password",
+        lambda _service, account, password: credential_vault.__setitem__(account, password),
+    )
+    monkeypatch.setattr(
+        keyring,
+        "delete_password",
+        lambda _service, account: credential_vault.pop(account, None),
+    )
+    original_set_model_api_key = server_module.set_model_api_key
+
+    async def failed_write(*args, **kwargs):
+        await original_set_model_api_key(*args, **kwargs)
+        raise server_module.CredentialStoreError("keyring write outcome is uncertain")
+
+    monkeypatch.setattr(server_module, "set_model_api_key", failed_write)
+
+    with pytest.raises(RuntimeError, match="system credential store is unavailable"):
+        await server_module._complete_shejane_authorization(
+            object(),
+            LOCAL_OWNER_PRINCIPAL_ID,
+            "failed-token",
+        )
+
     assert credential_vault == {}
 
 
@@ -178,6 +287,27 @@ async def test_loopback_callback_exchanges_pkce_code_without_exposing_token(monk
     )
     assert query["code_challenge"] == [expected_challenge]
 
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_start_reuses_the_authoritative_pending_flow_for_a_principal() -> None:
+    async def unexpected_complete(_principal_id: str, _token: str) -> dict[str, str]:
+        raise AssertionError("pending authorization must not complete")
+
+    manager = SheJaneAuthorizationManager(
+        cloud_origin="https://cloud.example.test",
+        app_version="1.2.3",
+        complete=unexpected_complete,
+    )
+
+    first, second = await asyncio.gather(
+        manager.start("local:owner"),
+        manager.start("local:owner"),
+    )
+
+    assert second == first
+    assert manager.status(first["authorization_id"], "local:owner")["status"] == "pending"
     await manager.close()
 
 
@@ -529,6 +659,58 @@ async def test_state_mismatch_terminates_authorization_without_exchange(monkeypa
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "callback_query",
+    [
+        "error=server_error",
+        "error=temporarily_unavailable",
+        "error=unknown_error",
+        "code=",
+    ],
+)
+async def test_callback_error_or_empty_code_fails_and_closes_listener(
+    monkeypatch: pytest.MonkeyPatch,
+    callback_query: str,
+) -> None:
+    class UnexpectedClient:
+        def __init__(self, **_kwargs) -> None:
+            raise AssertionError("failed callback must not call Cloud")
+
+    monkeypatch.setattr(authorization_module.httpx, "AsyncClient", UnexpectedClient)
+
+    async def unexpected_complete(_principal_id: str, _token: str) -> dict[str, str]:
+        raise AssertionError("failed callback must not create a connection")
+
+    manager = SheJaneAuthorizationManager(
+        cloud_origin="https://cloud.example.test",
+        app_version="1.2.3",
+        complete=unexpected_complete,
+    )
+    started = await manager.start("local:owner")
+    query = parse_qs(urlsplit(started["authorization_url"]).query)
+    callback = urlsplit(query["redirect_uri"][0])
+    reader, writer = await asyncio.open_connection(callback.hostname, callback.port)
+    writer.write(
+        (
+            f"GET {callback.path}?{callback_query}&state={query['state'][0]} HTTP/1.1\r\n"
+            f"Host: {callback.netloc}\r\nConnection: close\r\n\r\n"
+        ).encode()
+    )
+    await writer.drain()
+    response = await reader.read()
+    writer.close()
+    await writer.wait_closed()
+
+    status = manager.status(started["authorization_id"], "local:owner")
+    assert response.startswith(b"HTTP/1.1 400 Bad Request")
+    assert status["status"] == "failed"
+    assert status["error_code"]
+    with pytest.raises(OSError):
+        await asyncio.open_connection(callback.hostname, callback.port)
+    await manager.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("slow_target_kind", ["same_callback", "browser_favicon"])
 async def test_concurrent_callback_cannot_invalidate_claimed_exchange(
     monkeypatch,
@@ -592,6 +774,506 @@ async def test_concurrent_callback_cannot_invalidate_claimed_exchange(
     assert status["status"] == "succeeded"
     assert exchange_count == 1
     await manager.close()
+
+
+def test_official_reauthorization_replaces_connection_and_moves_bindings(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = reset_settings_for_tests(
+        SHEJANE_RUNTIME_TOKEN="tok",
+        data_dir=tmp_path,
+    )
+    monkeypatch.setattr(RunCoordinator, "start", lambda _self: None)
+    credential_vault: dict[str, str] = {}
+    monkeypatch.setattr(
+        keyring,
+        "get_password",
+        lambda _service, account: credential_vault.get(account),
+    )
+    monkeypatch.setattr(
+        keyring,
+        "set_password",
+        lambda _service, account, password: credential_vault.__setitem__(account, password),
+    )
+    monkeypatch.setattr(
+        keyring,
+        "delete_password",
+        lambda _service, account: credential_vault.pop(account, None),
+    )
+
+    async def catalog(**_kwargs):
+        return [
+            {
+                "model_id": "official-image",
+                "display_name": "Official Image",
+                "source": "discovered",
+                "verification": "verified",
+                "recommended": True,
+                "recommended_for": ["image_generation", "image_editing"],
+                "capabilities": [
+                    {
+                        "capability": "image_generation",
+                        "protocol": "openai_images_generations",
+                        "verification": "verified",
+                    },
+                    {
+                        "capability": "image_editing",
+                        "protocol": "openai_images_edits",
+                        "verification": "verified",
+                    },
+                ],
+                "tool_calling": False,
+                "streaming": False,
+                "image_inputs": False,
+            }
+        ], "ready"
+
+    monkeypatch.setattr(server_module, "_refresh_model_service_models", catalog)
+
+    with TestClient(create_app(settings)) as client:
+        first = client.portal.call(
+            partial(
+                server_module._complete_shejane_authorization,
+                client.app,
+                LOCAL_OWNER_PRINCIPAL_ID,
+                "first-token",
+            )
+        )
+        second = client.portal.call(
+            partial(
+                server_module._complete_shejane_authorization,
+                client.app,
+                LOCAL_OWNER_PRINCIPAL_ID,
+                "second-token",
+            )
+        )
+        connections = client.portal.call(
+            partial(
+                client.app.state.store.list_model_connections,
+                principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+            )
+        )
+        bindings = client.portal.call(
+            partial(
+                client.app.state.store.list_model_capability_bindings,
+                principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+            )
+        )
+
+    assert first["id"] != second["id"]
+    assert [connection["id"] for connection in connections] == [second["id"]]
+    assert {binding["connection_id"] for binding in bindings} == {second["id"]}
+    assert {binding["model_id"] for binding in bindings} == {"official-image"}
+    assert list(credential_vault.values()) == ["second-token"]
+
+
+def test_official_reauthorization_retains_last_known_good_catalog_when_refresh_fails(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = reset_settings_for_tests(
+        SHEJANE_RUNTIME_TOKEN="tok",
+        data_dir=tmp_path,
+    )
+    monkeypatch.setattr(RunCoordinator, "start", lambda _self: None)
+    credential_vault: dict[str, str] = {}
+    monkeypatch.setattr(
+        keyring, "get_password", lambda _service, account: credential_vault.get(account)
+    )
+    monkeypatch.setattr(
+        keyring,
+        "set_password",
+        lambda _service, account, password: credential_vault.__setitem__(account, password),
+    )
+    monkeypatch.setattr(
+        keyring,
+        "delete_password",
+        lambda _service, account: credential_vault.pop(account, None),
+    )
+    calls = 0
+    last_known_good = [
+        {
+            "model_id": "official-image",
+            "display_name": "Official Image",
+            "source": "discovered",
+            "verification": "verified",
+            "recommended": True,
+            "recommended_for": ["image_generation"],
+            "capabilities": [
+                {
+                    "capability": "image_generation",
+                    "protocol": "openai_images_generations",
+                    "verification": "verified",
+                }
+            ],
+            "tool_calling": False,
+            "streaming": False,
+            "image_inputs": False,
+        }
+    ]
+
+    async def catalog(**_kwargs):
+        nonlocal calls
+        calls += 1
+        return (last_known_good, "ready") if calls == 1 else ([], "unavailable")
+
+    monkeypatch.setattr(server_module, "_refresh_model_service_models", catalog)
+
+    with TestClient(create_app(settings)) as client:
+        first = client.portal.call(
+            partial(
+                server_module._complete_shejane_authorization,
+                client.app,
+                LOCAL_OWNER_PRINCIPAL_ID,
+                "first-token",
+            )
+        )
+        second = client.portal.call(
+            partial(
+                server_module._complete_shejane_authorization,
+                client.app,
+                LOCAL_OWNER_PRINCIPAL_ID,
+                "second-token",
+            )
+        )
+        bindings = client.portal.call(
+            partial(
+                client.app.state.store.list_model_capability_bindings,
+                principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+            )
+        )
+
+    assert first["models"] == second["models"]
+    assert second["catalog_status"] == "stale"
+    assert {binding["connection_id"] for binding in bindings} == {second["id"]}
+    assert list(credential_vault.values()) == ["second-token"]
+
+
+def test_official_replacement_fences_old_connections_in_deterministic_order(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = reset_settings_for_tests(
+        SHEJANE_RUNTIME_TOKEN="tok",
+        data_dir=tmp_path,
+    )
+    monkeypatch.setattr(RunCoordinator, "start", lambda _self: None)
+    monkeypatch.setattr(keyring, "get_password", lambda _service, _account: "old-token")
+    monkeypatch.setattr(keyring, "set_password", lambda _service, _account, _password: None)
+    monkeypatch.setattr(keyring, "delete_password", lambda _service, _account: None)
+
+    async def catalog(**_kwargs):
+        return [
+            {
+                "model_id": "official-chat",
+                "display_name": "Official Chat",
+                "source": "discovered",
+                "verification": "unverified",
+                "recommended": True,
+                "recommended_for": ["agent_chat"],
+                "capabilities": [
+                    {
+                        "capability": "agent_chat",
+                        "protocol": "openai_chat_completions",
+                        "verification": "unverified",
+                    }
+                ],
+                "tool_calling": True,
+                "streaming": True,
+                "image_inputs": False,
+            }
+        ], "ready"
+
+    monkeypatch.setattr(server_module, "_refresh_model_service_models", catalog)
+    events: list[str] = []
+
+    with TestClient(create_app(settings)) as client:
+        for connection_id in ("conn_z", "conn_a"):
+            client.portal.call(
+                partial(
+                    client.app.state.store.create_model_connection,
+                    principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+                    connection_id=connection_id,
+                    preset_id="shejane-official",
+                    name="Old Official",
+                    region="official",
+                    adapter_id="openai_chat",
+                    base_url="https://app.shejane.com/v1",
+                    requires_api_key=True,
+                    credential_ref=f"keyring:model-service:{connection_id}",
+                    models=[],
+                    catalog_status="ready",
+                )
+            )
+
+        @asynccontextmanager
+        async def mutation(*, principal_id: str, connection_id: str):
+            assert principal_id == LOCAL_OWNER_PRINCIPAL_ID
+            events.append(f"enter:{connection_id}")
+            try:
+                yield
+            finally:
+                events.append(f"exit:{connection_id}")
+
+        monkeypatch.setattr(client.app.state.coordinator, "model_connection_mutation", mutation)
+        client.portal.call(
+            partial(
+                server_module._complete_shejane_authorization,
+                client.app,
+                LOCAL_OWNER_PRINCIPAL_ID,
+                "new-token",
+            )
+        )
+
+    assert events == ["enter:conn_a", "enter:conn_z", "exit:conn_z", "exit:conn_a"]
+
+
+def test_official_replacement_resolves_cancellation_during_commit(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = reset_settings_for_tests(
+        SHEJANE_RUNTIME_TOKEN="tok",
+        data_dir=tmp_path,
+    )
+    monkeypatch.setattr(RunCoordinator, "start", lambda _self: None)
+    credential_vault: dict[str, str] = {}
+    monkeypatch.setattr(
+        keyring, "get_password", lambda _service, account: credential_vault.get(account)
+    )
+    monkeypatch.setattr(
+        keyring,
+        "set_password",
+        lambda _service, account, password: credential_vault.__setitem__(account, password),
+    )
+    monkeypatch.setattr(
+        keyring,
+        "delete_password",
+        lambda _service, account: credential_vault.pop(account, None),
+    )
+
+    async def catalog(**_kwargs):
+        return _official_chat_models(), "ready"
+
+    monkeypatch.setattr(server_module, "_refresh_model_service_models", catalog)
+
+    with TestClient(create_app(settings)) as client:
+        first = client.portal.call(
+            partial(
+                server_module._complete_shejane_authorization,
+                client.app,
+                LOCAL_OWNER_PRINCIPAL_ID,
+                "first-token",
+            )
+        )
+        commit_started = asyncio.Event()
+        release_commit = asyncio.Event()
+        original_commit = sqlite_store_module.aiosqlite.Connection.commit
+
+        async def delayed_commit(connection):
+            commit_started.set()
+            await release_commit.wait()
+            await original_commit(connection)
+
+        monkeypatch.setattr(sqlite_store_module.aiosqlite.Connection, "commit", delayed_commit)
+
+        async def cancel_during_commit():
+            task = asyncio.create_task(
+                server_module._complete_shejane_authorization(
+                    client.app,
+                    LOCAL_OWNER_PRINCIPAL_ID,
+                    "second-token",
+                )
+            )
+            await commit_started.wait()
+            await asyncio.sleep(0)
+            task.cancel()
+            release_commit.set()
+            return await task
+
+        second = client.portal.call(cancel_during_commit)
+        connections = client.portal.call(
+            partial(
+                client.app.state.store.list_model_connections,
+                principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+            )
+        )
+
+    assert first["id"] != second["id"]
+    assert [connection["id"] for connection in connections] == [second["id"]]
+    assert list(credential_vault.values()) == ["second-token"]
+
+
+def test_official_authorization_auto_binds_only_the_new_readable_connection(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = reset_settings_for_tests(
+        SHEJANE_RUNTIME_TOKEN="tok",
+        data_dir=tmp_path,
+    )
+    monkeypatch.setattr(RunCoordinator, "start", lambda _self: None)
+    credential_vault: dict[str, str] = {}
+    monkeypatch.setattr(
+        keyring, "get_password", lambda _service, account: credential_vault.get(account)
+    )
+    monkeypatch.setattr(
+        keyring,
+        "set_password",
+        lambda _service, account, password: credential_vault.__setitem__(account, password),
+    )
+    monkeypatch.setattr(
+        keyring,
+        "delete_password",
+        lambda _service, account: credential_vault.pop(account, None),
+    )
+
+    old_models = [
+        {
+            "model_id": "old-image",
+            "display_name": "Old Image",
+            "source": "discovered",
+            "verification": "verified",
+            "recommended": True,
+            "recommended_for": ["image_generation"],
+            "capabilities": [
+                {
+                    "capability": "image_generation",
+                    "protocol": "openai_images_generations",
+                    "verification": "verified",
+                }
+            ],
+        }
+    ]
+    new_models = [
+        {
+            "model_id": "new-image",
+            "display_name": "New Image",
+            "source": "discovered",
+            "verification": "verified",
+            "recommended": True,
+            "recommended_for": ["image_generation"],
+            "capabilities": [
+                {
+                    "capability": "image_generation",
+                    "protocol": "openai_images_generations",
+                    "verification": "verified",
+                }
+            ],
+        }
+    ]
+
+    async def catalog(**_kwargs):
+        return new_models, "ready"
+
+    monkeypatch.setattr(server_module, "_refresh_model_service_models", catalog)
+
+    with TestClient(create_app(settings)) as client:
+        client.portal.call(
+            partial(
+                client.app.state.store.create_model_connection,
+                principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+                connection_id="conn_unreadable",
+                preset_id="shejane-official",
+                name="Old Official",
+                region="official",
+                adapter_id="openai_chat",
+                base_url="https://app.shejane.com/v1",
+                requires_api_key=True,
+                credential_ref="keyring:model-service:conn_unreadable",
+                models=old_models,
+                catalog_status="ready",
+            )
+        )
+        authorized = client.portal.call(
+            partial(
+                server_module._complete_shejane_authorization,
+                client.app,
+                LOCAL_OWNER_PRINCIPAL_ID,
+                "readable-token",
+            )
+        )
+        connections = client.portal.call(
+            partial(
+                client.app.state.store.list_model_connections,
+                principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+            )
+        )
+        binding = client.portal.call(
+            partial(
+                client.app.state.store.get_model_capability_binding,
+                principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+                capability="image_generation",
+            )
+        )
+
+    assert [connection["id"] for connection in connections] == [authorized["id"]]
+    assert binding is not None
+    assert binding["connection_id"] == authorized["id"]
+    assert binding["model_id"] == "new-image"
+
+
+def test_concurrent_official_authorizations_leave_one_connection_and_credential(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = reset_settings_for_tests(
+        SHEJANE_RUNTIME_TOKEN="tok",
+        data_dir=tmp_path,
+    )
+    monkeypatch.setattr(RunCoordinator, "start", lambda _self: None)
+    credential_vault: dict[str, str] = {}
+    monkeypatch.setattr(
+        keyring, "get_password", lambda _service, account: credential_vault.get(account)
+    )
+    monkeypatch.setattr(
+        keyring,
+        "set_password",
+        lambda _service, account, password: credential_vault.__setitem__(account, password),
+    )
+    monkeypatch.setattr(
+        keyring,
+        "delete_password",
+        lambda _service, account: credential_vault.pop(account, None),
+    )
+
+    async def catalog(**_kwargs):
+        await asyncio.sleep(0)
+        return _official_chat_models(), "ready"
+
+    monkeypatch.setattr(server_module, "_refresh_model_service_models", catalog)
+
+    with TestClient(create_app(settings)) as client:
+
+        async def authorize_twice():
+            return await asyncio.gather(
+                server_module._complete_shejane_authorization(
+                    client.app,
+                    LOCAL_OWNER_PRINCIPAL_ID,
+                    "concurrent-token-1",
+                ),
+                server_module._complete_shejane_authorization(
+                    client.app,
+                    LOCAL_OWNER_PRINCIPAL_ID,
+                    "concurrent-token-2",
+                ),
+            )
+
+        client.portal.call(authorize_twice)
+        connections = client.portal.call(
+            partial(
+                client.app.state.store.list_model_connections,
+                principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+            )
+        )
+
+    assert len(connections) == 1
+    assert len(credential_vault) == 1
+    assert next(iter(credential_vault.values())) in {
+        "concurrent-token-1",
+        "concurrent-token-2",
+    }
 
 
 @pytest.mark.asyncio

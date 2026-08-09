@@ -815,8 +815,14 @@ class PluginRegistry:
             if principal_id in self._fixed_capabilities_ready_for:
                 return
             for plugin_id, source in self._fixed_packages.items():
-                if source.is_file():
-                    await self._ensure_fixed_plugin(principal_id, plugin_id, source)
+                if not source.is_file():
+                    raise PluginRegistryError(
+                        "builtin_capability_unavailable",
+                        f"configured fixed capability package for {plugin_id} must be a regular file",
+                        status_code=500,
+                    )
+            for plugin_id, source in self._fixed_packages.items():
+                await self._ensure_fixed_plugin(principal_id, plugin_id, source)
             # Disable any fixed-capability installation whose source package
             # was not provided during this startup.  Otherwise a stale
             # (e.g. older-version) built-in stays enabled and gets bound to
@@ -824,19 +830,13 @@ class PluginRegistry:
             for plugin_id in _BUILTIN_FIXED_PLUGIN_IDS:
                 if plugin_id in self._fixed_packages:
                     continue
-                try:
-                    disabled = await self._store.discard_stale_fixed_capability(
-                        principal_id=principal_id,
-                        plugin_id=plugin_id,
-                    )
-                    if disabled:
-                        logger.warning(
-                            "Fixed capability %s package not available; installation disabled",
-                            plugin_id,
-                        )
-                except Exception:
-                    logger.exception(
-                        "Failed to disable stale fixed capability %s",
+                disabled = await self._store.discard_stale_fixed_capability(
+                    principal_id=principal_id,
+                    plugin_id=plugin_id,
+                )
+                if disabled:
+                    logger.warning(
+                        "Fixed capability %s package not available; installation disabled",
                         plugin_id,
                     )
             self._fixed_capabilities_ready_for.add(principal_id)
