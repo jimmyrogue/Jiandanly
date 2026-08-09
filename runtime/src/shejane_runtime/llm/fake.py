@@ -570,6 +570,18 @@ class FakeBackendChatModel(BaseChatModel):
             await asyncio.sleep(delay)
             yield ChatGenerationChunk(message=AIMessageChunk(content="finished"))
             return
+        if "[[e2e:scroll]]" in prompt:
+            # A long reply streamed token-by-token with a small pacing delay:
+            # deterministic mid-stream scroll window (~2.4s) for the
+            # scroll-to-bottom E2E, with enough content to overflow the
+            # chat viewport (~160 rendered lines).
+            lines = " ".join(f"Scroll_{index:03d}_" + ("x" * 56) for index in range(160))
+            for piece in self._pieces(lines):
+                chunk = ChatGenerationChunk(message=AIMessageChunk(content=piece))
+                if run_manager is not None and piece:
+                    await run_manager.on_llm_new_token(piece, chunk=chunk)
+                yield chunk
+                await asyncio.sleep(0.015)
             return
         for chunk in self._chunks(messages):
             if run_manager is not None and chunk.message.content:

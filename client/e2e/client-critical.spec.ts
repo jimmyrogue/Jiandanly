@@ -493,6 +493,56 @@ test.describe.serial('flow:P2-P12 > Electron critical path', () => {
     expect(harness.rendererErrors).toEqual([])
   })
 
+  test('auto-scrolls to the latest message when a run completes, and the scroll-to-bottom button re-pins a scrolled-away view', async () => {
+    test.skip(Boolean(realLLMModel), 'Uses the deterministic fake Runtime stream fixture.')
+    const { page } = harness
+    await page.getByRole('button', { name: /新对话|New chat/ }).click()
+    await page.getByRole('button', { name: /选择模型|Pick model/ }).click()
+    await page.locator('.composer-mode-model-item').first().click()
+    const composer = page.getByRole('textbox', {
+      name: /交给石间|Hand it to SheJane|Describe a task/,
+    })
+    const lastAssistantContent = page.locator('.message.assistant').last().locator('.message-content')
+    const scrollAway = () => page.locator('.messages').evaluate((element) => {
+      element.scrollTop = Math.floor((element.scrollHeight - element.clientHeight) / 2)
+      element.dispatchEvent(new Event('scroll'))
+    })
+    const distanceFromBottom = () => page.locator('.messages').evaluate((element) => (
+      element.scrollHeight - element.scrollTop - element.clientHeight
+    ))
+    const fab = page.getByRole('button', { name: /回到底部|Back to latest/ })
+    const stop = page.getByRole('button', { name: /停止生成|Stop/ })
+
+    // Run #1: build a conversation tall enough to scroll.
+    await composer.fill('[[e2e:scroll]] exercise the scroll-to-bottom boundary')
+    await page.getByRole('button', { name: /发送|Send/ }).click()
+    await expect(stop).toBeVisible()
+    await expect(stop).toHaveCount(0, { timeout: 30_000 })
+    await expect(lastAssistantContent).toContainText('Scroll_159')
+
+    // Scroll away after the run settled, then use the button to re-pin.
+    await scrollAway()
+    await expect(fab).toBeVisible()
+    await fab.click()
+    await expect.poll(distanceFromBottom).toBeLessThan(120)
+    await expect(fab).toHaveCount(0)
+
+    // Run #2: while scrolled away mid-run, completion must return the view
+    // to the latest message on its own.
+    await composer.fill('[[e2e:scroll]] exercise the scroll-to-bottom boundary again')
+    await page.getByRole('button', { name: /发送|Send/ }).click()
+    await expect(stop).toBeVisible()
+    await scrollAway()
+    await expect(fab).toBeVisible()
+
+    await expect(stop).toHaveCount(0, { timeout: 30_000 })
+    await expect(page.locator('.message.assistant').last().locator('.message-content'))
+      .toContainText('Scroll_159')
+    await expect.poll(distanceFromBottom).toBeLessThan(120)
+    await expect(fab).toHaveCount(0)
+    expect(harness.rendererErrors).toEqual([])
+  })
+
   test('previews an authorized PowerPoint file and surfaces the OS open error', async () => {
     const workspace = fs.mkdtempSync(
       path.join(process.env.SHEJANE_E2E_TMP_DIR ?? os.tmpdir(), 'client-pptx-workspace-'),
@@ -823,10 +873,14 @@ test.describe.serial('flow:P2-P12 > Electron critical path', () => {
       baseURL: requiredEnv('SHEJANE_E2E_RUNTIME_URL'),
       token: requiredEnv('SHEJANE_E2E_RUNTIME_TOKEN'),
     }
-    const interruptedRun = (await listLocalRuns(runtimeConnection)).find(
-      (run) => run.goal === '[[e2e:slow]] stream while the Runtime crashes',
-    )
-    expect(interruptedRun).toBeDefined()
+    let interruptedRun: Awaited<ReturnType<typeof listLocalRuns>>[number] | undefined
+    await expect.poll(async () => {
+      interruptedRun = (await listLocalRuns(runtimeConnection)).find(
+        (run) => run.goal === '[[e2e:slow]] stream while the Runtime crashes',
+      )
+      return interruptedRun?.id
+    }, { timeout: 30_000 }).toBeTruthy()
+    if (!interruptedRun) throw new Error('Interrupted E2E run was not created')
 
     const originalPID = Number(requiredEnv('SHEJANE_E2E_RUNTIME_PID'))
     expect(Number.isSafeInteger(originalPID) && originalPID > 1).toBe(true)
