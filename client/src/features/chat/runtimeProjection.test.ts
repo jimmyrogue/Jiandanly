@@ -1176,11 +1176,78 @@ describe('processStreamEvent (merged stream projection)', () => {
   it('appends the transient delta through appendLocalDelta only once per id', () => {
     const message = emptyMessage()
     const seen = new Set<string>()
-    const cache = new Map<string, Record<string, unknown>>()
     appendLocalDelta(message, 'Hello', event({ event_type: 'llm.delta', id: 'd1' }), seen)
     appendLocalDelta(message, 'Hello again', event({ event_type: 'llm.delta', id: 'd1' }), seen)
     expect(message.content).toContain('Hello')
     expect(message.content).not.toContain('Hello again')
+  })
+
+  it('applies a presentation delta only once per event id', () => {
+    const message = { ...emptyMessage(), runId: 'run-stream' }
+    const seen = new Set<string>()
+    const cache = new Map<string, Record<string, unknown>>()
+    const delta = event({
+      event_type: 'llm.delta',
+      id: 'presentation-d1',
+      payload: { content: '香港' },
+      presentation_change: {
+        kind: 'draft.delta',
+        round_id: 'round-1',
+        content: '香港',
+      },
+    })
+
+    for (let delivery = 0; delivery < 2; delivery += 1) {
+      processStreamEvent(message, delta, seen, cache, t)
+      appendLocalDelta(message, '香港', delta, seen)
+    }
+
+    expect(message.presentation?.drafts['round-1']).toBe('香港')
+    expect(message.content).toBe('')
+    expect(seen.has('presentation-d1')).toBe(true)
+  })
+
+  it('keeps equal presentation content from different event ids', () => {
+    const message = { ...emptyMessage(), runId: 'run-stream' }
+    const seen = new Set<string>()
+    const cache = new Map<string, Record<string, unknown>>()
+
+    for (const id of ['presentation-d1', 'presentation-d2']) {
+      processStreamEvent(message, event({
+        event_type: 'llm.delta',
+        id,
+        payload: { content: '香' },
+        presentation_change: {
+          kind: 'draft.delta',
+          round_id: 'round-1',
+          content: '香',
+        },
+      }), seen, cache, t)
+    }
+
+    expect(message.presentation?.drafts['round-1']).toBe('香香')
+  })
+
+  it('leaves a legacy delta available when an older Runtime already projected process items', () => {
+    const message = { ...emptyMessage(), runId: 'run-stream' }
+    message.presentation = {
+      snapshot: {
+        schema_version: 1,
+        run_id: 'run-stream',
+        items: [],
+        event_high_watermark: 1,
+      },
+      drafts: {},
+    }
+    const seen = new Set<string>()
+    const cache = new Map<string, Record<string, unknown>>()
+    const delta = event({ event_type: 'llm.delta', id: 'legacy-d1', payload: { content: '旧版' } })
+
+    processStreamEvent(message, delta, seen, cache, t)
+    appendLocalDelta(message, '旧版', delta, seen)
+
+    expect(message.content).toBe('旧版')
+    expect(message.presentation).toBeDefined()
   })
 
   it('moves lastEventSeq forward monotonically through recordLocalEventCursor', () => {

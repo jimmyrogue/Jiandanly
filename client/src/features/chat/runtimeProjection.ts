@@ -133,10 +133,19 @@ export function processStreamEvent(
   t: Translator,
   onOfficeFileOpened?: (ref: LocalFileRef) => void,
 ) {
-  applyRunPresentationEvent(message, event)
   if (event.event_type === 'llm.delta') {
+    const presentationOwnsDelta = Boolean(
+      message.runId
+      && (event.presentation_change || event.presentation_changes?.length),
+    )
+    if (presentationOwnsDelta) {
+      if (event.id && seenEventIDs.has(event.id)) return
+      if (event.id) seenEventIDs.add(event.id)
+      applyRunPresentationEvent(message, event)
+    }
     return
   }
+  applyRunPresentationEvent(message, event)
   if (!message.presentation) {
     message.content = projectTransientAssistantText(message.content, event)
   }
@@ -265,7 +274,11 @@ export function recordLocalEventCursor(message: ChatMessage, event: AgentRunEven
 
 /** Fold one transient delta into the message's streaming text buffer. */
 export function appendLocalDelta(message: ChatMessage, delta: string, event: AgentRunEvent, seenEventIDs: Set<string>) {
-  if (message.presentation || (event.id && seenEventIDs.has(event.id))) return
+  const presentationOwnsDelta = Boolean(
+    message.runId
+    && (event.presentation_change || event.presentation_changes?.length),
+  )
+  if (presentationOwnsDelta || (event.id && seenEventIDs.has(event.id))) return
   if (event.id) seenEventIDs.add(event.id)
   message.content = projectTransientAssistantText(message.content, {
     ...event,
