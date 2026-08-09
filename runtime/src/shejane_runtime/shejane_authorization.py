@@ -235,7 +235,12 @@ class SheJaneAuthorizationManager:
 
         authorization.server.close()
         authorization.work_task = asyncio.create_task(self._exchange(authorization, values["code"]))
-        await _reply(writer, 200, "Authorization received. You can return to SheJane.")
+        await _reply(
+            writer,
+            200,
+            "授权已收到。你可以返回 SheJane。\n\n"
+            "Authorization received. You can return to SheJane.",
+        )
 
     async def _exchange(self, authorization: _Authorization, code: str) -> None:
         try:

@@ -156,6 +156,7 @@ async def test_loopback_callback_exchanges_pkce_code_without_exposing_token(monk
         await asyncio.sleep(0)
 
     assert browser_response.startswith(b"HTTP/1.1 200 OK")
+    assert "授权已收到。你可以返回 SheJane。" in browser_response.decode("utf-8")
     assert status == {
         "authorization_id": started["authorization_id"],
         "status": "succeeded",
