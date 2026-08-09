@@ -156,6 +156,29 @@ def test_each_event_has_envelope_shape(client: TestClient) -> None:
         assert isinstance(event["payload"], dict), event
 
 
+def test_p4_stream_mirrors_the_same_envelopes_to_the_dev_trace(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    observed: list[dict] = []
+    monkeypatch.setattr(
+        "shejane_runtime.runs.trace_stream_event",
+        lambda event: observed.append(event),
+    )
+    create = client.post(
+        "/v1/runs",
+        headers={**HEADERS, "Content-Type": "application/json"},
+        json=run_command("trace this run"),
+    ).json()
+    run_id = create.get("id") or create.get("run", {}).get("id")
+
+    raw = client.get(f"/v1/runs/{run_id}/stream", headers=HEADERS).text
+    events, _ = _parse_sse(raw)
+
+    assert observed
+    assert [event["id"] for event in observed] == [event["id"] for event in events]
+
+
 def test_run_started_payload_carries_goal(client: TestClient) -> None:
     """Spot-check that the payload contents survive the envelope wrap —
     a bug in step 2 of the move could nest payload twice or drop it."""

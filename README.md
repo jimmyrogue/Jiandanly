@@ -92,6 +92,8 @@ corepack enable && pnpm install
 make dev
 ```
 
+`make dev` streams the Runtime's development trace in the same terminal: Client-visible Agent progress/reasoning summaries, tool status, and stable failure codes. Visible model text can repeat sensitive user input or secrets, so the content trace is terminal-only and is not written to `.tmp/dev/runtime.log`; Runtime credential-store values, tool arguments/results, raw errors, and hidden chain-of-thought are not added. Terminal control characters are escaped. Set `SHEJANE_DEV_TRACE=0` to disable content trace or `SHEJANE_DEV_LOG_TAIL=0` to disable the filtered Runtime error tail.
+
 No root `.env` is required. Start Client, connect a supported model service in Runtime settings, then select one of its models. Use `make doctor` when the local stack does not start cleanly.
 
 ## Development

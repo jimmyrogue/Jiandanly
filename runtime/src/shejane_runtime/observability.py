@@ -44,8 +44,12 @@ def configure_logging(*, json_output: bool | None = None) -> None:
     _configured = True
 
     if json_output is None:
-        # Default to JSON in production-ish runs (no TTY), pretty when interactive.
-        json_output = not sys.stderr.isatty()
+        log_format = os.environ.get("SHEJANE_LOG_FORMAT", "").lower()
+        if log_format in {"console", "json"}:
+            json_output = log_format == "json"
+        else:
+            # Default to JSON in production-ish runs (no TTY), pretty when interactive.
+            json_output = not sys.stderr.isatty()
 
     timestamper = structlog.processors.TimeStamper(fmt="iso")
     shared_processors: list[Any] = [

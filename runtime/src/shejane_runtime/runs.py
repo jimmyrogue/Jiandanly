@@ -47,6 +47,7 @@ from .agent.context_builder import RuntimeContext
 from .agent.mailbox import AgentMailboxControl, AgentMessageKind
 from .build_info import runtime_build_identity
 from .config import Settings, clamp_run_budget, get_settings
+from .dev_trace import trace_stream_event
 from .event_translator import translate
 from .failure_policy import classify_failure_payload
 from .llm.errors import ModelServiceError
@@ -2687,6 +2688,7 @@ class RunCoordinator:
             for event, envelope in zip(
                 events, await self._stream_event_envelopes(events), strict=True
             ):
+                trace_stream_event(envelope)
                 yield envelope
                 after_seq = int(event["seq"])
 
@@ -2716,6 +2718,7 @@ class RunCoordinator:
                     replay_index = 0
                     for event in pending_live:
                         if event.get("seq") is None:
+                            trace_stream_event(event)
                             yield event
                             continue
                         wake_seq = int(event["seq"])
@@ -2723,6 +2726,7 @@ class RunCoordinator:
                             replay_index < len(replay)
                             and int(replay[replay_index]["seq"]) <= wake_seq
                         ):
+                            trace_stream_event(envelopes[replay_index])
                             yield envelopes[replay_index]
                             after_seq = int(replay[replay_index]["seq"])
                             replay_index += 1
@@ -2740,6 +2744,7 @@ class RunCoordinator:
                     await self._stream_event_envelopes(events),
                     strict=True,
                 ):
+                    trace_stream_event(envelope)
                     yield envelope
                     after_seq = int(event["seq"])
 

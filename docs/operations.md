@@ -21,6 +21,8 @@ make dev
 
 该命令启动源码 Runtime、Vite 和 Electron。
 
+`make dev` 还会在当前终端持续打印 Runtime 的开发 Trace：用户界面本来就能看到的模型阶段文本和推理摘要、工具名称与状态，以及稳定的失败分类和错误码。可见阶段文本可能复述用户提供的敏感内容或秘密，因此 Trace 只写当前终端，不写入 `.tmp/dev/runtime.log`；Runtime 不会主动加入凭据库值，也不打印工具参数/结果、原始错误正文或模型隐藏推理。终端控制字符会转成可见转义。可用 `SHEJANE_DEV_TRACE=0 make dev` 关闭内容 Trace，或用 `SHEJANE_DEV_LOG_TAIL=0 make dev` 关闭从普通 Runtime 日志中筛选的实时错误行。
+
 两个模块也可以独立运行：
 
 ```bash

@@ -11,6 +11,7 @@ import pytest
 import structlog
 from structlog.testing import capture_logs
 
+from shejane_runtime.dev_trace import trace_assistant_round, trace_run_event, trace_stream_event
 from shejane_runtime.diagnostics_trace import build_run_trace
 from shejane_runtime.observability import (
     RuntimeObserver,
@@ -36,6 +37,16 @@ def test_configure_logging_is_idempotent() -> None:
     configure_logging(json_output=True)  # second call should be safe
     log = structlog.get_logger("test")
     log.info("hello")  # must not raise
+
+
+def test_configure_logging_honors_console_format_env(monkeypatch: Any, capsys: Any) -> None:
+    monkeypatch.setenv("SHEJANE_LOG_FORMAT", "console")
+    configure_logging()
+    structlog.get_logger("test").info("dev.test")
+
+    rendered = capsys.readouterr().err
+    assert "dev.test" in rendered
+    assert '"event": "dev.test"' not in rendered
 
 
 def test_pytest_disables_external_langsmith_tracing_by_default() -> None:
@@ -172,6 +183,144 @@ def test_observer_never_logs_model_or_tool_content() -> None:
 
     assert secret not in str(captured)
     assert not any("input_preview" in event or "output_preview" in event for event in captured)
+
+
+def test_dev_trace_is_disabled_without_explicit_dev_env(monkeypatch: Any) -> None:
+    monkeypatch.delenv("SHEJANE_DEV_TRACE", raising=False)
+    monkeypatch.setattr("shejane_runtime.dev_trace.os.write", pytest.fail)
+
+    trace_assistant_round(
+        "run-1",
+        {"text": "visible progress", "reasoning_summary": "visible reasoning"},
+    )
+    trace_run_event("run-1", "run.failed", {"error": "visible failure"})
+
+
+def test_dev_trace_logs_only_visible_assistant_output_and_redacts_secrets(
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.setenv("SHEJANE_DEV_TRACE", "1")
+    monkeypatch.setenv("SHEJANE_DEV_TRACE_FD", "9")
+    written: list[bytes] = []
+    monkeypatch.setattr(
+        "shejane_runtime.dev_trace.os.write",
+        lambda _fd, data: written.append(data) or len(data),
+    )
+
+    trace_assistant_round(
+        "run-1",
+        {
+            "text": "Checking the request with Bearer secret-token",
+            "reasoning_summary": "Need current store information",
+            "tool_calls": [{"args": {"api_key": "must-not-appear"}}],
+        },
+    )
+
+    rendered = b"".join(written).decode()
+    assert "reasoning: Need current store information" in rendered
+    assert "assistant: Checking the request with Bearer [REDACTED]" in rendered
+    assert "must-not-appear" not in rendered
+
+
+def test_dev_trace_logs_actionable_failure_without_arguments_or_results(monkeypatch: Any) -> None:
+    monkeypatch.setenv("SHEJANE_DEV_TRACE", "true")
+    monkeypatch.setenv("SHEJANE_DEV_TRACE_FD", "9")
+    written: list[bytes] = []
+    monkeypatch.setattr(
+        "shejane_runtime.dev_trace.os.write",
+        lambda _fd, data: written.append(data) or len(data),
+    )
+
+    trace_run_event(
+        "run-1",
+        "tool.failed",
+        {
+            "tool": "web.fetch",
+            "error": "Request invalid with sk-secret",
+            "error_code": "request_invalid",
+            "category": "validation",
+            "retryable": False,
+            "arguments": {"url": "https://user:password@example.com"},
+            "content": "private tool output",
+        },
+    )
+
+    rendered = b"".join(written).decode()
+    assert rendered == (
+        "[agent][run-1] tool.failed tool=web.fetch "
+        "error_code=request_invalid category=validation retryable=False\n"
+    )
+    assert "sk-secret" not in rendered
+    assert "password" not in rendered
+    assert "private tool output" not in rendered
+
+
+def test_dev_trace_projects_each_p4_event_only_once(monkeypatch: Any) -> None:
+    monkeypatch.setenv("SHEJANE_DEV_TRACE", "1")
+    monkeypatch.setenv("SHEJANE_DEV_TRACE_FD", "9")
+    written: list[bytes] = []
+    monkeypatch.setattr(
+        "shejane_runtime.dev_trace.os.write",
+        lambda _fd, data: written.append(data) or len(data),
+    )
+    event = {
+        "id": "event-dev-trace-once",
+        "run_id": "run-1",
+        "event_type": "assistant.round.committed",
+        "payload": {"text": "Visible progress"},
+    }
+
+    trace_stream_event(event)
+    trace_stream_event(event)
+
+    assert b"".join(written).decode() == "[agent][run-1] assistant: Visible progress\n"
+
+
+def test_dev_trace_ignored_deltas_do_not_evict_printed_event_ids(monkeypatch: Any) -> None:
+    monkeypatch.setenv("SHEJANE_DEV_TRACE", "1")
+    monkeypatch.setenv("SHEJANE_DEV_TRACE_FD", "9")
+    written: list[bytes] = []
+    monkeypatch.setattr(
+        "shejane_runtime.dev_trace.os.write",
+        lambda _fd, data: written.append(data) or len(data),
+    )
+    event = {
+        "id": "event-dev-trace-after-deltas",
+        "run_id": "run-1",
+        "event_type": "assistant.round.committed",
+        "payload": {"text": "Visible progress"},
+    }
+
+    trace_stream_event(event)
+    for index in range(5_000):
+        trace_stream_event(
+            {
+                "id": f"ignored-delta-{index}",
+                "run_id": "run-1",
+                "event_type": "llm.delta",
+                "payload": {"content": "x"},
+            }
+        )
+    trace_stream_event(event)
+
+    assert b"".join(written).decode() == "[agent][run-1] assistant: Visible progress\n"
+
+
+def test_dev_trace_escapes_terminal_control_characters(monkeypatch: Any) -> None:
+    monkeypatch.setenv("SHEJANE_DEV_TRACE", "1")
+    monkeypatch.setenv("SHEJANE_DEV_TRACE_FD", "9")
+    written: list[bytes] = []
+    monkeypatch.setattr(
+        "shejane_runtime.dev_trace.os.write",
+        lambda _fd, data: written.append(data) or len(data),
+    )
+
+    trace_assistant_round("run-control", {"text": "line 1\n\x1b]0;owned\x07line 2"})
+
+    rendered = b"".join(written).decode()
+    assert rendered == (r"[agent][run-control] assistant: line 1\n\x1b]0;owned\x07line 2" + "\n")
+    assert "\x1b" not in rendered
+    assert "\x07" not in rendered
 
 
 def test_durable_trace_links_redacted_model_tool_checkpoint_and_terminal_spans() -> None:

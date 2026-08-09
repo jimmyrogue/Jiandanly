@@ -86,6 +86,8 @@ corepack enable && pnpm install
 make dev
 ```
 
+`make dev` 会在当前终端持续显示 Runtime 开发 Trace，包括 Client 可见的 Agent 阶段文本/推理摘要、工具状态和稳定错误码。可见模型文本可能复述用户提供的敏感内容或秘密，因此内容 Trace 只写当前终端，不写入 `.tmp/dev/runtime.log`；Runtime 不会主动加入凭据库值，也不会输出工具参数/结果、原始错误正文或隐藏思维链。终端控制字符会转成可见转义。可用 `SHEJANE_DEV_TRACE=0` 关闭内容 Trace，或用 `SHEJANE_DEV_LOG_TAIL=0` 关闭普通 Runtime 错误行的实时筛选。
+
 根目录不需要 `.env`。启动 Client 后，在 Runtime 设置中添加 OpenAI 兼容供应商并选择模型即可。启动异常时运行 `make doctor`。
 
 ## 开发检查

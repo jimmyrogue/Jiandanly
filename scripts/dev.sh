@@ -25,6 +25,8 @@ RUNTIME_ENV=(
   "PYTHONUNBUFFERED=1"
   "SHEJANE_RUNTIME_BUILD_COMMIT=${DEV_BUILD_COMMIT}"
   "SHEJANE_RUNTIME_PACKAGING_MODE=dev"
+  "SHEJANE_DEV_TRACE=${SHEJANE_DEV_TRACE:-1}"
+  "SHEJANE_LOG_FORMAT=${SHEJANE_LOG_FORMAT:-console}"
 )
 RUNTIME_FIXED_CAPABILITY_ARGS=()
 [[ -n "${SHEJANE_RUNTIME_MCP_SERVERS:-}" ]] && RUNTIME_ENV+=("SHEJANE_RUNTIME_MCP_SERVERS=$SHEJANE_RUNTIME_MCP_SERVERS")
@@ -104,18 +106,19 @@ force_kill_stragglers() {
   sleep 1
 }
 
-open_log_tail_terminal() {
-  # macOS-only live Runtime log. Disable with SHEJANE_DEV_LOG_TAIL=0.
+stream_runtime_log() {
+  # Keep metadata errors alongside the terminal-only Agent trace.
   [[ "${SHEJANE_DEV_LOG_TAIL:-1}" == "1" ]] || return 0
-  [[ "$(uname -s)" == "Darwin" ]] || return 0
   local log="${LOG_DIR}/runtime.log"
-  : > "$log" 2>/dev/null || true
-  osascript >/dev/null 2>&1 <<APPLESCRIPT || true
-tell application "Terminal"
-  activate
-  do script "tail -F '${log}' | grep --line-buffered -iE 'POST /v1|HTTP/1\\.1 [45]|run\\.(waiting|completed|failed|started)|permission\\.|question\\.|llm\\.error|KeyError|Traceback' || tail -F '${log}'"
-end tell
-APPLESCRIPT
+  : >> "$log"
+  echo "[dev] streaming Agent progress and failures from ${log}"
+  (
+    tail -n 0 -F "$log" \
+      | grep --line-buffered -iE \
+        'HTTP/1\.1 [45]|run\.(waiting|failed)|llm\.error|tool\.error|KeyError|Traceback'
+  ) &
+  PIDS+=("$!")
+  sleep 0.1
 }
 
 wait_for_url() {
@@ -139,6 +142,9 @@ wait_for_url() {
 start_runtime() {
   if curl -fsS "${RUNTIME_URL}/v1/health" >/dev/null 2>&1; then
     echo "Runtime already running at ${RUNTIME_URL}"
+    if [[ "${SHEJANE_DEV_TRACE:-1}" == "1" ]]; then
+      echo "[dev] Agent trace remains attached to the terminal that launched this Runtime."
+    fi
     return
   fi
 
@@ -148,10 +154,10 @@ start_runtime() {
   prepare_fixed_capability_args
   (
     cd "${ROOT_DIR}/runtime"
-    "${RUNTIME_ENV[@]}" uv run shejane-runtime \
+    "${RUNTIME_ENV[@]}" "SHEJANE_DEV_TRACE_FD=3" uv run shejane-runtime \
       --host 127.0.0.1 --port "$RUNTIME_PORT" --token "$TOKEN" \
       "${RUNTIME_FIXED_CAPABILITY_ARGS[@]}" \
-      >"$log_file" 2>&1
+      3>&1 >"$log_file" 2>&1
   ) &
   PIDS+=("$!")
   wait_for_url "${RUNTIME_URL}/v1/health" "Runtime" "$log_file"
@@ -210,9 +216,9 @@ start_stack() {
 
   force_kill_stragglers
 
+  stream_runtime_log
   start_runtime
   start_client_dev_server
-  open_log_tail_terminal
   launch_electron
 }
 
@@ -236,7 +242,7 @@ start_client_only() {
 }
 
 restart_runtime() {
-  local old_pid new_pid log_file="${LOG_DIR}/runtime.log"
+  local old_pid new_pid trace_tty log_file="${LOG_DIR}/runtime.log"
   mkdir -p "$LOG_DIR"
   old_pid="$(lsof -ti :"$RUNTIME_PORT" 2>/dev/null | head -1 || true)"
   if [[ -n "$old_pid" ]]; then
@@ -259,10 +265,19 @@ restart_runtime() {
   prepare_fixed_capability_args
   (
     cd "${ROOT_DIR}/runtime"
-    nohup "${RUNTIME_ENV[@]}" uv run shejane-runtime \
-      --host 127.0.0.1 --port "$RUNTIME_PORT" --token "$TOKEN" \
-      "${RUNTIME_FIXED_CAPABILITY_ARGS[@]}" \
-      >"$log_file" 2>&1 &
+    if trace_tty="$(tty 2>/dev/null)" && [[ -w "$trace_tty" ]]; then
+      nohup "${RUNTIME_ENV[@]}" "SHEJANE_DEV_TRACE_FD=3" uv run shejane-runtime \
+        --host 127.0.0.1 --port "$RUNTIME_PORT" --token "$TOKEN" \
+        "${RUNTIME_FIXED_CAPABILITY_ARGS[@]}" \
+        3>"$trace_tty" >"$log_file" 2>&1 &
+    else
+      [[ "${SHEJANE_DEV_TRACE:-1}" == "1" ]] \
+        && echo "[dev] no controlling terminal; Agent trace disabled after restart" >&2
+      nohup "${RUNTIME_ENV[@]}" "SHEJANE_DEV_TRACE=0" uv run shejane-runtime \
+        --host 127.0.0.1 --port "$RUNTIME_PORT" --token "$TOKEN" \
+        "${RUNTIME_FIXED_CAPABILITY_ARGS[@]}" \
+        >"$log_file" 2>&1 &
+    fi
     echo "$!" >"${LOG_DIR}/runtime.pid"
   )
   wait_for_url "${RUNTIME_URL}/v1/health" "Runtime" "$log_file"
