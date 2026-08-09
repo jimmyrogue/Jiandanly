@@ -4,7 +4,7 @@ import { AnsweredQuestions } from './AnsweredQuestions'
 import { MessageBubble } from './MessageBubble'
 import { RunProcess } from './RunProcess'
 import { ThinkingIndicator } from './ThinkingIndicator'
-import { IconCalendar, IconFileText, IconMessage } from '@tabler/icons-react'
+import { IconArrowDown, IconCalendar, IconFileText, IconMessage } from '@tabler/icons-react'
 import type { ChatMessage, Conversation, LocalFileRef } from '@/shared/local-data/types'
 import { appLogoURL } from '@/shared/assets/logo'
 import { useI18n } from '@/shared/i18n/i18n'
@@ -99,9 +99,9 @@ export function ChatThread({
   const presentationRevision = lastMessage?.presentation?.snapshot.event_high_watermark ?? 0
   const presentationDraftLength = Object.values(lastMessage?.presentation?.drafts ?? {})
     .reduce((total, draft) => total + draft.length, 0)
-  const scrollRef = useSmartAutoScroll<HTMLDivElement>(
+  const { containerRef, isPinnedToBottom, scrollToBottom } = useSmartAutoScroll<HTMLDivElement>(
     [messageCount, lastMessageContent.length, presentationRevision, presentationDraftLength],
-    { bottomThreshold: 120 },
+    { bottomThreshold: 120, runActive, resetKey: conversation?.id },
   )
   const handleStreamTextCommit = useCallback((messageID: string, displayedText: string) => {
     streamDisplayCacheRef.current.set(messageID, displayedText)
@@ -117,44 +117,60 @@ export function ChatThread({
   return (
     <section className="chat-surface">
       {conversation?.messages.length ? (
-        <div className="messages" ref={scrollRef}>
-          {conversation.messages.map((message, index) => (
-            <Fragment key={message.id}>
-              {/* Stone-dot divider between a user turn and the assistant's
-                  reply — the brand's signature separator (三颗渐变小石点),
-                  echoing the rich-text <hr>. Only between user → assistant. */}
-              {message.role === 'assistant' && conversation.messages[index - 1]?.role === 'user' ? (
-                <StoneDots />
-              ) : null}
-              <AnsweredQuestions message={message} />
-              <MessageBubble
-                message={message}
-                initialStreamText={message.status === 'streaming' ? streamDisplayCacheRef.current.get(message.id) : undefined}
-                onStreamTextCommit={handleStreamTextCommit}
-                workspaceRoot={effectiveWorkspaceRoot}
-                onPreviewLocalFile={onPreviewLocalFile}
-                onLocalFileContextMenu={onLocalFileContextMenu}
-                onRegenerate={onRegenerateMessage}
-                onEditResend={onEditResendMessage}
-                onDelete={onDeleteMessage}
-                onOpenDiagnostics={onOpenDiagnostics}
-                onLoadArtifactContent={onLoadArtifactContent}
-                runActive={runActive}
-              >
-                <MessageProcess
+        <>
+          <div className="messages" ref={containerRef}>
+            {conversation.messages.map((message, index) => (
+              <Fragment key={message.id}>
+                {/* Stone-dot divider between a user turn and the assistant's
+                    reply — the brand's signature separator (三颗渐变小石点),
+                    echoing the rich-text <hr>. Only between user → assistant. */}
+                {message.role === 'assistant' && conversation.messages[index - 1]?.role === 'user' ? (
+                  <StoneDots />
+                ) : null}
+                <AnsweredQuestions message={message} />
+                <MessageBubble
                   message={message}
-                  onOpenArtifact={onOpenArtifact}
-                  onFailureAction={index === conversation.messages.length - 1
-                    ? (action, failedMessage) => onFailureAction?.(action, failedMessage.id)
-                    : undefined}
-                />
-              </MessageBubble>
-            </Fragment>
-          ))}
-          {conversation.messages.at(-1) ? (
-            <ThinkingIndicator message={conversation.messages[conversation.messages.length - 1]} />
+                  initialStreamText={message.status === 'streaming' ? streamDisplayCacheRef.current.get(message.id) : undefined}
+                  onStreamTextCommit={handleStreamTextCommit}
+                  workspaceRoot={effectiveWorkspaceRoot}
+                  onPreviewLocalFile={onPreviewLocalFile}
+                  onLocalFileContextMenu={onLocalFileContextMenu}
+                  onRegenerate={onRegenerateMessage}
+                  onEditResend={onEditResendMessage}
+                  onDelete={onDeleteMessage}
+                  onOpenDiagnostics={onOpenDiagnostics}
+                  onLoadArtifactContent={onLoadArtifactContent}
+                  runActive={runActive}
+                >
+                  <MessageProcess
+                    message={message}
+                    onOpenArtifact={onOpenArtifact}
+                    onFailureAction={index === conversation.messages.length - 1
+                      ? (action, failedMessage) => onFailureAction?.(action, failedMessage.id)
+                      : undefined}
+                  />
+                </MessageBubble>
+              </Fragment>
+            ))}
+            {conversation.messages.at(-1) ? (
+              <ThinkingIndicator message={conversation.messages[conversation.messages.length - 1]} />
+            ) : null}
+          </div>
+          {/* Scroll-to-bottom affordance (Codex / Claude Code pattern):
+              appears only while the user has scrolled away from the latest
+              content; click returns to the newest message. */}
+          {!isPinnedToBottom ? (
+            <button
+              type="button"
+              className="scroll-to-bottom"
+              onClick={scrollToBottom}
+              aria-label={t('chat.scrollToBottom')}
+              title={t('chat.scrollToBottom')}
+            >
+              <IconArrowDown size={16} stroke={2} aria-hidden="true" />
+            </button>
           ) : null}
-        </div>
+        </>
       ) : (
         <div className="empty-state welcome-body">
           <div className="logo" aria-hidden="true">

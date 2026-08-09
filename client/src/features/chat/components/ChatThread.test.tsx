@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { I18nProvider } from '@/shared/i18n/I18nProvider'
 import type { Conversation } from '@/shared/local-data/types'
@@ -45,6 +45,26 @@ describe('ChatThread streaming display cache', () => {
     expect(screen.getByText('你想要什么风格？')).toBeInTheDocument()
     expect(screen.getByText('简洁文字')).toBeInTheDocument()
     expect(screen.getByText('已经按你的选择继续处理。')).toBeInTheDocument()
+  })
+
+  it('shows the scroll-to-bottom button when scrolled away and re-pins on click', () => {
+    renderThread(conversationWithStreamingAnswer('第一段。'))
+    const messages = document.querySelector('.messages') as HTMLElement
+    Object.defineProperty(messages, 'scrollHeight', { value: 2000, configurable: true })
+    Object.defineProperty(messages, 'scrollTop', { value: 500, configurable: true, writable: true })
+    Object.defineProperty(messages, 'clientHeight', { value: 400, configurable: true })
+
+    expect(screen.queryByRole('button', { name: '回到底部' })).not.toBeInTheDocument()
+
+    fireEvent.scroll(messages)
+    const button = screen.getByRole('button', { name: '回到底部' })
+    expect(button).toBeInTheDocument()
+
+    const scrollTo = vi.fn()
+    Object.defineProperty(messages, 'scrollTo', { value: scrollTo, configurable: true })
+    fireEvent.click(button)
+    expect(scrollTo).toHaveBeenCalledWith({ top: 2000, behavior: 'auto' })
+    expect(screen.queryByRole('button', { name: '回到底部' })).not.toBeInTheDocument()
   })
 })
 

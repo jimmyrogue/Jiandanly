@@ -3210,10 +3210,6 @@ select {
   letter-spacing: 0;
 }
 
-button:active {
-  transform: scale(0.98);
-}
-
 .app-window-shell {
   display: flex;
   flex-direction: column;
@@ -4657,6 +4653,48 @@ button:active {
    * .composer::before at bottom). Bottom gets extra slack so the
    * last bubble's meta row clears the composer fade. */
   padding: 36px 22px 60px;
+}
+
+/* Scroll-to-bottom affordance (Codex / Claude Code pattern). A small
+ * raised-paper circle with an ink down-chevron, centred just above the
+ * composer. Renders only
+ * while the user has scrolled away from the latest content; clicking
+ * returns to the newest message. z-index sits above the
+ * .chat-surface::after bottom fade. */
+.scroll-to-bottom {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--sj-line);
+  border-radius: 50%;
+  background: var(--sj-paper-raised);
+  color: var(--sj-ink-soft);
+  box-shadow: 0 2px 8px rgba(43, 42, 40, 0.08);
+  cursor: pointer;
+  transform: translateX(-50%);
+  animation: scroll-to-bottom-in 160ms ease-out;
+}
+.scroll-to-bottom:hover,
+.scroll-to-bottom:focus-visible {
+  color: var(--sj-ink);
+  border-color: var(--sj-line-strong);
+  box-shadow: 0 2px 8px rgba(43, 42, 40, 0.14);
+}
+@keyframes scroll-to-bottom-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 4px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
 }
 
 /* Block by default. .message.user reverts to flex (right-aligned
