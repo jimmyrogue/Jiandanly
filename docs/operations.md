@@ -163,13 +163,13 @@ Client 的“模型服务”设置调用 Runtime 的 `/v1/model-services` 接口
 
 OpenAI 官方连接默认使用 Responses，也可按模型选择 Chat Completions；Anthropic 使用原生 Messages；Google Gemini 使用原生 GenerateContent。Runtime 在 Run 接纳时冻结具体协议，不会按品牌猜测或在失败后静默换协议。这些工具调用路径共用同一套可逆 wire name：工具定义、`tool_choice`、历史 assistant 调用和 `ToolMessage.name` 一致编码，返回 Runtime 后恢复内部点号名称；改名不会改变 call ID、调用顺序、OpenAI reasoning item、Anthropic thinking/signature 或 Gemini thought signature。
 
-Runtime 不在 Client 启动时访问外部服务。新增或更新连接只尝试读取远端模型目录并保存凭据，不自动调用目录中的每个模型；`/models` 失败时，预置服务会保留内置或最近缓存目录。凭据可读且声明或推断为 Agent 对话用途的目录模型会立即用于模型选择和 Agent Run，`verified` 不是可用性门禁。用户只在“测试模型”中主动触发兼容性测试；Runtime 此时才使用正式 Agent 共用的 Provider 适配器完成流式 `模型 → shejane.ping 工具 → 工具结果 → 最终回答`。探针故意使用内部点号名称以覆盖生产别名和第二轮历史重放，最多生成 512 tokens，并在 30 秒内完成整个闭环。测试只更新兼容性记录；失败不会禁用模型或连接，真实 Run 的 Provider 错误仍按原错误分类返回。
+Runtime 不在 Client 启动时访问外部服务。新增或更新连接只尝试读取远端模型目录并保存凭据，不自动调用目录中的每个模型，也不在连接成功后弹出兼容性测试；`/models` 失败时，预置服务会保留内置或最近缓存目录。凭据可读且声明或推断为 Agent 对话用途的目录模型会立即用于模型选择和 Agent Run，`verified` 不是可用性门禁。模型服务“更多”中的“测试连接”只选择该服务推荐的 Agent 对话模型，没有推荐项时选择第一个 Agent 对话模型；“高级兼容性测试”可明确选择其他模型、用途和协议。Runtime 此时才使用正式 Agent 共用的 Provider 适配器完成流式 `模型 → shejane.ping 工具 → 工具结果 → 最终回答`。探针故意使用内部点号名称以覆盖生产别名和第二轮历史重放，最多生成 512 tokens，并在 30 秒内完成整个闭环。测试只更新兼容性记录；失败不会禁用模型或连接，真实 Run 的 Provider 错误仍按原错误分类返回。
 
 中转站返回且未声明结构化用途的目录模型默认按 Agent 对话模型处理；明确只声明图片用途的模型不进入主模型选择器。一个模型可以分别测试多项能力：Agent 对话执行完整工具闭环，图片理解发送最小内联图片，图片生成调用 OpenAI-compatible `/images/generations`，图片编辑调用 `/images/edits`。图片生成和编辑测试都会产生一次真实请求，可能计费；图片生成和编辑模型仍使用独立默认绑定，不与主模型混列。
 
 Client 的“生图”入口发送结构化的 `required_tools: ["image.generate"]`，不再向用户文本拼接隐藏提示词。Runtime 在 Run 接纳时冻结默认图片模型的连接版本、模型 ID、协议和绑定修订；Agent 通过 `image.generate` 或 `image.edit` 调用该模型，结果下载并校验后保存为 Runtime Artifact，对话只接收 Artifact 元数据并通过鉴权接口显示图片，不在事件或模型上下文中传递 Base64。`image.generate` 可把当前 Run 的一个 `/attachments/...` 图片作为参考图，经同一图片生成绑定调用 OpenAI-compatible `/images/edits`；`image.edit` 也接受当前 Run 附件或既有图片 Artifact。两者只解析 Runtime 已冻结的附件快照，不接受任意本地路径。模型服务或绑定在执行前发生变化时，旧 Run 会安全失效，不会静默切换到另一个模型。
 
-输入区的模型菜单同时显示当前对话模型和已验证的图片生成模型。存在已验证图片生成模型但尚无 `image_generation` 绑定时，Runtime 自动选择目录中第一个推荐模型，没有推荐项时选择第一个可用项；用户之后的选择不会被覆盖。切换图片模型会更新 Runtime 保存的默认绑定。SheJane 官方服务直接采用固定 Cloud origin 声明的模型用途；BYOK 和自定义服务的 Agent 对话模型连接后即可使用，图片生成、图片编辑等额外能力仍须先在“模型服务”中完成一次对应能力的真实接口验证。
+输入区的模型菜单同时显示当前对话模型和已验证的图片生成模型。存在已验证图片生成或图片编辑模型但尚无对应能力绑定时，Runtime 会优先选择 SheJane 官方目录的推荐模型，没有推荐项时选择第一个官方模型；没有官方候选时再使用其他已验证候选。用户之后的选择不会被覆盖。切换图片模型会更新 Runtime 保存的默认绑定。SheJane 官方服务直接采用固定 Cloud origin 声明的模型用途，授权和目录同步期间不发送文字或图片兼容性探针；BYOK 和自定义服务的 Agent 对话模型连接后即可使用，图片生成、图片编辑等额外能力仍须先在“高级兼容性测试”中完成一次对应能力的真实接口验证。
 
 图片供应商非 2xx 响应会保留脱敏后的稳定错误类别和 `request_id`：401/402/403/429、400、5xx 与 NewAPI/Tuzi 的 `get_channel_failed` 不再统一显示为“未知失败”。排查 Tuzi 问题时，应把界面或诊断事件中的 `request_id`、发生时间、接口和脱敏请求体一起提交给供应商。
 

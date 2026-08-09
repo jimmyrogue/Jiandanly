@@ -95,6 +95,7 @@ display_name
 source                bundled | discovered | manual
 verification          verified | unverified
 recommended
+recommended_for       agent_chat | image_understanding | image_generation | image_editing 的用途列表
 streaming
 tool_calling
 image_inputs
@@ -153,7 +154,10 @@ GET    /v1/models
 5. Runtime 从同一固定 origin 拉取 `/v1/models`，信任 Cloud 返回的 `capabilities` 和
    `recommended_for`，自动按用途归类和推荐模型；这些声明只对固定官方 origin 生效，
    BYOK 或自定义服务不能借此绕过现有验证。
-6. 拒绝、超时、state 不匹配、交换失败和响应丢失均为终态；不回退到 BYOK Key，也不
+6. 授权和目录同步不运行兼容性探针。Agent 对话模型同步后即可使用；若用户尚未选择图片
+   能力模型，Runtime 分别为图片生成和图片编辑绑定官方目录中的推荐模型，没有推荐项时
+   使用对应能力的第一个官方模型。已有用户绑定不会被覆盖。
+7. 拒绝、超时、state 不匹配、交换失败和响应丢失均为终态；不回退到 BYOK Key，也不
    接受浏览器返回的服务地址。
 
 SheJane 官方服务不能通过普通 `/v1/model-services` API Key 接口创建、导入或替换凭据。
@@ -169,6 +173,10 @@ SheJane 官方服务不能通过普通 `/v1/model-services` API Key 接口创建
 5. Runtime 尝试刷新模型目录；失败时使用内置目录并仍然完成连接。
 6. Client 展示 1–3 个推荐模型和“更多模型”。
 7. 用户明确选择具体模型。
+
+连接成功后不自动打开兼容性测试。模型服务的“更多”菜单提供只调用推荐文字模型的
+“测试连接”，失败只保存诊断结果，不回滚凭据或禁用模型；图片与自定义协议测试保留在
+“高级兼容性测试”中，并明确提示真实图片请求可能计费。
 
 目录接口因余额或厂商服务状态失败时仍算连接成功；Client 显示连接状态，实际调用错误
 直接提醒用户，并提供厂商控制台入口。
