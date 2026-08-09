@@ -24,7 +24,7 @@ if (!previousInput || !currentInput || !previousTag || !currentTag) {
   )
 }
 for (const tag of [previousTag, currentTag]) {
-  if (!/^client-v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(tag)) {
+  if (!/^client-v\d+\.\d+\.\d+$/.test(tag)) {
     throw new Error(`invalid Client release tag: ${tag}`)
   }
 }
@@ -38,6 +38,30 @@ await mkdir(dataDir)
 await mkdir(home)
 const token = randomBytes(32).toString('hex')
 const wait = (milliseconds) => new Promise((done) => setTimeout(done, milliseconds))
+const CHILD_ENVIRONMENT_KEYS = [
+  'PATH',
+  'TMPDIR',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'SYSTEMROOT',
+  'WINDIR',
+  'COMSPEC',
+  'PATHEXT',
+  'TEMP',
+  'TMP',
+  'APPDATA',
+  'LOCALAPPDATA',
+]
+
+function childEnvironment(overrides) {
+  const environment = {}
+  for (const key of CHILD_ENVIRONMENT_KEYS) {
+    const value = process.env[key]
+    if (value) environment[key] = value
+  }
+  return { ...environment, ...overrides }
+}
 
 async function freePort() {
   return new Promise((resolvePort, rejectPort) => {
@@ -72,12 +96,11 @@ async function startAndVerify(runtime, tag, pluginIdsToEnable = []) {
     '--fixed-runtime-asset-base-url',
     `https://github.com/jimmyrogue/SheJane/releases/download/${tag}`,
   ], {
-    env: {
-      ...process.env,
+    env: childEnvironment({
       HOME: home,
       USERPROFILE: home,
       PYTHONUNBUFFERED: '1',
-    },
+    }),
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   child.stdout.on('data', (chunk) => {

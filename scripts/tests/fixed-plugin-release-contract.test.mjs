@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
 import {
@@ -137,4 +138,46 @@ test('upgrade smoke enables only persistence plugins through commands', async ()
       },
     },
   ])
+})
+
+test('release upgrade smoke isolates credentials and pins downloaded installers', () => {
+  const workflow = readFileSync(
+    new URL('../../.github/workflows/release-client.yml', import.meta.url),
+    'utf8',
+  )
+  const upgradeSmoke = readFileSync(
+    new URL('../test-packaged-runtime-upgrade.mjs', import.meta.url),
+    'utf8',
+  )
+  const assetLock = JSON.parse(readFileSync(
+    new URL('../client-release-asset-lock.json', import.meta.url),
+    'utf8',
+  ))
+
+  assert.doesNotMatch(upgradeSmoke, /\.\.\.process\.env/)
+  assert.match(upgradeSmoke, /const CHILD_ENVIRONMENT_KEYS =/)
+  assert.match(upgradeSmoke, /env: childEnvironment\(/)
+  assert.match(workflow, /permissions:\n  contents: read/)
+  assert.match(workflow, /release:\n(?:.|\n)*?permissions:\n      contents: write/)
+  assert.match(workflow, /client-release-asset-lock\.json/)
+  assert.deepEqual(assetLock['client-v0.1.38'], {
+    'SheJane-0.1.38-arm64.zip': 'sha256:dbfba9e283eb22b446808f488d6ebbc6b844f1b3f68736a9dbae8b9cd84a0eac',
+    'SheJane-0.1.38-x64.exe': 'sha256:ea2db236f0f0f3547935619ba1de2a6b178751389ef8c1250f02eb8c4ac465f6',
+  })
+})
+
+test('Client release entry points reject prerelease suffixes from the stable lane', () => {
+  const workflow = readFileSync(
+    new URL('../../.github/workflows/release-client.yml', import.meta.url),
+    'utf8',
+  )
+  const makefile = readFileSync(new URL('../../Makefile', import.meta.url), 'utf8')
+  const upgradeSmoke = readFileSync(
+    new URL('../test-packaged-runtime-upgrade.mjs', import.meta.url),
+    'utf8',
+  )
+
+  assert.match(workflow, /\^client-v\[0-9\]\+\\\.\[0-9\]\+\\\.\[0-9\]\+\$/)
+  assert.match(makefile, /\^\[0-9\]\+\\\.\[0-9\]\+\\\.\[0-9\]\+\$\$/)
+  assert.match(upgradeSmoke, /\^client-v\\d\+\\\.\\d\+\\\.\\d\+\$/)
 })

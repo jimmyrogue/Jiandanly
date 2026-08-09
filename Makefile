@@ -129,7 +129,7 @@ setup-hooks: ## Install lefthook + wire pre-commit hooks (run once per clone)
 ##@ Release
 release: ## Cut a published release: COMPONENT=client|runtime-sdk VERSION=X.Y.Z
 	@case "$(COMPONENT)" in client|runtime-sdk) ;; *) echo "❌ COMPONENT must be client or runtime-sdk" >&2; exit 1 ;; esac
-	@case "$(VERSION)" in [0-9]*.[0-9]*.[0-9]*) ;; *) echo "❌ VERSION must look like X.Y.Z" >&2; exit 1 ;; esac
+	@printf '%s\n' "$(VERSION)" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$$' || { echo "❌ VERSION must look like X.Y.Z" >&2; exit 1; }
 	@if [ -n "$$(git status --porcelain)" ]; then echo "❌ Working tree not clean — commit or stash first." >&2; exit 1; fi
 	@branch=$$(git rev-parse --abbrev-ref HEAD); if [ "$$branch" != "main" ]; then echo "❌ Releases must be cut from main (currently on '$$branch')." >&2; exit 1; fi
 	git tag -a "$(COMPONENT)-v$(VERSION)" -m "$(COMPONENT) v$(VERSION)"

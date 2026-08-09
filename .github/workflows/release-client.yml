@@ -30,9 +30,21 @@ on:
         default: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  validate-release-tag:
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a stable Client version tag
+        shell: bash
+        run: |
+          [[ "${GITHUB_REF_NAME}" =~ ^client-v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "Client releases require an exact client-vX.Y.Z tag" >&2
+            exit 1
+          }
+
   agent-eval-gate:
     if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -1009,6 +1021,7 @@ jobs:
 
   build:
     needs:
+      - validate-release-tag
       - agent-eval-gate
       - linux-arm64-documents-worker
       - linux-arm64-ffmpeg-runtime
@@ -1507,16 +1520,40 @@ jobs:
 
           if [[ "${{ matrix.platform }}" == "macos" ]]; then
             previous_asset="SheJane-${previous_version}-arm64.zip"
-            gh release download "${previous_tag}" --repo "${GITHUB_REPOSITORY}" \
-              --pattern "${previous_asset}" --dir "${previous_root}"
-            ditto -x -k "${previous_root}/${previous_asset}" "${previous_root}/unpacked"
-            previous_runtime="$(find "${previous_root}/unpacked" -type f \
-              -path '*/Contents/Resources/runtime/shejane-runtime' -print -quit)"
-            current_runtime="runtime/dist/shejane-runtime/shejane-runtime"
           else
             previous_asset="SheJane-${previous_version}-x64.exe"
-            gh release download "${previous_tag}" --repo "${GITHUB_REPOSITORY}" \
-              --pattern "${previous_asset}" --dir "${previous_root}"
+          fi
+          gh release download "${previous_tag}" --repo "${GITHUB_REPOSITORY}" \
+            --pattern "${previous_asset}" --dir "${previous_root}"
+          node --input-type=module - \
+            "${previous_tag}" "${previous_asset}" "${previous_root}/${previous_asset}" <<'NODE'
+          import { createHash } from 'node:crypto'
+          import { readFileSync } from 'node:fs'
+
+          const [tag, asset, path] = process.argv.slice(2)
+          const lock = JSON.parse(readFileSync('scripts/client-release-asset-lock.json', 'utf8'))
+          const expected = lock[tag]?.[asset]
+          if (!expected) throw new Error(`no trusted digest for ${tag}/${asset}`)
+          const actual = `sha256:${createHash('sha256').update(readFileSync(path)).digest('hex')}`
+          if (actual !== expected) {
+            throw new Error(`trusted digest mismatch for ${tag}/${asset}: ${actual}`)
+          }
+          NODE
+
+          if [[ "${{ matrix.platform }}" == "macos" ]]; then
+            ditto -x -k "${previous_root}/${previous_asset}" "${previous_root}/unpacked"
+            previous_app="$(find "${previous_root}/unpacked" -type d -name '*.app' -print -quit)"
+            test -n "${previous_app}"
+            previous_runtime="$(find "${previous_root}/unpacked" -type f \
+              -path '*/Contents/Resources/runtime/shejane-runtime' -print -quit)"
+            codesign --verify --deep --strict --verbose=2 "${previous_app}"
+            codesign -d --verbose=4 "${previous_runtime}" 2>&1 \
+              | grep -Fq 'Identifier=com.shejane.runtime'
+            codesign -d --verbose=4 "${previous_runtime}" 2>&1 \
+              | grep -Fq "TeamIdentifier=${APPLE_TEAM_ID}"
+            spctl --assess --type execute --verbose=4 "${previous_app}"
+            current_runtime="runtime/dist/shejane-runtime/shejane-runtime"
+          else
             7z x -y "${previous_root}/${previous_asset}" "-o${previous_root}/installer" \
               '$PLUGINSDIR/app-64.7z' >/dev/null
             embedded="$(find "${previous_root}/installer" -type f -name 'app-64.7z' -print -quit)"
@@ -1562,6 +1599,8 @@ jobs:
       needs.build.result == 'success'
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
