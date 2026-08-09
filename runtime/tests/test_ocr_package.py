@@ -287,6 +287,33 @@ def test_release_replays_previous_frozen_runtime_data_before_publishing() -> Non
     assert "test-packaged-runtime-upgrade.mjs" in workflow
 
 
+def test_packaged_smoke_fixed_plugin_contract_matches_release_inputs() -> None:
+    workflow = (REPO_ROOT / ".github" / "workflows" / "release-client.yml").read_text(
+        encoding="utf-8"
+    )
+    contract = (REPO_ROOT / "scripts" / "fixed-plugin-release-contract.mjs").read_text(
+        encoding="utf-8"
+    )
+
+    expected = (
+        ("org.shejane.computer-use", "0.2.3", "computer-use-0.2.3-darwin-arm64"),
+        ("org.shejane.browser-qa", "0.1.3", "browser-qa-0.1.3-darwin-arm64"),
+        ("org.shejane.browser-qa", "0.1.3", "browser-qa-0.1.3-windows-amd64"),
+        ("org.shejane.ocr", "0.1.5", "ocr-0.1.5-darwin-arm64"),
+        ("org.shejane.ocr", "0.1.5", "ocr-0.1.5-windows-amd64"),
+    )
+    for plugin_id, version, package in expected:
+        assert f"{{ id: '{plugin_id}', version: '{version}' }}" in contract
+        assert f"{package}.shejane-plugin" in workflow
+    for release_input in (
+        "scripts/fixed-plugin-release-contract.mjs",
+        "scripts/tests/fixed-plugin-release-contract.test.mjs",
+        "scripts/test-packaged-client-runtime.mjs",
+        "scripts/test-packaged-runtime-upgrade.mjs",
+    ):
+        assert f"- {release_input}" in workflow
+
+
 def test_release_requires_stable_developer_id_signature() -> None:
     workflow = (REPO_ROOT / ".github" / "workflows" / "release-client.yml").read_text(
         encoding="utf-8"

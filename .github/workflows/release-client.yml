@@ -18,6 +18,9 @@ on:
       - scripts/build-computer-use-builtin.sh
       - scripts/build-ocr-builtin.sh
       - scripts/build-ocr-windows-amd64.ps1
+      - scripts/fixed-plugin-release-contract.mjs
+      - scripts/tests/fixed-plugin-release-contract.test.mjs
+      - scripts/test-packaged-client-runtime.mjs
       - scripts/test-packaged-runtime-upgrade.mjs
   workflow_dispatch:
     inputs:

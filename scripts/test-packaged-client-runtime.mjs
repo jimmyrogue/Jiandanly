@@ -9,6 +9,11 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { spawn } from 'node:child_process'
 
+import {
+  assertExpectedFixedPlugins,
+  expectedFixedPlugins,
+} from './fixed-plugin-release-contract.mjs'
+
 const execFileAsync = promisify(execFile)
 const packagedPath = resolve(process.argv[2] || '')
 const isMacOSApp = process.platform === 'darwin' && packagedPath.endsWith('.app')
@@ -296,9 +301,15 @@ try {
     throw new Error(`packaged Runtime health failed with HTTP ${health.status}`)
   }
   const plugins = await fetch(`${handoff.baseURL}/v1/plugins`, { headers })
-  if (!plugins.ok || !Array.isArray((await plugins.json()).plugins)) {
+  const pluginCatalog = plugins.ok ? await plugins.json() : null
+  if (!Array.isArray(pluginCatalog?.plugins)) {
     throw new Error(`packaged Runtime plugin catalog failed with HTTP ${plugins.status}`)
   }
+  assertExpectedFixedPlugins(
+    pluginCatalog.plugins,
+    expectedFixedPlugins(process.platform, process.arch),
+    'packaged Runtime',
+  )
   const presets = await fetch(`${handoff.baseURL}/v1/model-services/presets`, { headers })
   const presetCatalog = presets.ok ? await presets.json() : null
   const official = presetCatalog?.services?.[0]

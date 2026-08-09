@@ -8,6 +8,14 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
 
+import {
+  assertExpectedFixedPlugins,
+  assertFixedPluginsEnabled,
+  enableFixedPluginsForUpgrade,
+  expectedFixedPlugins,
+  UPGRADE_PERSISTENCE_PLUGIN_IDS,
+} from './fixed-plugin-release-contract.mjs'
+
 const [previousInput, currentInput, previousTag, currentTag] = process.argv.slice(2)
 if (!previousInput || !currentInput || !previousTag || !currentTag) {
   throw new Error(
@@ -52,7 +60,7 @@ async function stopProcess(child) {
   await closed
 }
 
-async function startAndVerify(runtime, tag) {
+async function startAndVerify(runtime, tag, pluginIdsToEnable = []) {
   const port = await freePort()
   let stdout = ''
   let stderr = ''
@@ -79,12 +87,16 @@ async function startAndVerify(runtime, tag) {
     stderr = `${stderr}${chunk}`.slice(-32_768)
   })
 
-  async function fetchJson(path, label) {
+  async function fetchJson(path, label, init = {}) {
     let lastError
     for (let attempt = 1; attempt <= 5 && child.exitCode === null; attempt += 1) {
       try {
         const response = await fetch(`http://127.0.0.1:${port}${path}`, {
-          headers: { Authorization: `Bearer ${token}` },
+          ...init,
+          headers: {
+            Authorization: `Bearer ${token}`,
+            ...init.headers,
+          },
           signal: AbortSignal.timeout(5_000),
         })
         if (!response.ok) {
@@ -118,12 +130,23 @@ async function startAndVerify(runtime, tag) {
       }
       if (healthy) {
         const summaries = (await fetchJson('/v1/plugins', 'plugin catalog')).plugins
-        const details = []
+        let details = []
         for (const { id } of summaries) {
           details.push(await fetchJson(
             `/v1/plugins/${encodeURIComponent(id)}`,
             `plugin ${id}`,
           ))
+        }
+        await enableFixedPluginsForUpgrade(details, pluginIdsToEnable, tag, fetchJson)
+        if (pluginIdsToEnable.length > 0) {
+          details = []
+          for (const { id } of summaries) {
+            details.push(await fetchJson(
+              `/v1/plugins/${encodeURIComponent(id)}`,
+              `enabled plugin ${id}`,
+            ))
+          }
+          assertFixedPluginsEnabled(details, pluginIdsToEnable, tag)
         }
         return details
       }
@@ -141,8 +164,22 @@ async function startAndVerify(runtime, tag) {
 try {
   await access(previousRuntime, constants.R_OK)
   await access(currentRuntime, constants.R_OK)
-  const previousPlugins = await startAndVerify(previousRuntime, previousTag)
+  const previousPlugins = await startAndVerify(
+    previousRuntime,
+    previousTag,
+    UPGRADE_PERSISTENCE_PLUGIN_IDS,
+  )
   const currentPlugins = await startAndVerify(currentRuntime, currentTag)
+  assertExpectedFixedPlugins(
+    currentPlugins,
+    expectedFixedPlugins(process.platform, process.arch),
+    currentTag,
+  )
+  assertFixedPluginsEnabled(
+    currentPlugins,
+    UPGRADE_PERSISTENCE_PLUGIN_IDS,
+    currentTag,
+  )
   const currentByID = new Map(currentPlugins.map((plugin) => [plugin.id, plugin]))
   for (const previous of previousPlugins) {
     const current = currentByID.get(previous.id)

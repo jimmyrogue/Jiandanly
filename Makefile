@@ -15,7 +15,7 @@
 
 .PHONY: help \
 	dev dev-client dev-runtime restart-runtime doctor \
-	test test-client test-runtime test-runtime-sdk test-contract test-fixed-plugins-e2e test-e2e test-e2e-real test-packaged \
+	test test-client test-runtime test-runtime-sdk test-scripts test-contract test-fixed-plugins-e2e test-e2e test-e2e-real test-packaged \
 	ci build build-client build-runtime build-runtime-sdk package-runtime \
 	lint schemas setup-hooks \
 	release eval eval-gate \
@@ -45,7 +45,7 @@ doctor: ## One-shot diagnostic: "why isn't dev working?"
 	@./scripts/dev.sh doctor
 
 ##@ Test
-test: test-client test-runtime-sdk test-runtime ## Fast unit suites by fault domain
+test: test-client test-runtime-sdk test-runtime test-scripts ## Fast unit suites by fault domain
 
 test-client: ## Client unit tests
 	pnpm --filter @shejane/client test --run
@@ -55,6 +55,9 @@ test-runtime: ## Runtime unit tests
 
 test-runtime-sdk: ## Runtime SDK unit tests
 	pnpm --filter @shejane/runtime-sdk test
+
+test-scripts: ## Node script contract tests
+	node --test scripts/tests/*.test.mjs
 
 test-contract: ## Real Runtime HTTP/SSE ↔ Runtime SDK contract tests, without Electron
 	SHEJANE_CONTRACT_ONLY=1 ./scripts/test-contract.sh
