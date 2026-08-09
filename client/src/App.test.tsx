@@ -150,6 +150,168 @@ describe('desktop shell', () => {
     expect(screen.getByRole('tab', { name: 'MCP' })).toHaveAttribute('aria-selected', 'true')
   })
 
+  it('persists disabled MCP servers through the canonical agent settings path', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/v1/mcp-servers')) {
+        return new Response(JSON.stringify({
+          servers: [{
+            name: 'github',
+            transport: 'stdio',
+            source: 'shejane',
+            source_path: '/tmp/mcp-servers.json',
+            command: 'npx',
+            args: ['github-mcp'],
+            env_keys: [],
+            cwd: null,
+            url: null,
+            status: 'idle',
+            tool_count: 0,
+          }],
+          sources_scanned: ['shejane'],
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      throw new Error('Runtime offline')
+    }))
+
+    const firstMount = render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '插件' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'MCP' }))
+    fireEvent.click(await screen.findByRole('switch', { name: 'github' }))
+
+    expect(JSON.parse(window.localStorage.getItem('shejane.agentSettings.v9') ?? '{}')).toEqual({
+      memory: 'on',
+      mcpDisabled: ['github'],
+    })
+    expect(window.localStorage.getItem('shejane-agent-settings')).toBeNull()
+
+    firstMount.unmount()
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '插件' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'MCP' }))
+
+    expect(await screen.findByRole('switch', { name: 'github' })).toHaveAttribute('aria-checked', 'false')
+  })
+
+  it('migrates legacy-only disabled MCP servers to canonical agent settings', async () => {
+    window.localStorage.setItem('shejane-agent-settings', JSON.stringify({ mcpDisabled: ['github'] }))
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/v1/mcp-servers')) {
+        return new Response(JSON.stringify({
+          servers: [{
+            name: 'github',
+            transport: 'stdio',
+            source: 'shejane',
+            source_path: '/tmp/mcp-servers.json',
+            command: 'npx',
+            args: ['github-mcp'],
+            env_keys: [],
+            cwd: null,
+            url: null,
+            status: 'idle',
+            tool_count: 0,
+          }],
+          sources_scanned: ['shejane'],
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      throw new Error('Runtime offline')
+    }))
+
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '插件' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'MCP' }))
+
+    expect(await screen.findByRole('switch', { name: 'github' })).toHaveAttribute('aria-checked', 'false')
+    expect(JSON.parse(window.localStorage.getItem('shejane.agentSettings.v9') ?? '{}')).toEqual({
+      memory: 'on',
+      mcpDisabled: ['github'],
+    })
+    expect(window.localStorage.getItem('shejane-agent-settings')).toBeNull()
+  })
+
+  it('migrates the latest legacy disabled MCP server selection over stale canonical data', async () => {
+    window.localStorage.setItem('shejane.agentSettings.v9', JSON.stringify({
+      memory: 'off',
+      mcpDisabled: ['github'],
+    }))
+    window.localStorage.setItem('shejane-agent-settings', JSON.stringify({
+      mcpDisabled: ['playwright', 'github'],
+    }))
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/v1/mcp-servers')) {
+        return new Response(JSON.stringify({
+          servers: ['github', 'playwright'].map((name) => ({
+            name,
+            transport: 'stdio',
+            source: 'shejane',
+            source_path: '/tmp/mcp-servers.json',
+            command: 'npx',
+            args: [`${name}-mcp`],
+            env_keys: [],
+            cwd: null,
+            url: null,
+            status: 'idle',
+            tool_count: 0,
+          })),
+          sources_scanned: ['shejane'],
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      throw new Error('Runtime offline')
+    }))
+
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '插件' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'MCP' }))
+
+    expect(await screen.findByRole('switch', { name: 'github' })).toHaveAttribute('aria-checked', 'false')
+    expect(screen.getByRole('switch', { name: 'playwright' })).toHaveAttribute('aria-checked', 'false')
+    expect(JSON.parse(window.localStorage.getItem('shejane.agentSettings.v9') ?? '{}')).toEqual({
+      memory: 'off',
+      mcpDisabled: ['playwright', 'github'],
+    })
+    expect(window.localStorage.getItem('shejane-agent-settings')).toBeNull()
+  })
+
+  it('treats an empty legacy MCP list as the latest re-enabled selection', async () => {
+    window.localStorage.setItem('shejane.agentSettings.v9', JSON.stringify({
+      memory: 'off',
+      mcpDisabled: ['github'],
+    }))
+    window.localStorage.setItem('shejane-agent-settings', JSON.stringify({ mcpDisabled: [] }))
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/v1/mcp-servers')) {
+        return new Response(JSON.stringify({
+          servers: [{
+            name: 'github',
+            transport: 'stdio',
+            source: 'shejane',
+            source_path: '/tmp/mcp-servers.json',
+            command: 'npx',
+            args: ['github-mcp'],
+            env_keys: [],
+            cwd: null,
+            url: null,
+            status: 'idle',
+            tool_count: 0,
+          }],
+          sources_scanned: ['shejane'],
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      throw new Error('Runtime offline')
+    }))
+
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '插件' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'MCP' }))
+
+    expect(await screen.findByRole('switch', { name: 'github' })).toHaveAttribute('aria-checked', 'true')
+    expect(JSON.parse(window.localStorage.getItem('shejane.agentSettings.v9') ?? '{}')).toEqual({
+      memory: 'off',
+      mcpDisabled: [],
+    })
+    expect(window.localStorage.getItem('shejane-agent-settings')).toBeNull()
+  })
+
   it('detects Runtime offline and recovery without remounting the Client', async () => {
     vi.useFakeTimers()
     let runtimeOnline = true

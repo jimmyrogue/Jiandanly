@@ -272,6 +272,54 @@ describe('ModelServicesSettings', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('官方服务已连接，但运行诊断未能自动开启，你可以稍后重试。')
   })
 
+  it('bumps the model catalog before best-effort authorization reload', async () => {
+    const connection = {
+      ...tuziConnection,
+      id: `conn_${'a'.repeat(32)}`,
+      preset_id: 'shejane-official',
+      name: 'SheJane 官方服务（推荐）',
+      region: 'official',
+      base_url: 'https://cloud.example.test/v1',
+    }
+    const onChanged = vi.fn()
+    api.listModelServicePresets.mockResolvedValue([shejaneOfficial])
+    api.listModelServices
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Error('authorization reload failed'))
+    api.startSheJaneAuthorization.mockResolvedValue({
+      authorization_id: `auth_${'b'.repeat(32)}`,
+      authorization_url: 'https://cloud.example.test/shejane/authorize?state=safe',
+      expires_at: '2026-07-29T00:10:00Z',
+    })
+    api.getSheJaneAuthorization.mockResolvedValue({
+      authorization_id: `auth_${'b'.repeat(32)}`,
+      status: 'succeeded',
+      connection,
+      error_code: null,
+    })
+    api.updateCentralDiagnostics.mockResolvedValue({
+      enabled: true,
+      connection_id: connection.id,
+      success_sample_rate: 0,
+      credential_configured: true,
+    })
+    Object.defineProperty(window, 'shejaneClient', {
+      configurable: true,
+      value: { openExternal: vi.fn().mockResolvedValue(undefined) },
+    })
+
+    render(
+      <I18nProvider>
+        <ModelServicesSettings config={config} onChanged={onChanged} />
+      </I18nProvider>,
+    )
+    fireEvent.click(await screen.findByRole('button', { name: '连接已有服务' }))
+    fireEvent.click(screen.getByRole('button', { name: /SheJane 官方服务/ }))
+
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
+    expect(await screen.findByRole('alert')).toHaveTextContent('authorization reload failed')
+  })
+
   it.each([
     ['denied', '你已取消授权。'],
     ['expired', '授权已超时，请重试。'],
@@ -443,6 +491,7 @@ describe('ModelServicesSettings', () => {
 
     expect(await screen.findByRole('status')).toHaveTextContent('正在连接服务并读取模型列表')
     expect(screen.getByRole('button', { name: '配置中…' })).toHaveAttribute('aria-busy', 'true')
+    expect(screen.getByRole('button', { name: '返回选择模型服务' })).toBeDisabled()
 
     finishConnect()
     await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument())
@@ -814,9 +863,129 @@ describe('ModelServicesSettings', () => {
 
     await waitFor(() => expect(api.verifyModelServiceModel).toHaveBeenCalledTimes(1))
     expect(screen.getByRole('button', { name: '第二个服务 更多操作' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '连接已有服务' })).toBeDisabled()
 
     finishTest()
     await waitFor(() => expect(screen.getByText('连接测试通过')).toBeInTheDocument())
+  })
+
+  it('guards model-service connection submission globally', async () => {
+    let finishConnect!: () => void
+    api.connectModelService.mockImplementation(() => new Promise((resolve) => {
+      finishConnect = () => resolve({})
+    }))
+    render(
+      <I18nProvider>
+        <ModelServicesSettings config={config} />
+      </I18nProvider>,
+    )
+
+    fireEvent.click(await screen.findByRole('button', { name: '连接已有服务' }))
+    fireEvent.click(screen.getByRole('button', { name: /DeepSeek/ }))
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'secret' } })
+    const submit = screen.getByRole('button', { name: '连接' })
+    const form = submit.closest('form')
+    expect(form).not.toBeNull()
+
+    fireEvent.submit(form!)
+    fireEvent.submit(form!)
+
+    await waitFor(() => expect(api.connectModelService).toHaveBeenCalledTimes(1))
+    expect(submit).toBeDisabled()
+    finishConnect()
+  })
+
+  it('keeps the Runtime-session operation lock across unmount and remount', async () => {
+    let finishConnect!: () => void
+    const onChanged = vi.fn()
+    api.connectModelService.mockImplementation(() => new Promise((resolve) => {
+      finishConnect = () => resolve({})
+    }))
+    const first = render(
+      <I18nProvider>
+        <ModelServicesSettings config={config} onChanged={onChanged} />
+      </I18nProvider>,
+    )
+
+    fireEvent.click(await screen.findByRole('button', { name: '连接已有服务' }))
+    fireEvent.click(screen.getByRole('button', { name: /DeepSeek/ }))
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'secret' } })
+    fireEvent.click(screen.getByRole('button', { name: '连接' }))
+    await waitFor(() => expect(api.connectModelService).toHaveBeenCalledTimes(1))
+
+    first.unmount()
+    render(
+      <I18nProvider>
+        <ModelServicesSettings config={config} onChanged={onChanged} />
+      </I18nProvider>,
+    )
+
+    expect(await screen.findByRole('button', { name: '连接已有服务' })).toBeDisabled()
+    api.listModelServices.mockResolvedValue([tuziConnection])
+    finishConnect()
+    await waitFor(() => expect(screen.getByRole('button', { name: '连接已有服务' })).toBeEnabled())
+    expect(await screen.findByText('兔子')).toBeInTheDocument()
+    expect(onChanged).toHaveBeenCalledTimes(1)
+  })
+
+  it('finishes authorization and bumps the catalog after back and remount', async () => {
+    const connection = {
+      ...tuziConnection,
+      id: `conn_${'a'.repeat(32)}`,
+      preset_id: 'shejane-official',
+      name: 'SheJane 官方服务（推荐）',
+      region: 'official',
+      base_url: 'https://cloud.example.test/v1',
+    }
+    let finishAuthorization!: () => void
+    const onChanged = vi.fn()
+    api.listModelServicePresets.mockResolvedValue([shejaneOfficial, deepseek])
+    api.startSheJaneAuthorization.mockResolvedValue({
+      authorization_id: `auth_${'b'.repeat(32)}`,
+      authorization_url: 'https://cloud.example.test/shejane/authorize?state=safe',
+      expires_at: '2026-07-29T00:10:00Z',
+    })
+    api.getSheJaneAuthorization.mockImplementation(() => new Promise((resolve) => {
+      finishAuthorization = () => resolve({
+        authorization_id: `auth_${'b'.repeat(32)}`,
+        status: 'succeeded',
+        connection,
+        error_code: null,
+      })
+    }))
+    api.updateCentralDiagnostics.mockResolvedValue({
+      enabled: true,
+      connection_id: connection.id,
+      success_sample_rate: 0,
+      credential_configured: true,
+    })
+    Object.defineProperty(window, 'shejaneClient', {
+      configurable: true,
+      value: { openExternal: vi.fn().mockResolvedValue(undefined) },
+    })
+    const first = render(
+      <I18nProvider>
+        <ModelServicesSettings config={config} onChanged={onChanged} />
+      </I18nProvider>,
+    )
+
+    fireEvent.click(await screen.findByRole('button', { name: '连接已有服务' }))
+    fireEvent.click(screen.getByRole('button', { name: /SheJane 官方服务/ }))
+    await waitFor(() => expect(api.getSheJaneAuthorization).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: '返回选择模型服务' }))
+    first.unmount()
+    render(
+      <I18nProvider>
+        <ModelServicesSettings config={config} onChanged={onChanged} />
+      </I18nProvider>,
+    )
+
+    expect(await screen.findByRole('button', { name: '连接已有服务' })).toBeDisabled()
+    api.listModelServices.mockResolvedValue([connection])
+    finishAuthorization()
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
+    expect(screen.getByRole('button', { name: '连接已有服务' })).toBeEnabled()
+    expect(await screen.findByText('SheJane 官方服务（推荐）')).toBeInTheDocument()
   })
 
   it('reconnects an existing service by replacing only its API key', async () => {

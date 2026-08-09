@@ -158,8 +158,13 @@ export function useSmartAutoScroll<T extends HTMLElement>(
 }
 
 function scrollElementToBottom(element: HTMLElement, behavior: ScrollBehavior): void {
+  const resolvedBehavior = behavior === 'smooth'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ? 'auto'
+    : behavior
   if (typeof element.scrollTo === 'function') {
-    element.scrollTo({ top: element.scrollHeight, behavior })
+    element.scrollTo({ top: element.scrollHeight, behavior: resolvedBehavior })
   } else {
     element.scrollTop = element.scrollHeight
   }

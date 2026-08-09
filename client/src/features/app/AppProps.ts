@@ -66,7 +66,6 @@ export interface PluginsSettingsProps {
   pluginCatalogVersion: number
   submitPluginCommand: (command: unknown) => Promise<unknown>
   agentSettings: { mcpDisabled: string[], advanced: Record<string, unknown> }
-  setAgentSettings: (settings: { mcpDisabled: string[], advanced: Record<string, unknown> }) => void
   changeAgentSettings: (next: { mcpDisabled: string[], advanced: Record<string, unknown> }) => void
   runtimeSettingsConfig: RuntimeConnection | null
   setModelCatalogVersion: () => void

@@ -14,7 +14,7 @@ export function cloneConversation(conversation: Conversation): Conversation {
 }
 
 export function upsertConversation(items: Conversation[], conversation: Conversation): Conversation[] {
-  return [conversation, ...items.filter((item) => item.id !== conversation.id)]
+  return sortConversationsForSidebar([conversation, ...items.filter((item) => item.id !== conversation.id)])
 }
 
 export function sortConversationsForSidebar(items: Conversation[]): Conversation[] {

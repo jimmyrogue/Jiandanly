@@ -69,6 +69,48 @@ type ModelCapabilityName = VerifyModelServiceModelRequest['capability']
 type ModelProtocol = VerifyModelServiceModelRequest['protocol']
 type ModelTestState = 'testing' | 'verified' | 'failed'
 
+type ModelServiceOperationState = {
+  key: string
+  nextRun: number
+  completionRevision: number
+  activeRun?: number
+  owner?: symbol
+  label: string
+  listeners: Set<(label: string, completionRevision: number, owner?: symbol) => void>
+}
+
+const modelServiceOperations = new Map<string, ModelServiceOperationState>()
+
+function runtimeOperationKey(config: RuntimeConnection | null | undefined) {
+  if (!config) return ''
+  return `${config.baseURL}\u0000${config.session ?? config.token ?? ''}`
+}
+
+function operationStateFor(key: string) {
+  if (!key) return undefined
+  let state = modelServiceOperations.get(key)
+  if (!state) {
+    state = { key, nextRun: 0, completionRevision: 0, label: '', listeners: new Set() }
+    modelServiceOperations.set(key, state)
+  }
+  return state
+}
+
+function publishOperation(state: ModelServiceOperationState) {
+  for (const listener of state.listeners) {
+    listener(state.label, state.completionRevision, state.owner)
+  }
+  if (state.activeRun === undefined && state.listeners.size === 0) {
+    queueMicrotask(() => {
+      if (
+        state.activeRun === undefined
+        && state.listeners.size === 0
+        && modelServiceOperations.get(state.key) === state
+      ) modelServiceOperations.delete(state.key)
+    })
+  }
+}
+
 function defaultModelProtocol(
   service: ModelServiceConnection,
   capability: ModelCapabilityName,
@@ -132,10 +174,13 @@ export function ModelServicesSettings({
   const [selectedModels, setSelectedModels] = useState<Record<string, boolean>>({})
   const [modelTestStates, setModelTestStates] = useState<Record<string, ModelTestState>>({})
   const [connectionTestStates, setConnectionTestStates] = useState<Record<string, ModelTestState>>({})
-  const [busy, setBusy] = useState('')
+  const operationState = operationStateFor(runtimeOperationKey(config))
+  const [busy, setBusy] = useState(() => operationState?.label ?? '')
   const [error, setError] = useState('')
   const [fieldErrors, setFieldErrors] = useState<ConnectionFieldErrors>({})
   const authorizationRun = useRef(0)
+  const operationOwner = useRef(Symbol('model-service-settings'))
+  const observedCompletionRevision = useRef(operationState?.completionRevision ?? 0)
   const defaultBaseURL = reconnecting?.base_url
     ?? selected?.regions.find((item) => item.id === region)?.base_url
     ?? selected?.regions.find((item) => item.default)?.base_url
@@ -148,6 +193,31 @@ export function ModelServicesSettings({
       delete next[connectionID]
       return next
     })
+  }
+
+  const beginOperation = (label: string) => {
+    if (!operationState || operationState.activeRun !== undefined) return undefined
+    const run = ++operationState.nextRun
+    operationState.activeRun = run
+    operationState.owner = operationOwner.current
+    operationState.label = label
+    publishOperation(operationState)
+    return run
+  }
+
+  const updateOperation = (run: number, label: string) => {
+    if (!operationState || operationState.activeRun !== run) return
+    operationState.label = label
+    publishOperation(operationState)
+  }
+
+  const finishOperation = (run: number) => {
+    if (!operationState || operationState.activeRun !== run) return
+    operationState.activeRun = undefined
+    operationState.label = ''
+    operationState.completionRevision += 1
+    publishOperation(operationState)
+    operationState.owner = undefined
   }
 
   const load = useCallback(async () => {
@@ -178,11 +248,29 @@ export function ModelServicesSettings({
     void load().catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))
   }, [load])
 
-  useEffect(() => () => {
-    authorizationRun.current += 1
-  }, [])
+  useEffect(() => {
+    if (!operationState) {
+      setBusy('')
+      return
+    }
+    observedCompletionRevision.current = operationState.completionRevision
+    const listener = (label: string, completionRevision: number, owner?: symbol) => {
+      setBusy(label)
+      if (completionRevision === observedCompletionRevision.current) return
+      observedCompletionRevision.current = completionRevision
+      if (owner === operationOwner.current) return
+      void load().catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))
+    }
+    operationState.listeners.add(listener)
+    setBusy(operationState.label)
+    return () => {
+      operationState.listeners.delete(listener)
+      publishOperation(operationState)
+    }
+  }, [load, operationState])
 
   const openAddDialog = () => {
+    if (operationState?.activeRun !== undefined) return
     setAdding(true)
     setSelected(undefined)
     setReconnecting(undefined)
@@ -202,8 +290,9 @@ export function ModelServicesSettings({
 
   const authorizeOfficial = async () => {
     if (!config) return
+    const operation = beginOperation('authorize')
+    if (operation === undefined) return
     const run = ++authorizationRun.current
-    setBusy('authorize')
     setError('')
     try {
       const started = await startSheJaneAuthorization(config)
@@ -211,10 +300,11 @@ export function ModelServicesSettings({
       if (!window.shejaneClient?.openExternal) {
         throw new Error(t('settings.modelServices.authorization.browserUnavailable'))
       }
-      setBusy('authorize:pending')
+      updateOperation(operation, 'authorize:pending')
       await window.shejaneClient.openExternal(started.authorization_url)
       while (run === authorizationRun.current) {
         const status = await getSheJaneAuthorization(started.authorization_id, config)
+        if (run !== authorizationRun.current) return
         if (status.status === 'pending') {
           await new Promise((resolve) => globalThis.setTimeout(resolve, 750))
           continue
@@ -227,8 +317,10 @@ export function ModelServicesSettings({
               : 'settings.modelServices.authorization.failed'
           throw new Error(t(key))
         }
-        setBusy('authorize:syncing')
+        onChanged?.()
+        updateOperation(operation, 'authorize:syncing')
         let diagnosticsError = false
+        let reloadError: unknown
         try {
           setDiagnostics(await updateCentralDiagnostics({
             enabled: true,
@@ -238,11 +330,17 @@ export function ModelServicesSettings({
         } catch {
           diagnosticsError = true
         }
-        await load()
+        try {
+          await load()
+        } catch (reason) {
+          reloadError = reason
+        }
         if (run !== authorizationRun.current) return
         setAdding(false)
         setSelected(undefined)
-        if (diagnosticsError) {
+        if (reloadError) {
+          setError(reloadError instanceof Error ? reloadError.message : String(reloadError))
+        } else if (diagnosticsError) {
           setError(t('settings.modelServices.authorization.diagnosticsFailed'))
         } else if (!status.connection.models.some((model) => (
           model.capabilities?.some((capability) => capability.capability === 'agent_chat')
@@ -250,7 +348,6 @@ export function ModelServicesSettings({
         ))) {
           setError(t('settings.modelServices.authorization.modelsUnavailable'))
         }
-        onChanged?.()
         return
       }
     } catch (reason) {
@@ -258,11 +355,12 @@ export function ModelServicesSettings({
         setError(reason instanceof Error ? reason.message : String(reason))
       }
     } finally {
-      if (run === authorizationRun.current) setBusy('')
+      finishOperation(operation)
     }
   }
 
   const openPreset = (preset: ModelServicePreset) => {
+    if (operationState?.activeRun !== undefined) return
     const defaultRegion = preset.regions.find((item) => item.default) ?? preset.regions[0]
     setReconnecting(undefined)
     setSelected(preset)
@@ -280,6 +378,7 @@ export function ModelServicesSettings({
   }
 
   const openReconnect = (service: ModelServiceConnection) => {
+    if (operationState?.activeRun !== undefined) return
     setAdding(false)
     setSelected(undefined)
     setReconnecting(service)
@@ -292,7 +391,8 @@ export function ModelServicesSettings({
 
   const toggleDiagnostics = async (service: ModelServiceConnection, enabled: boolean) => {
     if (!config) return
-    setBusy(`diagnostics:${service.id}`)
+    const operation = beginOperation(`diagnostics:${service.id}`)
+    if (operation === undefined) return
     setError('')
     try {
       setDiagnostics(await updateCentralDiagnostics({
@@ -303,7 +403,7 @@ export function ModelServicesSettings({
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
-      setBusy('')
+      finishOperation(operation)
     }
   }
 
@@ -328,7 +428,8 @@ export function ModelServicesSettings({
     setFieldErrors(nextErrors)
     if (Object.keys(nextErrors).length > 0) return
 
-    setBusy('connect')
+    const operation = beginOperation('connect')
+    if (operation === undefined) return
     setError('')
     try {
       if (reconnecting) {
@@ -363,14 +464,15 @@ export function ModelServicesSettings({
       }
       setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
-      setBusy('')
+      finishOperation(operation)
     }
   }
 
   const refresh = async (service: ModelServiceConnection) => {
     if (!config) return
+    const operation = beginOperation(`refresh:${service.id}`)
+    if (operation === undefined) return
     clearConnectionTestState(service.id)
-    setBusy(`refresh:${service.id}`)
     setError('')
     try {
       const refreshed = await refreshModelService(service.id, config)
@@ -382,13 +484,14 @@ export function ModelServicesSettings({
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
-      setBusy('')
+      finishOperation(operation)
     }
   }
 
   const remove = async (service: ModelServiceConnection) => {
     if (!config || !window.confirm(t('settings.modelServices.deleteConfirm', { name: service.name }))) return
-    setBusy(service.id)
+    const operation = beginOperation(service.id)
+    if (operation === undefined) return
     setError('')
     try {
       await deleteModelService(service.id, config)
@@ -397,14 +500,15 @@ export function ModelServicesSettings({
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
-      setBusy('')
+      finishOperation(operation)
     }
   }
 
   const addManualModel = async (service: ModelServiceConnection) => {
     const modelID = manualModels[service.id]?.trim()
     if (!config || !modelID) return
-    setBusy(service.id)
+    const operation = beginOperation(service.id)
+    if (operation === undefined) return
     setError('')
     try {
       const addedModel = await addModelServiceModel(service.id, { model_id: modelID }, config)
@@ -418,7 +522,7 @@ export function ModelServicesSettings({
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
-      setBusy('')
+      finishOperation(operation)
     }
   }
 
@@ -426,11 +530,12 @@ export function ModelServicesSettings({
     if (!config || !managingService) return
     const models = managingService.models.filter((model) => selectedModels[model.model_id])
     if (models.length === 0) return
+    const operation = beginOperation(`verify:${managingService.id}`)
+    if (operation === undefined) return
     const readyBindings = new Set(
       bindings.filter((binding) => binding.status === 'ready').map((binding) => binding.capability),
     )
     const failures: string[] = []
-    setBusy(`verify:${managingService.id}`)
     setError('')
     for (const model of models) {
       const key = `${managingService.id}:${model.model_id}`
@@ -475,7 +580,7 @@ export function ModelServicesSettings({
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
-      setBusy('')
+      finishOperation(operation)
     }
   }
 
@@ -485,7 +590,8 @@ export function ModelServicesSettings({
     capability: ModelCapabilityBinding['capability'],
   ) => {
     if (!config) return
-    setBusy(service.id)
+    const operation = beginOperation(service.id)
+    if (operation === undefined) return
     setError('')
     try {
       await setModelCapabilityBinding(
@@ -498,7 +604,7 @@ export function ModelServicesSettings({
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
-      setBusy('')
+      finishOperation(operation)
     }
   }
 
@@ -508,8 +614,10 @@ export function ModelServicesSettings({
   const customPreset = presets.find((preset) => preset.id === 'custom')
 
   const backToPicker = () => {
-    authorizationRun.current += 1
-    setBusy('')
+    if (
+      operationState?.activeRun !== undefined
+      && !operationState.label.startsWith('authorize')
+    ) return
     setSelected(undefined)
     setAPIKey('')
     setBaseURL('')
@@ -527,7 +635,9 @@ export function ModelServicesSettings({
   }
 
   const testConnection = async (service: ModelServiceConnection) => {
-    if (!config || busy) return
+    if (!config) return
+    const operation = beginOperation(`test:${service.id}`)
+    if (operation === undefined) return
     const candidates = service.models.filter((model) => (
       model.capabilities?.some((capability) => capability.capability === 'agent_chat')
       || model.capabilities?.length === 0
@@ -538,10 +648,10 @@ export function ModelServicesSettings({
     if (!model) {
       setError(t('settings.modelServices.noChatModel'))
       setConnectionTestStates((current) => ({ ...current, [service.id]: 'failed' }))
+      finishOperation(operation)
       return
     }
     const capability = model.capabilities?.find((item) => item.capability === 'agent_chat')
-    setBusy(`test:${service.id}`)
     setError('')
     setConnectionTestStates((current) => ({ ...current, [service.id]: 'testing' }))
     try {
@@ -568,7 +678,7 @@ export function ModelServicesSettings({
         setError(reason instanceof Error ? reason.message : String(reason))
       }
     } finally {
-      setBusy('')
+      finishOperation(operation)
     }
   }
 
@@ -602,6 +712,7 @@ export function ModelServicesSettings({
           <button
             type="button"
             className="settings-model-service-add"
+            disabled={Boolean(busy)}
             onClick={openAddDialog}
           >
             <IconPlus size={16} aria-hidden="true" />
@@ -771,6 +882,7 @@ export function ModelServicesSettings({
                   size="icon-sm"
                   className="-ml-2"
                   aria-label={t('settings.modelServices.backToServices')}
+                  disabled={Boolean(busy) && !busy.startsWith('authorize')}
                   onClick={backToPicker}
                 >
                   <IconArrowLeft data-icon="inline-start" />
@@ -796,7 +908,7 @@ export function ModelServicesSettings({
             <div className="settings-model-service-picker">
               <div className="settings-model-service-picker-list">
                 {officialPresets.map((preset) => (
-                  <button type="button" key={preset.id} onClick={() => openPreset(preset)}>
+                  <button type="button" key={preset.id} disabled={Boolean(busy)} onClick={() => openPreset(preset)}>
                     <span>
                       <strong>{preset.name}</strong>
                       <small>{preset.description}</small>
@@ -809,6 +921,7 @@ export function ModelServicesSettings({
                 <button
                   type="button"
                   className="settings-model-service-picker-custom"
+                  disabled={Boolean(busy)}
                   onClick={() => openPreset(customPreset)}
                 >
                   <span>
@@ -844,6 +957,7 @@ export function ModelServicesSettings({
                   type="button"
                   size="lg"
                   className="h-11 w-full"
+                  disabled={Boolean(busy)}
                   onClick={() => void authorizeOfficial()}
                 >
                   {t('settings.modelServices.authorization.retry')}
@@ -975,7 +1089,7 @@ export function ModelServicesSettings({
                 type="submit"
                 size="lg"
                 className="h-11 w-full"
-                disabled={busy === 'connect'}
+                disabled={Boolean(busy)}
                 aria-busy={busy === 'connect'}
               >
                 {busy === 'connect' && <IconLoader2 className="animate-spin" aria-hidden="true" />}

@@ -40,6 +40,7 @@ function Harness({
 describe('useSmartAutoScroll', () => {
   afterEach(() => {
     cleanup()
+    vi.unstubAllGlobals()
   })
 
   it('sticks to bottom only while the user stays near the bottom', () => {
@@ -65,6 +66,20 @@ describe('useSmartAutoScroll', () => {
       rerender(<Harness tick={4} />)
     })
     expect(scrollTo).toHaveBeenCalledWith({ top: 1200, behavior: 'smooth' })
+  })
+
+  it('uses instant scrolling when the user prefers reduced motion', () => {
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: true }))
+    const { getByTestId, rerender } = render(<Harness tick={1} />)
+    const element = getByTestId('scroll')
+    const scrollTo = vi.fn()
+    Object.defineProperty(element, 'scrollTo', { value: scrollTo, configurable: true })
+    defineScrollMetrics(element, { scrollHeight: 1000, scrollTop: 930, clientHeight: 80 })
+    fireEvent.scroll(element)
+
+    rerender(<Harness tick={2} />)
+
+    expect(scrollTo).toHaveBeenCalledWith({ top: 1000, behavior: 'auto' })
   })
 
   it('reports pinned state and re-pins on the explicit scroll-to-bottom action', () => {

@@ -155,6 +155,7 @@ interface LocalHarnessRunOptions {
 // Skill and MCP discovery are always available. Client stores only the user
 // choices that still exist: memory and individually disabled MCP servers.
 const agentSettingsStorageKey = 'shejane.agentSettings.v9'
+const legacyAgentSettingsStorageKey = 'shejane-agent-settings'
 // Concrete Runtime model selection. Stale values are reconciled against the
 // Runtime catalog after connection.
 const chatModeStorageKey = 'shejane.chatMode.v2'
@@ -231,35 +232,60 @@ function readAgentSettings(): Required<AgentSettings> {
     return { ...defaultAgentSettings }
   }
   try {
-    const raw = window.localStorage.getItem(agentSettingsStorageKey)
-    if (!raw) {
-      return { ...defaultAgentSettings }
-    }
-    const parsed = JSON.parse(raw) as Partial<AgentSettings>
-    return {
-      memory: parsed.memory === 'off' ? 'off' : 'on',
+    const canonicalRaw = window.localStorage.getItem(agentSettingsStorageKey)
+    const legacyRaw = window.localStorage.getItem(legacyAgentSettingsStorageKey)
+    const canonical = parseAgentSettings(canonicalRaw)
+    const legacy = parseAgentSettings(legacyRaw)
+    const settings: Required<AgentSettings> = {
+      memory: canonical.memory === 'off' || (!canonicalRaw && legacy.memory === 'off') ? 'off' : 'on',
       skills: 'on',
       mcp: 'on',
-      // Defensive: anything non-string in the persisted list gets
-      // dropped. Empty array if missing.
-      mcpDisabled: Array.isArray(parsed.mcpDisabled)
-        ? parsed.mcpDisabled.filter((name): name is string => typeof name === 'string')
-        : [],
+      mcpDisabled: [...new Set(
+        Array.isArray(legacy.mcpDisabled)
+          ? storedMcpDisabled(legacy)
+          : storedMcpDisabled(canonical),
+      )],
       advanced: {},
     }
+    if (legacyRaw !== null && writeAgentSettings(settings)) {
+      try {
+        window.localStorage.removeItem(legacyAgentSettingsStorageKey)
+      } catch {
+        // The canonical copy is durable even if legacy cleanup is unavailable.
+      }
+    }
+    return settings
   } catch {
     return { ...defaultAgentSettings }
   }
 }
 
-function writeAgentSettings(settings: Required<AgentSettings>) {
+function parseAgentSettings(raw: string | null): Partial<AgentSettings> {
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? parsed as Partial<AgentSettings> : {}
+  } catch {
+    return {}
+  }
+}
+
+function storedMcpDisabled(settings: Partial<AgentSettings>): string[] {
+  return Array.isArray(settings.mcpDisabled)
+    ? settings.mcpDisabled.filter((name): name is string => typeof name === 'string')
+    : []
+}
+
+function writeAgentSettings(settings: Required<AgentSettings>): boolean {
   try {
     window.localStorage.setItem(agentSettingsStorageKey, JSON.stringify({
       memory: settings.memory,
       mcpDisabled: settings.mcpDisabled,
     }))
+    return true
   } catch {
     // Local storage can be unavailable in restricted browser contexts.
+    return false
   }
 }
 
@@ -305,20 +331,20 @@ function useAppContentViewModel() {
   }
   const recoveryState = recoveryStateRef.current
   const runtimeCommandFailureNoticeSuppressionRef = useRef(new Map<string, string>())
-  const suppressRuntimeCommandFailureNotice = (commandId: string, message: string) => {
+  const suppressRuntimeCommandFailureNotice = useCallback((commandId: string, message: string) => {
     runtimeCommandFailureNoticeSuppressionRef.current.set(commandId, message)
-  }
-  const consumeRuntimeCommandFailureNotice = (commandId: string, message: string): boolean => {
+  }, [])
+  const consumeRuntimeCommandFailureNotice = useCallback((commandId: string, message: string): boolean => {
     if (runtimeCommandFailureNoticeSuppressionRef.current.get(commandId) !== message) {
       return false
     }
     runtimeCommandFailureNoticeSuppressionRef.current.delete(commandId)
     return true
-  }
+  }, [])
 
-  const clearRuntimeCommandFailureNotice = (commandId: string) => {
+  const clearRuntimeCommandFailureNotice = useCallback((commandId: string) => {
     runtimeCommandFailureNoticeSuppressionRef.current.delete(commandId)
-  }
+  }, [])
   const sidebarResizeStateRef = useRef<{ startX: number, startWidth: number } | null>(null)
   const sidebarMotionTimerRef = useRef<number>()
   const runtimeThreadCursorRef = useRef(0)
@@ -2154,7 +2180,6 @@ function useAppContentViewModel() {
       listPluginsForView,
       pluginCatalogVersion,
       runtimeSettingsConfig,
-      setAgentSettings,
       setModelCatalogVersion: () => runtimeStoreActions.bumpCatalogVersion(),
       submitPluginCommand,
     },

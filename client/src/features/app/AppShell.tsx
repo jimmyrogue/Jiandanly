@@ -41,10 +41,6 @@ const minSidebarWidth = 190
 const maxSidebarWidth = 340
 const appNoticeToastID = 'app-notice-toast'
 
-function writeAgentSettings(settings: object): void {
-  localStorage.setItem('shejane-agent-settings', JSON.stringify(settings))
-}
-
 export function AppShell({ shell, chat, plugins, common }: {
   shell: Record<string, unknown>
   chat: Record<string, unknown>
@@ -65,7 +61,7 @@ export function AppShell({ shell, chat, plugins, common }: {
   const {
     listInstalledSkillsForView, listMcpServersForView, listPluginsForView,
     pluginCatalogVersion, submitPluginCommand,
-    agentSettings, setAgentSettings, changeAgentSettings,
+    agentSettings, changeAgentSettings,
     runtimeSettingsConfig, setModelCatalogVersion,
   } = plugins as unknown as Record<string, any>
   const {
@@ -233,9 +229,7 @@ export function AppShell({ shell, chat, plugins, common }: {
               listCatalog={listMcpServersForView as any}
               disabledServers={(agentSettings as any)?.mcpDisabled ?? []}
               onDisabledChange={(next: string[]) => {
-                const updated = { ...agentSettings as any, mcpDisabled: next }
-                ;(setAgentSettings as any)(updated)
-                writeAgentSettings(updated)
+                ;(changeAgentSettings as any)({ ...agentSettings as any, mcpDisabled: next })
               }}
               onCreateServer={async (input: any) => {
                 if (!runtimeConnection) return

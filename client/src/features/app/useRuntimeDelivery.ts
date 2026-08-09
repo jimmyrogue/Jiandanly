@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { toast } from 'sonner'
 import type { Translator } from '@/shared/i18n/i18n'
 import { runtimeCommandErrorMessage } from './runtimeCommandError'
@@ -48,6 +48,7 @@ export function useRuntimeDelivery(context: RuntimeDeliveryContext): void {
   } = context
   const { runtime, connection: runtimeConnection } = useStore(runtimeStore)
   const { pendingCommandDeliveryVersion } = useStore(workspaceStore)
+  const deliveryAttemptRef = useRef<Promise<boolean> | null>(null)
 
   useEffect(() => {
     if (!isDesktop || !runtime?.online || !hasRuntimeAuthorization(runtimeConnection)) {
@@ -56,10 +57,10 @@ export function useRuntimeDelivery(context: RuntimeDeliveryContext): void {
     let disposed = false
     let retryTimer: number | undefined
     const config = runtimeConnection
-    const deliver = async () => {
+    const runDeliveryAttempt = async (): Promise<boolean> => {
       try {
         const commands = await localData.listPendingRuntimeCommands()
-        if (disposed || commands.length === 0) return
+        if (disposed || commands.length === 0) return false
         const report = await deliverPendingRuntimeCommands(
           commands,
           config,
@@ -79,13 +80,32 @@ export function useRuntimeDelivery(context: RuntimeDeliveryContext): void {
             setNotice(blockedMessage)
           }
         }
-        if (!disposed && report.failures.some((item) => item.retryable)) {
-          retryTimer = window.setTimeout(() => void deliver(), retryDelayMs)
-        }
+        return report.failures.some((item) => item.retryable)
       } catch {
-        if (!disposed) {
+        return true
+      }
+    }
+    const deliver = async () => {
+      const inFlight = deliveryAttemptRef.current
+      if (inFlight) {
+        const retry = await inFlight
+        if (disposed) return
+        if (retry) {
           retryTimer = window.setTimeout(() => void deliver(), retryDelayMs)
+        } else {
+          void deliver()
         }
+        return
+      }
+      const attempt = runDeliveryAttempt().finally(() => {
+        if (deliveryAttemptRef.current === attempt) {
+          deliveryAttemptRef.current = null
+        }
+      })
+      deliveryAttemptRef.current = attempt
+      const retry = await attempt
+      if (!disposed && retry) {
+        retryTimer = window.setTimeout(() => void deliver(), retryDelayMs)
       }
     }
     void deliver()
