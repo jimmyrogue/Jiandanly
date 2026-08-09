@@ -26,6 +26,7 @@ const REAL_LLM_MODEL = process.env.VITE_TEST_REAL_LLM_MODEL
 const RUN_MODEL = (REAL_LLM_MODEL ?? 'local:test:model') as `local:${string}:${string}`
 const DEFAULT_SETTINGS = { memory: 'off', skills: 'off', mcp: 'off' } as const
 const MEMORY_SETTINGS = { ...DEFAULT_SETTINGS, memory: 'on' } as const
+const EXHAUSTIVE_SCHEMA_TIMEOUT_MS = 60_000
 const DEDICATED_TOOL_TESTS = [
   { name: 'read_file', category: 'filesystem', effect: 'read-only', risk: 'low', traits: 'read-only,workspace' },
   { name: 'write_file', category: 'filesystem', effect: 'workspace-write', risk: 'workspace', traits: 'permission,side-effect,workspace' },
@@ -417,7 +418,7 @@ describe.skipIf(!BASE_URL)('flow:P10 > contract: every Runtime Tool (live runtim
     expect(tested.length).toBeGreaterThan(0)
     expect(tested.length + notApplicable.length).toBe(body.tools.length)
     expect(existsSync(join(workspace, 'schema-invalid-must-not-exist.txt'))).toBe(false)
-  })
+  }, EXHAUSTIVE_SCHEMA_TIMEOUT_MS)
 
   it('rejects unknown fields for every closed published Tool schema before execution', async () => {
     const response = await fetch(`${BASE_URL}/v1/tools`, {
@@ -494,7 +495,7 @@ describe.skipIf(!BASE_URL)('flow:P10 > contract: every Runtime Tool (live runtim
     expect(tested.length).toBeGreaterThan(0)
     expect(tested.length + notApplicable.length).toBe(body.tools.length)
     expect(existsSync(join(workspace, 'schema-extra-must-not-exist.txt'))).toBe(false)
-  })
+  }, EXHAUSTIVE_SCHEMA_TIMEOUT_MS)
 
   it('persists an explicitly stated name in one turn and recalls it in a new thread', async () => {
     const suffix = Date.now().toString(36)
