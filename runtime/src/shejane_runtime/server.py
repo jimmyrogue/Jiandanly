@@ -345,6 +345,24 @@ def _model_connection_models(row: dict[str, Any]) -> list[dict[str, Any]]:
             for capability in normalized["capabilities"]:
                 if capability["capability"] != "agent_chat":
                     capability["verification"] = "verified"
+        raw_recommended_for = normalized.get("recommended_for")
+        recommended_for: list[str] = []
+        if isinstance(raw_recommended_for, list):
+            for capability in raw_recommended_for:
+                if (
+                    capability in MODEL_CAPABILITY_ORDER
+                    and capability not in recommended_for
+                    and model_capability(normalized, capability) is not None
+                ):
+                    recommended_for.append(capability)
+        if (
+            not recommended_for
+            and normalized.get("recommended")
+            and model_capability(normalized, "agent_chat") is not None
+        ):
+            recommended_for = ["agent_chat"]
+        normalized["recommended_for"] = recommended_for
+        normalized["recommended"] = bool(recommended_for)
         normalized.pop("purpose", None)
         normalized.pop("protocol", None)
         normalized["verification"] = (
@@ -479,15 +497,16 @@ async def _model_capability_binding_response(
     }
 
 
-async def _ensure_default_image_generation_binding(
+async def _ensure_default_model_capability_binding(
     store: LocalStore,
     *,
     principal_id: str,
+    capability_name: str,
 ) -> None:
     if (
         await store.get_model_capability_binding(
             principal_id=principal_id,
-            capability="image_generation",
+            capability=capability_name,
         )
         is not None
     ):
@@ -495,26 +514,21 @@ async def _ensure_default_image_generation_binding(
     candidates = []
     for connection in await store.list_model_connections(principal_id=principal_id):
         for model in _model_connection_models(connection):
-            capability = model_capability(model, "image_generation")
+            capability = model_capability(model, capability_name)
             if capability is not None and capability.get("verification") == "verified":
                 candidates.append((connection, model, capability))
     if not candidates:
         return
-    connection, model, capability = next(
-        (candidate for candidate in candidates if candidate[1].get("recommended")),
-        candidates[0],
+    connection, model, capability = max(
+        candidates,
+        key=lambda candidate: (
+            candidate[0].get("preset_id") == "shejane-official",
+            capability_name in candidate[1].get("recommended_for", []),
+        ),
     )
-    if (
-        await store.get_model_capability_binding(
-            principal_id=principal_id,
-            capability="image_generation",
-        )
-        is not None
-    ):
-        return
-    await store.set_model_capability_binding(
+    await store.create_model_capability_binding_if_absent(
         principal_id=principal_id,
-        capability="image_generation",
+        capability=capability_name,
         connection_id=str(connection["id"]),
         connection_version=int(connection.get("version") or 1),
         model_id=str(model["model_id"]),
@@ -658,11 +672,15 @@ async def _refresh_model_service_models(
                     profile["streaming"] = True
             recommended_for = candidate.get("recommended_for")
             if isinstance(recommended_for, list):
-                profile["recommended"] = any(
-                    isinstance(capability, str)
-                    and model_capability(profile, capability) is not None
-                    for capability in recommended_for
-                )
+                profile["recommended_for"] = []
+                for capability in recommended_for:
+                    if (
+                        isinstance(capability, str)
+                        and capability not in profile["recommended_for"]
+                        and model_capability(profile, capability) is not None
+                    ):
+                        profile["recommended_for"].append(capability)
+                profile["recommended"] = bool(profile["recommended_for"])
         models.append(profile)
         if len(models) >= 1000:
             break
@@ -1176,10 +1194,23 @@ async def _complete_shejane_authorization(
             models=models,
             catalog_status=catalog_status,
         )
+        for capability in ("image_generation", "image_editing"):
+            await _ensure_default_model_capability_binding(
+                app.state.store,
+                principal_id=principal_id,
+                capability_name=capability,
+            )
+        response = await _model_service_response(row, credential_configured=True)
     except BaseException:
-        await delete_model_api_key(principal_id, connection_id, next_credential_ref)
+        try:
+            await app.state.store.delete_model_connection(
+                principal_id=principal_id,
+                connection_id=connection_id,
+            )
+        finally:
+            await delete_model_api_key(principal_id, connection_id, next_credential_ref)
         raise
-    return (await _model_service_response(row, credential_configured=True)).model_dump()
+    return response.model_dump()
 
 
 def _list_skill_files() -> list[dict[str, str]]:
@@ -1896,10 +1927,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def list_model_capability_bindings(request: Request) -> dict[str, Any]:
         principal_id = request.state.principal_id
         store: LocalStore = app.state.store
-        await _ensure_default_image_generation_binding(
-            store,
-            principal_id=principal_id,
-        )
+        for capability in ("image_generation", "image_editing"):
+            await _ensure_default_model_capability_binding(
+                store,
+                principal_id=principal_id,
+                capability_name=capability,
+            )
         rows = await store.list_model_capability_bindings(principal_id=principal_id)
         return {
             "bindings": [
@@ -2608,7 +2641,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             "streaming": bool(model.get("streaming")),
                             "image_inputs": bool(model.get("image_inputs")),
                             "verification": model.get("verification", "unverified"),
-                            "recommended": bool(model.get("recommended")),
+                            "recommended": "agent_chat" in model.get("recommended_for", []),
                             "max_input_tokens": model.get("max_input_tokens"),
                             "max_output_tokens": model.get("max_output_tokens"),
                             "available": configured and agent_capability is not None,

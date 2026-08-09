@@ -4732,6 +4732,34 @@ class LocalStore:
         assert row is not None
         return dict(row)
 
+    async def create_model_capability_binding_if_absent(
+        self,
+        *,
+        principal_id: str,
+        capability: str,
+        connection_id: str,
+        connection_version: int,
+        model_id: str,
+        protocol: str,
+    ) -> dict[str, Any] | None:
+        cursor = await self._conn.execute(
+            "INSERT INTO model_capability_bindings "
+            "(principal_id, capability, connection_id, connection_version, model_id, "
+            "protocol, revision, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?) "
+            "ON CONFLICT(principal_id, capability) DO NOTHING RETURNING *",
+            (
+                principal_id,
+                capability,
+                connection_id,
+                connection_version,
+                model_id,
+                protocol,
+                _now(),
+            ),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row is not None else None
+
     async def delete_model_capability_binding(
         self,
         *,

@@ -5,6 +5,7 @@ import base64
 import hashlib
 import sqlite3
 import time
+from functools import partial
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
@@ -18,6 +19,78 @@ from shejane_runtime.config import reset_settings_for_tests
 from shejane_runtime.runs import RunCoordinator
 from shejane_runtime.server import create_app
 from shejane_runtime.shejane_authorization import SheJaneAuthorizationManager
+
+
+def test_official_authorization_cleans_up_when_response_validation_fails(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = reset_settings_for_tests(
+        SHEJANE_RUNTIME_TOKEN="tok",
+        data_dir=tmp_path,
+    )
+    monkeypatch.setattr(RunCoordinator, "start", lambda _self: None)
+    credential_vault: dict[str, str] = {}
+    monkeypatch.setattr(
+        keyring,
+        "set_password",
+        lambda _service, account, password: credential_vault.__setitem__(account, password),
+    )
+    monkeypatch.setattr(
+        keyring,
+        "delete_password",
+        lambda _service, account: credential_vault.pop(account, None),
+    )
+
+    async def catalog(**_kwargs):
+        return [
+            {
+                "model_id": "official-chat",
+                "display_name": "Official Chat",
+                "source": "discovered",
+                "verification": "unverified",
+                "recommended": True,
+                "recommended_for": ["agent_chat"],
+                "capabilities": [
+                    {
+                        "capability": "agent_chat",
+                        "protocol": "openai_chat_completions",
+                        "verification": "unverified",
+                    }
+                ],
+                "tool_calling": True,
+                "streaming": True,
+                "image_inputs": False,
+                "max_input_tokens": None,
+                "max_output_tokens": None,
+            }
+        ], "ready"
+
+    async def fail_response(*_args, **_kwargs):
+        raise ValueError("response validation failed")
+
+    monkeypatch.setattr(server_module, "_refresh_model_service_models", catalog)
+    monkeypatch.setattr(server_module, "_model_service_response", fail_response)
+
+    with TestClient(create_app(settings)) as client:
+        with pytest.raises(ValueError, match="response validation failed"):
+            client.portal.call(
+                partial(
+                    server_module._complete_shejane_authorization,
+                    client.app,
+                    "local:owner",
+                    "inference-secret",
+                )
+            )
+        connections = client.portal.call(
+            partial(
+                client.app.state.store.list_model_connections,
+                principal_id="local:owner",
+            )
+        )
+
+    assert connections == []
+    assert credential_vault == {}
 
 
 @pytest.mark.asyncio
@@ -184,12 +257,13 @@ def test_runtime_authorization_persists_only_the_official_connection(
             [
                 {
                     "id": "gpt-image-2",
-                    "capabilities": ["image_generation"],
+                    "capabilities": ["image_generation", "image_editing"],
+                    "recommended_for": ["image_editing"],
                 },
                 {
                     "id": "gpt-image-2-vip",
                     "capabilities": ["image_generation"],
-                    "recommended_for": ["image_generation"],
+                    "recommended_for": ["image_generation"] * 5,
                 },
             ]
             if catalog_requests == 1
@@ -257,11 +331,15 @@ def test_runtime_authorization_persists_only_the_official_connection(
             "/v1/model-services",
             headers={"Authorization": "Bearer tok"},
         )
+        connection_id = status.json()["connection"]["id"]
+        with sqlite3.connect(settings.runtime_db_path) as database:
+            persisted_default_bindings = database.execute(
+                "SELECT capability, model_id FROM model_capability_bindings ORDER BY capability"
+            ).fetchall()
         default_bindings = client.get(
             "/v1/model-capability-bindings",
             headers={"Authorization": "Bearer tok"},
         )
-        connection_id = status.json()["connection"]["id"]
         selected_binding = client.put(
             "/v1/model-capability-bindings/image_generation",
             headers={"Authorization": "Bearer tok"},
@@ -335,7 +413,12 @@ def test_runtime_authorization_persists_only_the_official_connection(
                 "capability": "image_generation",
                 "protocol": "openai_images_generations",
                 "verification": "verified",
-            }
+            },
+            {
+                "capability": "image_editing",
+                "protocol": "openai_images_edits",
+                "verification": "verified",
+            },
         ],
         "gpt-image-2-vip": [
             {
@@ -349,24 +432,37 @@ def test_runtime_authorization_persists_only_the_official_connection(
     assert manual.json()["verification"] == "verified"
     assert repeated.json() == payload
     assert services.json()["services"] == [payload["connection"]]
-    assert [
-        {
-            key: binding[key]
-            for key in ("capability", "model_spec", "model_id", "status", "revision")
+    assert persisted_default_bindings == [
+        ("image_editing", "gpt-image-2"),
+        ("image_generation", "gpt-image-2-vip"),
+    ]
+    assert {
+        binding["capability"]: {
+            key: binding[key] for key in ("model_spec", "model_id", "status", "revision")
         }
         for binding in default_bindings.json()["bindings"]
-    ] == [
-        {
-            "capability": "image_generation",
+    } == {
+        "image_generation": {
             "model_spec": f"local:{connection_id}:gpt-image-2-vip",
             "model_id": "gpt-image-2-vip",
             "status": "ready",
             "revision": 1,
-        }
-    ]
+        },
+        "image_editing": {
+            "model_spec": f"local:{connection_id}:gpt-image-2",
+            "model_id": "gpt-image-2",
+            "status": "ready",
+            "revision": 1,
+        },
+    }
     assert selected_binding.status_code == 200
-    assert preserved_bindings.json()["bindings"][0]["model_id"] == "gpt-image-2"
-    assert preserved_bindings.json()["bindings"][0]["revision"] == 2
+    preserved_generation = next(
+        binding
+        for binding in preserved_bindings.json()["bindings"]
+        if binding["capability"] == "image_generation"
+    )
+    assert preserved_generation["model_id"] == "gpt-image-2"
+    assert preserved_generation["revision"] == 2
     assert list(credential_vault.values()) == ["inference-secret"]
     assert replaced.status_code == 400
     assert imported.status_code == 400

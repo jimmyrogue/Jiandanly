@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+from functools import partial
 from pathlib import Path
 
 import httpx
@@ -24,6 +25,87 @@ from shejane_runtime.runs import RunCoordinator
 from shejane_runtime.server import create_app
 from shejane_runtime.store.sqlite import LocalStore
 from tests.helpers import run_command
+
+
+def test_default_capability_binding_never_replaces_an_existing_choice(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = reset_settings_for_tests(
+        SHEJANE_RUNTIME_TOKEN="tok",
+        data_dir=tmp_path,
+    )
+    monkeypatch.setattr(RunCoordinator, "start", lambda _self: None)
+
+    with TestClient(create_app(settings)) as client:
+        store = client.app.state.store
+        client.portal.call(
+            partial(
+                store.create_model_connection,
+                principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+                connection_id="manual",
+                preset_id="custom",
+                name="Manual",
+                region="custom",
+                adapter_id="openai_chat",
+                base_url="https://manual.example/v1",
+                requires_api_key=True,
+                credential_ref="credential:manual",
+                models=[],
+                catalog_status="ready",
+            )
+        )
+        client.portal.call(
+            partial(
+                store.create_model_connection,
+                principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+                connection_id="official",
+                preset_id="shejane-official",
+                name="Official",
+                region="official",
+                adapter_id="openai_chat",
+                base_url="https://app.shejane.com/v1",
+                requires_api_key=True,
+                credential_ref="credential:official",
+                models=[],
+                catalog_status="ready",
+            )
+        )
+        client.portal.call(
+            partial(
+                store.set_model_capability_binding,
+                principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+                capability="image_generation",
+                connection_id="manual",
+                connection_version=1,
+                model_id="manual-image",
+                protocol="openai_images_generations",
+            )
+        )
+        inserted = client.portal.call(
+            partial(
+                store.create_model_capability_binding_if_absent,
+                principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+                capability="image_generation",
+                connection_id="official",
+                connection_version=1,
+                model_id="official-image",
+                protocol="openai_images_generations",
+            )
+        )
+        binding = client.portal.call(
+            partial(
+                store.get_model_capability_binding,
+                principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+                capability="image_generation",
+            )
+        )
+
+    assert inserted is None
+    assert binding is not None
+    assert binding["connection_id"] == "manual"
+    assert binding["model_id"] == "manual-image"
+    assert binding["revision"] == 1
 
 
 def test_model_service_presets_prioritize_china_and_expose_editable_addresses() -> None:
@@ -228,6 +310,7 @@ async def test_official_catalog_keeps_known_agent_capabilities_and_limits(monkey
             "source": "discovered",
             "verification": "unverified",
             "recommended": True,
+            "recommended_for": ["agent_chat"],
         }
     ]
 
@@ -1797,6 +1880,7 @@ def test_image_generation_model_uses_images_endpoint_and_stays_out_of_agent_cata
         "source": "manual",
         "verification": "verified",
         "recommended": False,
+        "recommended_for": [],
         "tool_calling": False,
         "streaming": False,
         "image_inputs": False,

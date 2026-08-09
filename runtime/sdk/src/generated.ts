@@ -3114,6 +3114,8 @@ export interface components {
              * @default false
              */
             recommended: boolean;
+            /** Recommended For */
+            recommended_for?: ("agent_chat" | "image_understanding" | "image_generation" | "image_editing")[];
             /**
              * Source
              * @enum {string}

@@ -223,6 +223,7 @@ class ModelServiceModel(ModelCapabilityProfile):
     source: ModelSource
     verification: ModelVerification
     recommended: bool = False
+    recommended_for: list[ModelCapabilityName] = Field(default_factory=list, max_length=4)
 
 
 class ModelServiceConnection(BaseModel):

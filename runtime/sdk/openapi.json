@@ -5358,6 +5358,20 @@
             "title": "Recommended",
             "type": "boolean"
           },
+          "recommended_for": {
+            "items": {
+              "enum": [
+                "agent_chat",
+                "image_understanding",
+                "image_generation",
+                "image_editing"
+              ],
+              "type": "string"
+            },
+            "maxItems": 4,
+            "title": "Recommended For",
+            "type": "array"
+          },
           "source": {
             "enum": [
               "bundled",
