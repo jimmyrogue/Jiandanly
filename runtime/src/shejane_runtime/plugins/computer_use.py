@@ -23,6 +23,8 @@ _CHILD_ENVIRONMENT_KEYS = (
     "LANG",
     "LC_ALL",
     "LC_CTYPE",
+    "DISPLAY",
+    "XAUTHORITY",
     "SYSTEMROOT",
     "WINDIR",
     "COMSPEC",

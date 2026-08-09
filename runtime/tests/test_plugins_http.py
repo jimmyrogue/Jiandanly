@@ -1013,6 +1013,10 @@ def test_ocr_asset_and_plugin_are_runtime_managed_and_cannot_be_removed(
         "shejane_runtime.plugins.registry.current_managed_worker_platform",
         lambda: "darwin/arm64",
     )
+    monkeypatch.setattr(
+        "shejane_runtime.plugins.catalog.current_managed_worker_platform",
+        lambda: "darwin/arm64",
+    )
     settings = reset_settings_for_tests(
         SHEJANE_RUNTIME_TOKEN="tok",
         data_dir=tmp_path / "runtime",

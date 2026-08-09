@@ -144,6 +144,8 @@ for await (const line of lines) {
     pid: process.pid,
     profile: process.env.SHEJANE_BROWSER_QA_PROFILE,
     proxy: process.env.SHEJANE_BROWSER_QA_PROXY,
+    display: process.env.DISPLAY,
+    xauthority: process.env.XAUTHORITY,
     systemRoot: process.env.SYSTEMROOT,
   } }) + '\\n');
 }
@@ -151,6 +153,8 @@ for await (const line of lines) {
         encoding="utf-8",
     )
     monkeypatch.setenv("SHEJANE_RUNTIME_NODE_PATH", node)
+    monkeypatch.setenv("DISPLAY", ":99")
+    monkeypatch.setenv("XAUTHORITY", "/tmp/shejane-xauthority")
     monkeypatch.setenv("SYSTEMROOT", "C:\\Windows")
     prepared: list[Path] = []
 
@@ -182,6 +186,8 @@ for await (const line of lines) {
     assert first["pid"] == second["pid"]
     assert first["profile"] == str(profile)
     assert str(first["proxy"]).startswith("http://127.0.0.1:")
+    assert first["display"] == ":99"
+    assert first["xauthority"] == "/tmp/shejane-xauthority"
     assert first["systemRoot"] == "C:\\Windows"
 
     await service.aclose()
