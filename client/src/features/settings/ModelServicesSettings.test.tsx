@@ -202,7 +202,10 @@ describe('ModelServicesSettings', () => {
     expect(screen.getByText('共 2 个模型')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
-    fireEvent.click(screen.getByRole('button', { name: '测试模型' }))
+    const actionsTrigger = screen.getByRole('button', { name: 'SheJane 官方服务（推荐） 更多操作' })
+    actionsTrigger.focus()
+    fireEvent.keyDown(actionsTrigger, { key: 'Enter', code: 'Enter' })
+    fireEvent.click(await screen.findByRole('menuitem', { name: '高级兼容性测试' }))
     expect(await screen.findByRole('heading', { name: '手动测试模型兼容性' })).toBeInTheDocument()
     expect(screen.getByRole('checkbox', { name: '选择 official-flash' })).toBeInTheDocument()
     expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument()
@@ -574,14 +577,16 @@ describe('ModelServicesSettings', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     expect(screen.getByText('中国站 · 可用')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '测试模型' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '测试模型' })).not.toBeInTheDocument()
     const actions = container.querySelector('.settings-model-service-actions')
-    expect(actions?.querySelectorAll('button')).toHaveLength(2)
+    expect(actions?.querySelectorAll('button')).toHaveLength(1)
     expect(actions?.lastElementChild).toHaveAttribute('aria-label', 'DeepSeek 更多操作')
     const actionsTrigger = screen.getByRole('button', { name: 'DeepSeek 更多操作' })
     actionsTrigger.focus()
     fireEvent.keyDown(actionsTrigger, { key: 'Enter', code: 'Enter' })
     expect(await screen.findByRole('menuitem', { name: '打开 DeepSeek 控制台' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: '测试连接' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: '高级兼容性测试' })).toBeInTheDocument()
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
@@ -594,9 +599,160 @@ describe('ModelServicesSettings', () => {
       </I18nProvider>,
     )
 
-    fireEvent.click(await screen.findByRole('button', { name: '测试模型' }))
+    const actionsTrigger = await screen.findByRole('button', { name: '兔子 更多操作' })
+    actionsTrigger.focus()
+    fireEvent.keyDown(actionsTrigger, { key: 'Enter', code: 'Enter' })
+    fireEvent.click(await screen.findByRole('menuitem', { name: '高级兼容性测试' }))
     expect(screen.getByText('连接成功后，Agent 对话模型即可使用；请选择需要手动测试兼容性的模型。')).toBeInTheDocument()
     expect(api.verifyModelServiceModel).not.toHaveBeenCalled()
+  })
+
+  it('tests the recommended chat model from the service menu without gating availability', async () => {
+    const connection = {
+      ...tuziConnection,
+      preset_id: 'deepseek',
+      name: 'DeepSeek',
+      models: [{
+        ...tuziConnection.models[0],
+        model_id: 'deepseek-v4-vision',
+        display_name: 'DeepSeek V4 Vision',
+        recommended: true,
+        recommended_for: ['image_generation'],
+        capabilities: [{
+          capability: 'agent_chat',
+          protocol: 'openai_chat_completions',
+          verification: 'unverified',
+        }, {
+          capability: 'image_generation',
+          protocol: 'openai_images_generations',
+          verification: 'verified',
+        }],
+      }, {
+        ...tuziConnection.models[0],
+        model_id: 'deepseek-v4-flash',
+        display_name: 'DeepSeek V4 Flash',
+        recommended: true,
+        recommended_for: ['agent_chat'],
+        capabilities: [{
+          capability: 'agent_chat',
+          protocol: 'openai_chat_completions',
+          verification: 'unverified',
+        }],
+      }, {
+        ...tuziConnection.models[0],
+        model_id: 'deepseek-v4-pro',
+        display_name: 'DeepSeek V4 Pro',
+        capabilities: [{
+          capability: 'agent_chat',
+          protocol: 'openai_chat_completions',
+          verification: 'unverified',
+        }],
+      }],
+    }
+    api.listModelServices.mockResolvedValue([connection])
+
+    render(
+      <I18nProvider>
+        <ModelServicesSettings config={config} />
+      </I18nProvider>,
+    )
+
+    const actionsTrigger = await screen.findByRole('button', { name: 'DeepSeek 更多操作' })
+    actionsTrigger.focus()
+    fireEvent.keyDown(actionsTrigger, { key: 'Enter', code: 'Enter' })
+    fireEvent.click(await screen.findByRole('menuitem', { name: '测试连接' }))
+
+    await waitFor(() => expect(api.verifyModelServiceModel).toHaveBeenCalledWith(
+      'conn_1',
+      'deepseek-v4-flash',
+      { capability: 'agent_chat', protocol: 'openai_chat_completions' },
+      config,
+    ))
+    expect(await screen.findByText('连接测试通过')).toBeInTheDocument()
+    expect(screen.getByText('DeepSeek')).toBeInTheDocument()
+  })
+
+  it('keeps a successful connection test result when refreshing the catalog fails', async () => {
+    const connection = {
+      ...tuziConnection,
+      models: [{
+        ...tuziConnection.models[0],
+        capabilities: [{
+          capability: 'agent_chat',
+          protocol: 'openai_chat_completions',
+          verification: 'unverified',
+        }],
+      }],
+    }
+    api.listModelServices
+      .mockResolvedValueOnce([connection])
+      .mockRejectedValueOnce(new Error('catalog reload failed'))
+
+    render(
+      <I18nProvider>
+        <ModelServicesSettings config={config} />
+      </I18nProvider>,
+    )
+
+    const actionsTrigger = await screen.findByRole('button', { name: '兔子 更多操作' })
+    actionsTrigger.focus()
+    fireEvent.keyDown(actionsTrigger, { key: 'Enter', code: 'Enter' })
+    fireEvent.click(await screen.findByRole('menuitem', { name: '测试连接' }))
+
+    expect(await screen.findByText('连接测试通过')).toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent('catalog reload failed')
+  })
+
+  it('does not treat an image recommendation as the preferred chat test model', async () => {
+    const connection = {
+      ...tuziConnection,
+      models: [{
+        ...tuziConnection.models[0],
+        model_id: 'ordinary-chat',
+        display_name: 'Ordinary Chat',
+        recommended: false,
+        recommended_for: [],
+        capabilities: [{
+          capability: 'agent_chat',
+          protocol: 'openai_chat_completions',
+          verification: 'unverified',
+        }],
+      }, {
+        ...tuziConnection.models[0],
+        model_id: 'image-recommended-chat',
+        display_name: 'Image Recommended Chat',
+        recommended: true,
+        recommended_for: ['image_generation'],
+        capabilities: [{
+          capability: 'agent_chat',
+          protocol: 'openai_chat_completions',
+          verification: 'unverified',
+        }, {
+          capability: 'image_generation',
+          protocol: 'openai_images_generations',
+          verification: 'verified',
+        }],
+      }],
+    }
+    api.listModelServices.mockResolvedValue([connection])
+
+    render(
+      <I18nProvider>
+        <ModelServicesSettings config={config} />
+      </I18nProvider>,
+    )
+
+    const actionsTrigger = await screen.findByRole('button', { name: '兔子 更多操作' })
+    actionsTrigger.focus()
+    fireEvent.keyDown(actionsTrigger, { key: 'Enter', code: 'Enter' })
+    fireEvent.click(await screen.findByRole('menuitem', { name: '测试连接' }))
+
+    await waitFor(() => expect(api.verifyModelServiceModel).toHaveBeenCalledWith(
+      'conn_1',
+      'ordinary-chat',
+      { capability: 'agent_chat', protocol: 'openai_chat_completions' },
+      config,
+    ))
   })
 
   it('shows persistent progress on the service card while models refresh', async () => {
@@ -615,16 +771,52 @@ describe('ModelServicesSettings', () => {
     const actionsTrigger = await screen.findByRole('button', { name: '兔子 更多操作' })
     actionsTrigger.focus()
     fireEvent.keyDown(actionsTrigger, { key: 'Enter', code: 'Enter' })
+    fireEvent.click(await screen.findByRole('menuitem', { name: '测试连接' }))
+    expect(await screen.findByText('连接测试通过')).toBeInTheDocument()
+
+    actionsTrigger.focus()
+    fireEvent.keyDown(actionsTrigger, { key: 'Enter', code: 'Enter' })
     fireEvent.click(await screen.findByRole('menuitem', { name: '刷新模型' }))
 
     expect(screen.queryByRole('menuitem', { name: '刷新模型' })).not.toBeInTheDocument()
     expect(screen.getByRole('status')).toHaveTextContent('正在刷新模型…')
+    expect(screen.queryByText('连接测试通过')).not.toBeInTheDocument()
     expect(actionsTrigger).toHaveAttribute('aria-busy', 'true')
     expect(container.querySelectorAll('.settings-model-service .animate-spin')).toHaveLength(1)
 
     finishRefresh()
     await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument())
     expect(screen.getByText('已有服务 · 可用')).toBeInTheDocument()
+  })
+
+  it('does not start another connection test while one is running', async () => {
+    let finishTest!: () => void
+    const secondConnection = {
+      ...tuziConnection,
+      id: 'conn_2',
+      name: '第二个服务',
+    }
+    api.listModelServices.mockResolvedValue([tuziConnection, secondConnection])
+    api.verifyModelServiceModel.mockImplementation(() => new Promise((resolve) => {
+      finishTest = () => resolve({})
+    }))
+
+    render(
+      <I18nProvider>
+        <ModelServicesSettings config={config} />
+      </I18nProvider>,
+    )
+
+    const firstTrigger = await screen.findByRole('button', { name: '兔子 更多操作' })
+    firstTrigger.focus()
+    fireEvent.keyDown(firstTrigger, { key: 'Enter', code: 'Enter' })
+    fireEvent.click(await screen.findByRole('menuitem', { name: '测试连接' }))
+
+    await waitFor(() => expect(api.verifyModelServiceModel).toHaveBeenCalledTimes(1))
+    expect(screen.getByRole('button', { name: '第二个服务 更多操作' })).toBeDisabled()
+
+    finishTest()
+    await waitFor(() => expect(screen.getByText('连接测试通过')).toBeInTheDocument())
   })
 
   it('reconnects an existing service by replacing only its API key', async () => {
@@ -702,7 +894,10 @@ describe('ModelServicesSettings', () => {
       </I18nProvider>,
     )
 
-    fireEvent.click(await screen.findByRole('button', { name: '测试模型' }))
+    const actionsTrigger = await screen.findByRole('button', { name: 'Tuzi 更多操作' })
+    actionsTrigger.focus()
+    fireEvent.keyDown(actionsTrigger, { key: 'Enter', code: 'Enter' })
+    fireEvent.click(await screen.findByRole('menuitem', { name: '高级兼容性测试' }))
     fireEvent.click(screen.getByRole('checkbox', { name: '选择 GPT Image 1' }))
     fireEvent.click(screen.getByRole('combobox', { name: 'GPT Image 1 用途' }))
     fireEvent.click(screen.getByRole('option', { name: '图片生成' }))
@@ -722,7 +917,7 @@ describe('ModelServicesSettings', () => {
     },
   )
 
-  it('opens a searchable model picker after connecting an existing service', async () => {
+  it('connects an existing service without opening compatibility testing', async () => {
     api.listModelServicePresets.mockResolvedValue([{
       id: 'custom',
       name: '已有服务',
@@ -747,11 +942,10 @@ describe('ModelServicesSettings', () => {
     fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'secret' } })
     fireEvent.click(screen.getByRole('button', { name: '连接' }))
 
-    expect(await screen.findByRole('heading', { name: '手动测试模型兼容性' })).toBeInTheDocument()
-    const search = screen.getByRole('searchbox', { name: '筛选模型' })
-    fireEvent.change(search, { target: { value: 'image' } })
-    expect(screen.getByText('gpt-image-2')).toBeInTheDocument()
-    expect(screen.queryByText('gpt-5.6-luna')).not.toBeInTheDocument()
+    await waitFor(() => expect(api.connectModelService).toHaveBeenCalled())
+    expect(screen.queryByRole('heading', { name: '手动测试模型兼容性' })).not.toBeInTheDocument()
+    expect(await screen.findByText('兔子')).toBeInTheDocument()
+    expect(api.verifyModelServiceModel).not.toHaveBeenCalled()
   })
 
   it('keeps the catalog in the picker and tests only selected models', async () => {
@@ -768,7 +962,10 @@ describe('ModelServicesSettings', () => {
     expect(screen.getByText('gpt-image-2')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
-    fireEvent.click(screen.getByRole('button', { name: '测试模型' }))
+    const actionsTrigger = screen.getByRole('button', { name: '兔子 更多操作' })
+    actionsTrigger.focus()
+    fireEvent.keyDown(actionsTrigger, { key: 'Enter', code: 'Enter' })
+    fireEvent.click(await screen.findByRole('menuitem', { name: '高级兼容性测试' }))
     fireEvent.click(screen.getByRole('checkbox', { name: '选择 gpt-image-2' }))
     fireEvent.click(screen.getByRole('combobox', { name: 'gpt-image-2 用途' }))
     fireEvent.click(screen.getByRole('option', { name: '图片生成' }))

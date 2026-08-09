@@ -131,6 +131,7 @@ export function ModelServicesSettings({
   const [modelSearch, setModelSearch] = useState('')
   const [selectedModels, setSelectedModels] = useState<Record<string, boolean>>({})
   const [modelTestStates, setModelTestStates] = useState<Record<string, ModelTestState>>({})
+  const [connectionTestStates, setConnectionTestStates] = useState<Record<string, ModelTestState>>({})
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [fieldErrors, setFieldErrors] = useState<ConnectionFieldErrors>({})
@@ -140,6 +141,14 @@ export function ModelServicesSettings({
     ?? selected?.regions.find((item) => item.default)?.base_url
     ?? selected?.regions[0]?.base_url
     ?? ''
+
+  const clearConnectionTestState = (connectionID: string) => {
+    setConnectionTestStates((current) => {
+      const next = { ...current }
+      delete next[connectionID]
+      return next
+    })
+  }
 
   const load = useCallback(async () => {
     if (!config) {
@@ -235,6 +244,11 @@ export function ModelServicesSettings({
         setSelected(undefined)
         if (diagnosticsError) {
           setError(t('settings.modelServices.authorization.diagnosticsFailed'))
+        } else if (!status.connection.models.some((model) => (
+          model.capabilities?.some((capability) => capability.capability === 'agent_chat')
+          || model.capabilities?.length === 0
+        ))) {
+          setError(t('settings.modelServices.authorization.modelsUnavailable'))
         }
         onChanged?.()
         return
@@ -317,14 +331,13 @@ export function ModelServicesSettings({
     setBusy('connect')
     setError('')
     try {
-      let connectedService: ModelServiceConnection | undefined
       if (reconnecting) {
         await reconnectModelService(reconnecting.id, {
           api_key: normalizedAPIKey,
           base_url: normalizedBaseURL,
         }, config)
       } else if (selected) {
-        connectedService = await connectModelService({
+        await connectModelService({
           preset_id: selected.id,
           api_key: normalizedAPIKey,
           base_url: normalizedBaseURL,
@@ -341,13 +354,8 @@ export function ModelServicesSettings({
       setSelected(undefined)
       setReconnecting(undefined)
       setFieldErrors({})
+      if (reconnecting) clearConnectionTestState(reconnecting.id)
       await load()
-      if (connectedService?.id) {
-        setManagingService(connectedService)
-        setModelSearch('')
-        setSelectedModels({})
-        setModelTestStates({})
-      }
       onChanged?.()
     } catch (reason) {
       if (reason instanceof RuntimeHTTPError && reason.code === 'adapter_detection_failed') {
@@ -361,6 +369,7 @@ export function ModelServicesSettings({
 
   const refresh = async (service: ModelServiceConnection) => {
     if (!config) return
+    clearConnectionTestState(service.id)
     setBusy(`refresh:${service.id}`)
     setError('')
     try {
@@ -517,6 +526,52 @@ export function ModelServicesSettings({
     setError('')
   }
 
+  const testConnection = async (service: ModelServiceConnection) => {
+    if (!config || busy) return
+    const candidates = service.models.filter((model) => (
+      model.capabilities?.some((capability) => capability.capability === 'agent_chat')
+      || model.capabilities?.length === 0
+    ))
+    const model = candidates.find((candidate) => (
+      candidate.recommended_for?.includes('agent_chat')
+    )) ?? candidates[0]
+    if (!model) {
+      setError(t('settings.modelServices.noChatModel'))
+      setConnectionTestStates((current) => ({ ...current, [service.id]: 'failed' }))
+      return
+    }
+    const capability = model.capabilities?.find((item) => item.capability === 'agent_chat')
+    setBusy(`test:${service.id}`)
+    setError('')
+    setConnectionTestStates((current) => ({ ...current, [service.id]: 'testing' }))
+    try {
+      try {
+        await verifyModelServiceModel(
+          service.id,
+          model.model_id,
+          {
+            capability: 'agent_chat',
+            protocol: capability?.protocol ?? defaultModelProtocol(service, 'agent_chat'),
+          },
+          config,
+        )
+      } catch (reason) {
+        setConnectionTestStates((current) => ({ ...current, [service.id]: 'failed' }))
+        setError(reason instanceof Error ? reason.message : String(reason))
+        return
+      }
+      setConnectionTestStates((current) => ({ ...current, [service.id]: 'verified' }))
+      onChanged?.()
+      try {
+        await load()
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : String(reason))
+      }
+    } finally {
+      setBusy('')
+    }
+  }
+
   const filteredModels = managingService?.models.filter((model) => {
     const query = modelSearch.trim().toLocaleLowerCase()
     return !query
@@ -566,6 +621,8 @@ export function ModelServicesSettings({
           {services.map((service) => {
             const preset = presets.find((item) => item.id === service.preset_id)
             const refreshing = busy === `refresh:${service.id}`
+            const connectionTestState = connectionTestStates[service.id]
+            const testingConnection = busy === `test:${service.id}`
             const regionLabel = service.region === 'intl'
               ? t('settings.modelServices.international')
               : service.region === 'cn'
@@ -593,41 +650,51 @@ export function ModelServicesSettings({
                   </button>
                 </div>
                 <span
-                  className={`settings-model-service-state${service.credential_configured ? '' : ' missing'}${refreshing ? ' refreshing' : ''}`}
-                  role={refreshing ? 'status' : undefined}
-                  aria-busy={refreshing || undefined}
+                  className={`settings-model-service-state${service.credential_configured ? '' : ' missing'}${refreshing || testingConnection ? ' refreshing' : ''}${connectionTestState === 'verified' && !refreshing && !testingConnection ? ' tested' : ''}`}
+                  role={refreshing || testingConnection || connectionTestState === 'verified' ? 'status' : undefined}
+                  aria-busy={refreshing || testingConnection || undefined}
                 >
-                  {refreshing ? (
+                  {testingConnection ? (
+                    <>
+                      <IconLoader2 className="animate-spin" size={14} aria-hidden="true" />
+                      {t('settings.modelServices.testingConnection')}
+                    </>
+                  ) : refreshing ? (
                     <>
                       <IconLoader2 className="animate-spin" size={14} aria-hidden="true" />
                       {t('settings.modelServices.refreshing')}
+                    </>
+                  ) : connectionTestState === 'verified' ? (
+                    <>
+                      <IconCheck size={14} aria-hidden="true" />
+                      {t('settings.modelServices.connectionTestPassed')}
                     </>
                   ) : !service.credential_configured
                     ? t('settings.modelServices.needsApiKey')
                     : `${regionLabel} · ${statusLabel}`}
                 </span>
                 <div className="settings-model-service-actions">
-                  <button
-                    type="button"
-                    className="settings-model-service-models"
-                    disabled={busy === service.id || refreshing}
-                    onClick={() => openModelPicker(service)}
-                  >
-                    {t('settings.modelServices.manageModels')}
-                  </button>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <button
                         type="button"
                         className="settings-model-service-action"
                         aria-label={t('settings.modelServices.serviceActions', { name: service.name })}
-                        disabled={busy === service.id || refreshing}
-                        aria-busy={refreshing}
+                        disabled={Boolean(busy)}
+                        aria-busy={refreshing || testingConnection}
                       >
                         <IconDots size={16} aria-hidden="true" />
                       </button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end" className="settings-model-service-menu">
+                      <DropdownMenuItem onSelect={() => void testConnection(service)}>
+                        <IconCheck size={15} aria-hidden="true" />
+                        {t('settings.modelServices.testConnection')}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => openModelPicker(service)}>
+                        <IconChevronRight size={15} aria-hidden="true" />
+                        {t('settings.modelServices.advancedCompatibility')}
+                      </DropdownMenuItem>
                       {preset?.billing_url && (
                         <DropdownMenuItem
                           onSelect={() => void window.shejaneClient?.openExternal?.(preset.billing_url!)}
@@ -671,7 +738,7 @@ export function ModelServicesSettings({
                       checked={diagnostics?.enabled === true
                         && diagnostics.credential_configured
                         && diagnostics.connection_id === service.id}
-                      disabled={busy === `diagnostics:${service.id}`}
+                      disabled={Boolean(busy)}
                       onCheckedChange={(checked) => void toggleDiagnostics(service, checked)}
                     />
                   </div>

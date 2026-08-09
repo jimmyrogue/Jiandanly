@@ -9122,36 +9122,17 @@ button.settings-row-button:focus-visible,
   color: var(--sj-ink-soft, #6F6B63);
 }
 
+.settings-model-service-state.tested {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--sj-moss, #5E7A6E);
+}
+
 .settings-model-service-actions {
   display: flex;
   align-items: center;
   gap: 6px;
-}
-
-.settings-model-service-models {
-  display: inline-flex;
-  min-height: 30px;
-  align-items: center;
-  gap: 5px;
-  border: 0.5px solid var(--sj-line-strong, #D9D5CC);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--sj-ink-soft, #6F6B63);
-  cursor: pointer;
-  padding: 0 10px;
-  font-size: 12px;
-  transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
-}
-
-.settings-model-service-models:hover {
-  border-color: var(--sj-ink-faint, #A8A39A);
-  background: var(--sj-paper-wash, #EFEDE7);
-  color: var(--sj-ink, #2B2A28);
-}
-
-.settings-model-service-models:disabled {
-  cursor: default;
-  opacity: 0.5;
 }
 
 .settings-model-service-action {
