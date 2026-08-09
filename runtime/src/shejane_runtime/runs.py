@@ -41,7 +41,13 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.store.base import BaseStore
 from langgraph.types import Command
 
-from .agent.builder import build_agent, skill_catalog_fingerprint
+from .agent.builder import (
+    _agent_model_call_final_reserve,
+    _agent_model_call_limit,
+    _agent_soft_model_call_limit_for_complexity,
+    build_agent,
+    skill_catalog_fingerprint,
+)
 from .agent.child_runs import ChildRunControl
 from .agent.context_builder import RuntimeContext
 from .agent.mailbox import AgentMailboxControl, AgentMessageKind
@@ -129,6 +135,47 @@ def _child_wait_satisfied(
 ) -> bool:
     terminal = [child.get("status") in _CHILD_TERMINAL_STATUSES for child in children]
     return all(terminal) if condition == "all" else any(terminal)
+
+
+def _execution_policy_snapshot(
+    goal: str,
+    settings_snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    stored = settings_snapshot.get("_execution_policy")
+    policy = (
+        dict(stored)
+        if isinstance(stored, dict) and stored.get("complexity") in {"simple", "complex"}
+        else execution_policy_for_task(goal)
+    )
+    configured = settings_snapshot.get("max_model_calls")
+    configured_limit = int(configured) if isinstance(configured, int) and configured > 0 else 100
+    stored_hard = policy.get("max_model_calls")
+    hard_limit = (
+        int(stored_hard)
+        if isinstance(stored_hard, int) and stored_hard > 0
+        else _agent_model_call_limit(configured_limit, goal)
+    )
+    stored_soft = policy.get("soft_model_call_limit")
+    soft_limit = (
+        max(1, min(hard_limit, int(stored_soft)))
+        if isinstance(stored_soft, int) and stored_soft > 0
+        else _agent_soft_model_call_limit_for_complexity(
+            hard_limit,
+            str(policy["complexity"]),
+        )
+    )
+    stored_reserve = policy.get("final_model_call_reserve")
+    final_reserve = (
+        max(1, min(hard_limit, int(stored_reserve)))
+        if isinstance(stored_reserve, int) and stored_reserve > 0
+        else _agent_model_call_final_reserve(hard_limit)
+    )
+    return {
+        **policy,
+        "max_model_calls": hard_limit,
+        "soft_model_call_limit": soft_limit,
+        "final_model_call_reserve": final_reserve,
+    }
 
 
 def _collaboration_completion_summary(
@@ -1230,7 +1277,10 @@ class RunCoordinator:
             settings_snapshot["_diagnostics_build"] = runtime_build_identity(
                 protocol_version=RUNTIME_PROTOCOL_VERSION
             )
-            settings_snapshot["_execution_policy"] = execution_policy_for_task(goal)
+            settings_snapshot["_execution_policy"] = _execution_policy_snapshot(
+                goal,
+                settings_snapshot,
+            )
             if settings_are_frozen:
                 capability_bindings = settings_snapshot.get("_capability_bindings")
                 required_tool_names = settings_snapshot.get("_required_tools")
@@ -2481,12 +2531,19 @@ class RunCoordinator:
         agent_definition: dict[str, Any],
         coordination: dict[str, Any],
     ) -> dict[str, Any]:
+        parent = await self.store.get_run(parent_run_id)
+        parent_settings = (
+            _json_object(parent.get("settings_json")) if isinstance(parent, dict) else {}
+        )
+        parent_settings.pop("_execution_policy", None)
+        child_execution_policy = _execution_policy_snapshot(goal, parent_settings)
         child, created = await self.store.accept_child_run(
             parent_run_id=parent_run_id,
             spawn_operation_id=spawn_operation_id,
             goal=goal,
             agent_definition=agent_definition,
             coordination=coordination,
+            execution_policy=child_execution_policy,
         )
         spawn_event = child.pop("_spawn_event", None)
         if isinstance(spawn_event, dict):
@@ -2871,6 +2928,7 @@ class RunCoordinator:
             # Per-run effective settings = base runtime settings with any
             # "Advanced" knobs the client sent folded on top.
             effective_settings = _apply_advanced_overrides(settings, run_settings)
+            execution_policy = _execution_policy_snapshot(goal, run_settings)
 
             # The ingress schema and 1 MiB request limit are the safety boundary.
             # Context compaction belongs to Deep Agents' token-aware
@@ -2935,6 +2993,10 @@ class RunCoordinator:
                     if item.get("virtual_path")
                 ),
                 task_goal=goal,
+                model_call_soft_limit=int(execution_policy["soft_model_call_limit"]),
+                model_call_hard_limit=int(execution_policy["max_model_calls"]),
+                model_call_final_reserve=int(execution_policy["final_model_call_reserve"]),
+                execution_policy=dict(execution_policy),
                 agent_role_prompt=(
                     str(child_definition["system_prompt"]) if child_definition is not None else None
                 ),

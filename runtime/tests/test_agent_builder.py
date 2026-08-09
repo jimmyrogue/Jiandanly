@@ -651,18 +651,34 @@ def test_custom_middleware_caps_research_and_subagent_dispatch(tmp_path: Path) -
     assert limits["task"] == 2
 
 
-def test_simple_fact_lookup_has_a_bounded_model_call_budget() -> None:
-    from shejane_runtime.agent.builder import _agent_model_call_limit
+def test_run_uses_configured_hard_limit_and_task_aware_soft_limit() -> None:
+    from shejane_runtime.agent.builder import (
+        _agent_model_call_final_reserve,
+        _agent_model_call_limit,
+        _agent_soft_model_call_limit,
+    )
+    from shejane_runtime.middleware.budget_control import finalization_attempt_reserve
 
     assert (
         _agent_model_call_limit(
             100,
             "去香港开通汇丰 one 账户，线上办理的话，补签名是必须的吗？",
         )
+        == 100
+    )
+    assert (
+        _agent_soft_model_call_limit(
+            100, "去香港开通汇丰 one 账户，线上办理的话，补签名是必须的吗？"
+        )
         == 12
     )
+    assert _agent_soft_model_call_limit(100, "你查一下互联网，核对这些银行的开户要求") == 24
     assert _agent_model_call_limit(100, "请调研并比较香港三家银行的开户流程") == 100
     assert _agent_model_call_limit(100, "coordinate through a durable mailbox") == 100
+    assert _agent_model_call_final_reserve(2) == 2
+    assert _agent_model_call_final_reserve(3) == 2
+    assert finalization_attempt_reserve(100, 2) == 6
+    assert 100 - finalization_attempt_reserve(100, 2) == 94
 
 
 def test_model_budget_changes_agent_definition_fingerprint() -> None:

@@ -64,7 +64,7 @@ interface AgentRunEvent {
 | `run.resumed` | resume_run 后第一个 frame | `payload`（resume 时传入的 dict） |
 | `run.waiting` | 卡在 HITL interrupt（**通常伴随 `permission.required` 或 `question.asked`**，UI 优先听后者） | `next`, `interrupts`, `handoff` |
 | `run.completed` | 终态 completed | `final_text`, `input_tokens`, `output_tokens`, `model_calls`, `unmetered_calls`, `outcome_unknown_calls` |
-| `run.failed` | 终态 failed | `error`, `type`, `category?`, `recoverable?`, `retryable?`, `action_kind?`, `suggested_action?` |
+| `run.failed` | 终态 failed | `error`, `type`, `error_code?`, `category?`, `recoverable?`, `retryable?`, `action_kind?`, `suggested_action?` |
 | `run.cleanup_required` | 清理尚未确认，执行代次已隔离 | `error`, `type`, `category`, `retryable=false`, `cleanup` |
 | `run.canceled` | 终态 canceled | _(空)_ |
 | `repair.workflow` | 用户触发的 repair run 进入/结束/失败/被上限拒绝/取消 | `status`, `attempt`, `max_attempts`, `source_run_id?`, `source_message_id?`, `failure_category?`, `reason?` |
@@ -334,5 +334,5 @@ Runtime 的线程快照是界面事实来源：
 1. **加性兼容**：新增 event_type 不破坏老客户端。Switch 用 fall-through default 忽略未知 type。
 2. **窄 schema**：不暴露 LangGraph 内部类（`AIMessageChunk` / `StateGraph` / ...）；payload 字段都是普通 JSON 标量 + 字典。
 3. **Persist + stream 同源**：每条业务 SSE 事件同时写 `local_events` 表，重连可重放完整事件序列；等待和终态事件与运行状态在同一事务提交，提交后才通知实时订阅者；`[DONE]` 是传输层结束标记，不写库。
-4. **失败可观测**：`run.failed` 一定带 `error` + `type`，并尽量附带 `category` / `recoverable` / `retryable` / `action_kind` / `suggested_action`，让事件流消费者无需再请求 diagnostics 也能先判断是重试、用户处理、修复、运维处理还是继续排查；客户端普通失败文案会保留原始错误并追加本地化的短策略标签；`tool.failed` 一定带 `content` + `status="error"`，结构化工具 envelope 失败还会尽量带 `error_code` / `recoverable` / `retryable`；用户触发的 repair run 另有 `repair.workflow`，避免 UI 把修复尝试误读成普通 retry 或裸露内部事件名。
+4. **失败可观测**：`run.failed` 一定带 `error` + `type`，并尽量附带稳定的 `error_code` 与 `category` / `recoverable` / `retryable` / `action_kind` / `suggested_action`，让事件流消费者无需再请求 diagnostics 也能先判断是重试、用户处理、修复、运维处理还是继续排查；Client 优先按已知 `error_code` 显示本地化原因与恢复建议，未知错误才退回分类标签和诊断入口，不把 `model_call_budget_exhausted` 显示成实现错误；`tool.failed` 一定带 `content` + `status="error"`，结构化工具 envelope 失败还会尽量带 `error_code` / `recoverable` / `retryable`；用户触发的 repair run 另有 `repair.workflow`，避免 UI 把修复尝试误读成普通 retry 或裸露内部事件名。
 5. **HITL 双轨**：`run.waiting` 是兜底（curl 友好），`permission.required` / `question.asked` 是窄信号 — UI 永远听窄的；同一 pause 批次内的多张 permission 卡必须全部 resolved 后才 resume。

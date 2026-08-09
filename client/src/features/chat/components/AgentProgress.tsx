@@ -832,6 +832,9 @@ function findPendingPermission(events: AgentTimelineItem[], t: Translator): Pend
 }
 
 function failureTitle(event: AgentTimelineItem | undefined, t: Translator): string {
+  if (event?.errorCode === 'model_call_budget_exhausted') {
+    return t('agent.failure.modelCallBudget.title')
+  }
   if (event?.failureCategory) {
     return t(failureCategoryLabelKey(event.failureCategory))
   }
@@ -846,6 +849,9 @@ function failureMessage(
   message: ChatMessage,
   t: Translator,
 ): string | undefined {
+  if (event?.errorCode === 'model_call_budget_exhausted') {
+    return undefined
+  }
   const value = (event?.label || message.content || '').trim()
   if (!value) {
     return undefined
@@ -860,6 +866,9 @@ function failureGuidance(
 ): string | undefined {
   if (!event) {
     return undefined
+  }
+  if (event.errorCode === 'model_call_budget_exhausted') {
+    return t('agent.failure.modelCallBudget.guidance')
   }
   if (event.failureCategory) {
     const localized = t(failureCategoryActionKey(event.failureCategory))
@@ -922,6 +931,8 @@ function failureCategoryLabelKey(category: string): Parameters<Translator>[0] {
       return 'diagnostics.failureCategory.transient'
     case 'auth':
       return 'diagnostics.failureCategory.auth'
+    case 'budget':
+      return 'diagnostics.failureCategory.budget'
     case 'quota':
       return 'diagnostics.failureCategory.quota'
     case 'permission':
@@ -973,6 +984,8 @@ function failureCategoryActionKey(category: string): Parameters<Translator>[0] {
       return 'diagnostics.failureAction.transient'
     case 'auth':
       return 'diagnostics.failureAction.auth'
+    case 'budget':
+      return 'diagnostics.failureAction.budget'
     case 'quota':
       return 'diagnostics.failureAction.quota'
     case 'permission':

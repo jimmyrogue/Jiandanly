@@ -40,7 +40,9 @@ from sse_starlette.sse import EventSourceResponse
 from . import __version__
 from .agent.builder import (
     MAX_SUBAGENT_TASKS_PER_RUN,
+    _agent_model_call_final_reserve,
     _agent_model_call_limit,
+    _agent_soft_model_call_limit_for_complexity,
     _build_byok_chat_model,
     open_checkpointer,
     open_store,
@@ -4950,6 +4952,28 @@ def _diagnostics_execution_policy(run: dict[str, Any]) -> dict[str, Any]:
     )
     subagents_enabled = settings.get("subagents") is not False
     subagent_allowed = bool(policy["subagent_allowed"] and subagents_enabled)
+    hard_model_call_limit = _agent_model_call_limit(
+        max_model_calls,
+        str(run.get("goal") or ""),
+    )
+    stored_hard_limit = policy.get("max_model_calls")
+    if isinstance(stored_hard_limit, int) and stored_hard_limit > 0:
+        hard_model_call_limit = stored_hard_limit
+    stored_soft_limit = policy.get("soft_model_call_limit")
+    soft_model_call_limit = (
+        max(1, min(hard_model_call_limit, stored_soft_limit))
+        if isinstance(stored_soft_limit, int) and stored_soft_limit > 0
+        else _agent_soft_model_call_limit_for_complexity(
+            hard_model_call_limit,
+            str(policy["complexity"]),
+        )
+    )
+    stored_final_reserve = policy.get("final_model_call_reserve")
+    final_model_call_reserve = (
+        max(1, min(hard_model_call_limit, stored_final_reserve))
+        if isinstance(stored_final_reserve, int) and stored_final_reserve > 0
+        else _agent_model_call_final_reserve(hard_model_call_limit)
+    )
     return {
         "complexity": policy["complexity"],
         "plan_mode": plan_mode,
@@ -4957,10 +4981,9 @@ def _diagnostics_execution_policy(run: dict[str, Any]) -> dict[str, Any]:
         or (plan_mode == "auto" and policy["complexity"] == "complex"),
         "subagent_allowed": subagent_allowed,
         "reason": "subagents_disabled" if not subagents_enabled else policy["reason"],
-        "max_model_calls": _agent_model_call_limit(
-            max_model_calls,
-            str(run.get("goal") or ""),
-        ),
+        "max_model_calls": hard_model_call_limit,
+        "soft_model_call_limit": soft_model_call_limit,
+        "final_model_call_reserve": final_model_call_reserve,
         "max_subagent_tasks": MAX_SUBAGENT_TASKS_PER_RUN if subagent_allowed else 0,
         "max_subagent_model_calls": SUBAGENT_MODEL_CALL_LIMIT if subagent_allowed else 0,
     }

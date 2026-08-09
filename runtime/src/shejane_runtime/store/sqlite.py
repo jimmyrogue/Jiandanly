@@ -2357,6 +2357,19 @@ class LocalStore:
             )
         }
 
+    async def model_call_budget_status(self, run_id: str, *, purpose: str) -> dict[str, int]:
+        """Return durable usage for one independently budgeted model purpose."""
+        row = await (
+            await self._conn.execute(
+                "SELECT COUNT(*) AS model_calls, "
+                "COALESCE(SUM(input_tokens), 0) AS input_tokens, "
+                "COALESCE(SUM(output_tokens), 0) AS output_tokens "
+                "FROM local_model_calls WHERE run_id = ? AND purpose = ?",
+                (run_id, purpose),
+            )
+        ).fetchone()
+        return {key: int(row[key] or 0) for key in ("model_calls", "input_tokens", "output_tokens")}
+
     async def execution_settlement_snapshot(self, run_id: str) -> dict[str, Any]:
         """Read the authoritative records needed to settle one execution."""
         model_rows = await (
@@ -3281,6 +3294,7 @@ class LocalStore:
         goal: str,
         agent_definition: dict[str, Any],
         coordination: dict[str, Any] | None = None,
+        execution_policy: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """Atomically admit one Runtime-owned child Run and pending Job.
 
@@ -3443,13 +3457,17 @@ class LocalStore:
             attachments = parent_metadata.get("_attachments")
             if isinstance(attachments, list):
                 child_metadata["_attachments"] = attachments
+            child_settings = _json_payload(parent.get("settings_json"))
+            child_settings.pop("_execution_policy", None)
+            if execution_policy is not None:
+                child_settings["_execution_policy"] = dict(execution_policy)
             child = self._new_run_record(
                 principal_id=str(parent["principal_id"]),
                 goal=normalized_goal,
                 workspace_path=parent.get("workspace_path"),
                 parent_run_id=parent_run_id,
                 root_run_id=root_run_id,
-                settings=_json_payload(parent.get("settings_json")),
+                settings=child_settings,
                 metadata=child_metadata,
                 mode=str(parent["mode"]),
                 run_kind="child",

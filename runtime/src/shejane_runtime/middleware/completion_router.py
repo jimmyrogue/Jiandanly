@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from typing import Any, NotRequired
 
 from langchain.agents.middleware import AgentMiddleware, AgentState, hook_config
@@ -22,6 +23,7 @@ from .completion_reviewer import (
 
 
 class CompletionRouterState(AgentState):
+    budget_control: NotRequired[dict[str, Any]]
     completion_route: NotRequired[dict[str, Any]]
     verification_repair_state: NotRequired[dict[str, Any]]
     clarification_review_state: NotRequired[dict[str, Any]]
@@ -87,6 +89,8 @@ class CompletionRouterMiddleware(AgentMiddleware):
                 run_id=run_id,
             )
         if getattr(last, "tool_calls", None):
+            if _budget_convergence_active(state, run_id):
+                return _budget_tool_call_route(state, last, run_id)
             return _incremental_tool_route(state, last, run_id)
 
         finish_reason = _finish_reason(last)
@@ -131,7 +135,17 @@ class CompletionRouterMiddleware(AgentMiddleware):
                 run_id=run_id,
             )
 
+        convergence_active = _budget_convergence_active(state, run_id)
+
         if _is_prose_clarification(text):
+            if convergence_active:
+                return _terminal_route(
+                    "blocked",
+                    "clarification_tool_required",
+                    "Budget convergence could not complete because required user input is missing.",
+                    recoverable=True,
+                    run_id=run_id,
+                )
             attempts = _route_attempts_for_run(state, run_id, "prose_clarification")
             if attempts >= 1:
                 return _terminal_route(
@@ -162,7 +176,11 @@ class CompletionRouterMiddleware(AgentMiddleware):
 
         incremental = _incremental_final_route(state, run_id)
         if incremental is not None:
-            return incremental
+            return (
+                _convergence_blocked_route(incremental, run_id)
+                if convergence_active
+                else incremental
+            )
 
         context = getattr(runtime, "context", None)
         required_tools = tuple(getattr(context, "required_tools", ()) or ())
@@ -170,6 +188,14 @@ class CompletionRouterMiddleware(AgentMiddleware):
         if missing_tools:
             attempts = _route_attempts_for_run(state, run_id, "required_tool_missing")
             names = ", ".join(missing_tools)
+            if convergence_active:
+                return _terminal_route(
+                    "blocked",
+                    "required_tool_missing",
+                    f"Budget convergence could not complete the required tool call: {names}.",
+                    recoverable=True,
+                    run_id=run_id,
+                )
             if attempts >= 1:
                 return _terminal_route(
                     "blocked",
@@ -198,6 +224,14 @@ class CompletionRouterMiddleware(AgentMiddleware):
         verification = _latest_task_verification(messages)
         if verification is not None and not verification["ok"]:
             attempts = _repair_attempts_for_run(state, run_id)
+            if convergence_active:
+                return _terminal_route(
+                    "blocked",
+                    "verification_failed",
+                    verification["reason"],
+                    recoverable=True,
+                    run_id=run_id,
+                )
             if attempts >= self.max_verification_repairs:
                 return {
                     "completion_route": {
@@ -236,8 +270,12 @@ class CompletionRouterMiddleware(AgentMiddleware):
         return {
             "completion_route": {
                 "decision": "final",
-                "reason": "complete_model_message",
-                "message": "Model produced a complete final candidate.",
+                "reason": "budget_convergence" if convergence_active else "complete_model_message",
+                "message": (
+                    "Runtime accepted the final candidate during budget convergence."
+                    if convergence_active
+                    else "Model produced a complete final candidate."
+                ),
                 "recoverable": False,
                 "run_id": run_id,
                 **(
@@ -639,6 +677,66 @@ def _incremental_final_route(state: Any, run_id: str) -> dict[str, Any] | None:
             ),
         )
     return None
+
+
+def _budget_convergence_active(state: Any, run_id: str) -> bool:
+    value = state.get("budget_control") if isinstance(state, Mapping) else None
+    if not isinstance(value, dict) or value.get("mode") != "converge":
+        return False
+    scoped_run = str(value.get("run_id") or "")
+    return not scoped_run or not run_id or scoped_run == run_id
+
+
+def _budget_tool_call_route(state: Any, message: Any, run_id: str) -> dict[str, Any]:
+    reason = "budget_convergence_tool_call"
+    attempts = _route_attempts_for_run(state, run_id, reason)
+    if attempts >= 1:
+        return _terminal_route(
+            "blocked",
+            reason,
+            "The model repeated a tool call after Runtime entered budget convergence.",
+            recoverable=True,
+            run_id=run_id,
+        )
+    calls = list(getattr(message, "tool_calls", ()) or ())
+    return {
+        "messages": [
+            ToolMessage(
+                content=(
+                    "Runtime budget convergence is active. This tool was not executed. "
+                    "Produce the best final answer from existing evidence."
+                ),
+                name=str(call.get("name") or "unknown"),
+                tool_call_id=str(call.get("id") or ""),
+                status="error",
+            )
+            for call in calls
+            if isinstance(call, dict)
+        ],
+        "completion_route": {
+            "decision": "repair_requested",
+            "reason": reason,
+            "message": "Tool calls are unavailable during budget convergence.",
+            "recoverable": True,
+            "attempts": 1,
+            "max_attempts": 1,
+            "run_id": run_id,
+            "instruction": "Do not call tools. Produce the best available final answer now.",
+        },
+        "jump_to": "model",
+    }
+
+
+def _convergence_blocked_route(route: dict[str, Any], run_id: str) -> dict[str, Any]:
+    completion = route.get("completion_route")
+    details = completion if isinstance(completion, dict) else {}
+    return _terminal_route(
+        "blocked",
+        str(details.get("reason") or "acceptance_incomplete"),
+        str(details.get("message") or "Budget convergence could not satisfy completion checks."),
+        recoverable=True,
+        run_id=run_id,
+    )
 
 
 def _incremental_config(state: Any, run_id: str) -> dict[str, Any] | None:

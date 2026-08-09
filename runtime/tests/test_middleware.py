@@ -824,6 +824,65 @@ def test_completion_router_repairs_prose_clarification_into_user_ask() -> None:
     assert "user.ask" in completion_repair_instruction(result)
 
 
+def test_completion_router_blocks_budget_convergence_with_unfinished_todos() -> None:
+    from shejane_runtime.middleware.completion_router import CompletionRouterMiddleware
+
+    state = {
+        "messages": [
+            HumanMessage(
+                content="research",
+                additional_kwargs={"runtime_kind": "task_input", "runtime_run_id": "run-budget"},
+            ),
+            AIMessage(content="Best available answer with explicit limitations."),
+        ],
+        "todos": [{"content": "Collect another source", "status": "pending"}],
+        "incremental_execution": {
+            "required": True,
+            "mode": "auto",
+            "run_id": "run-budget",
+            "repairs": {},
+        },
+        "budget_control": {"mode": "converge", "run_id": "run-budget"},
+    }
+
+    result = CompletionRouterMiddleware().after_model(state, runtime=None)
+
+    assert result["completion_route"]["decision"] == "blocked"
+    assert result["completion_route"]["reason"] == "incremental_plan_incomplete"
+    assert result["jump_to"] == "end"
+
+
+def test_completion_router_rejects_tool_calls_during_budget_convergence() -> None:
+    from shejane_runtime.middleware.completion_router import CompletionRouterMiddleware
+
+    state = {
+        "messages": [
+            HumanMessage(
+                content="research",
+                additional_kwargs={"runtime_kind": "task_input", "runtime_run_id": "run-budget"},
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "guessed-tool",
+                        "name": "read_file",
+                        "args": {"file_path": "/work/source.txt"},
+                    }
+                ],
+            ),
+        ],
+        "budget_control": {"mode": "converge", "run_id": "run-budget"},
+    }
+
+    result = CompletionRouterMiddleware().after_model(state, runtime=None)
+
+    assert result["jump_to"] == "model"
+    assert result["completion_route"]["reason"] == "budget_convergence_tool_call"
+    assert result["messages"][0].status == "error"
+    assert "not executed" in str(result["messages"][0].content)
+
+
 def test_completion_router_requires_selected_image_tool_before_finalizing() -> None:
     from shejane_runtime.middleware.completion_router import CompletionRouterMiddleware
 

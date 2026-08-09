@@ -577,6 +577,30 @@ describe('AgentProgress', () => {
     expect(screen.getByText('请检查本地日志或实现错误，修复后再重试。')).toBeInTheDocument()
   })
 
+  it('explains model-call budget exhaustion instead of calling it an implementation error', () => {
+    renderAgentProgress(
+      <AgentProgress
+        message={message({
+          status: 'error',
+          agentEvents: [
+            {
+              type: 'run.failed',
+              label: '任务失败',
+              errorCode: 'model_call_budget_exhausted',
+              failureCategory: 'fatal',
+              failureActionKind: 'operator_action',
+            },
+          ],
+        })}
+      />,
+    )
+
+    expect(screen.getByText('本次任务已达到模型调用上限')).toBeInTheDocument()
+    expect(screen.queryByText('实现错误')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '展开详情' }))
+    expect(screen.getByText('Agent 在限定轮次内未能完成回答。请缩小任务范围后重试；如果经常出现，再查看诊断。')).toBeInTheDocument()
+  })
+
   it('parallel task dispatches: header shows count only; descriptions render as a per-task list below', () => {
     // When the agent emits multiple task() calls in one LLM message
     // (the case we engineered for in the C1+C2+C3 subagent prompt fix),

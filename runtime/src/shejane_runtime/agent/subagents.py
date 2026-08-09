@@ -40,6 +40,7 @@ from langchain.agents.middleware import ModelCallLimitMiddleware, ToolCallLimitM
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
+from ..middleware.budget_control import DynamicBudgetControlMiddleware
 from ..middleware.file_write_conflict import FileWriteConflictMiddleware
 from ..middleware.tool_execution import ToolExecutionMiddleware
 from ..middleware.tool_review import ToolReviewMiddleware
@@ -227,6 +228,7 @@ def _builtin_subagents(
             "model": main_model,
             "tools": main_tools,
             "middleware": [
+                DynamicBudgetControlMiddleware(convergence_lead=1),
                 ModelCallLimitMiddleware(
                     run_limit=SUBAGENT_MODEL_CALL_LIMIT,
                     exit_behavior="end",
@@ -257,6 +259,7 @@ def _builtin_subagents(
                 ToolVisibilityMiddleware(
                     blocked_tool_names={"edit_file", "execute", "write_file"},
                 ),
+                DynamicBudgetControlMiddleware(convergence_lead=1),
                 ModelCallLimitMiddleware(
                     run_limit=SUBAGENT_MODEL_CALL_LIMIT,
                     exit_behavior="end",
@@ -291,6 +294,7 @@ def _builtin_subagents(
                 ToolVisibilityMiddleware(
                     blocked_tool_names=set(DEEPAGENT_SUBAGENT_BASE_TOOL_NAMES),
                 ),
+                DynamicBudgetControlMiddleware(convergence_lead=1),
                 ModelCallLimitMiddleware(
                     run_limit=SUBAGENT_MODEL_CALL_LIMIT,
                     exit_behavior="end",
@@ -370,6 +374,7 @@ def _load_subagent_file(
         "model": main_model,
         "tools": selected_tools,
         "middleware": [
+            DynamicBudgetControlMiddleware(convergence_lead=1),
             ModelCallLimitMiddleware(
                 run_limit=SUBAGENT_MODEL_CALL_LIMIT,
                 exit_behavior="end",

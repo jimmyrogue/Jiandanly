@@ -61,11 +61,20 @@ def office_update_paragraph(path: str) -> str:
     return path
 
 
-def _request(messages: list[Any], goal: str = "") -> Any:
+def _request(
+    messages: list[Any],
+    goal: str = "",
+    execution_policy: dict[str, Any] | None = None,
+) -> Any:
     request = SimpleNamespace(
         messages=messages,
         tools=[office_read, office_update_paragraph, workspace_read],
-        runtime=SimpleNamespace(context=SimpleNamespace(task_goal=goal)),
+        runtime=SimpleNamespace(
+            context=SimpleNamespace(
+                task_goal=goal,
+                execution_policy=execution_policy or {},
+            )
+        ),
     )
     request.override = lambda **changes: SimpleNamespace(
         **{**request.__dict__, **changes, "override": request.override}
@@ -161,6 +170,19 @@ def test_complex_research_goal_keeps_collaboration_tools() -> None:
     filtered = ToolVisibilityMiddleware._apply(request)
 
     assert filtered.tools == [web_search, task]
+
+
+def test_frozen_simple_policy_hides_collaboration_for_a_now_complex_goal() -> None:
+    request = _request(
+        [],
+        goal="please research and compare many current sources",
+        execution_policy={"complexity": "simple", "subagent_allowed": False},
+    )
+    request.tools = [web_search := {"type": "function", "function": {"name": "web.search"}}, task]
+
+    filtered = ToolVisibilityMiddleware._apply(request)
+
+    assert filtered.tools == [web_search]
 
 
 def test_explicit_delegation_goal_keeps_collaboration_tools() -> None:

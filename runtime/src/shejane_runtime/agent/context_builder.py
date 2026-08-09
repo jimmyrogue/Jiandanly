@@ -168,6 +168,10 @@ class RuntimeContext:
     steering_emit: object | None = None
     backend: object | None = None
     model: object | None = None
+    model_call_soft_limit: int | None = None
+    model_call_hard_limit: int | None = None
+    model_call_final_reserve: int | None = None
+    execution_policy: dict[str, object] = field(default_factory=dict)
     approval_model: object | None = None
     clarification_model: object | None = None
     completion_model: object | None = None

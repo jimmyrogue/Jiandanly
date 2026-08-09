@@ -95,6 +95,7 @@ def test_subagents_have_code_enforced_model_and_research_limits() -> None:
     from langchain_core.tools import tool
 
     from shejane_runtime.agent.subagents import build_subagents
+    from shejane_runtime.middleware.budget_control import DynamicBudgetControlMiddleware
     from shejane_runtime.middleware.tool_review import ToolReviewMiddleware
 
     @tool("web.fetch")
@@ -118,6 +119,13 @@ def test_subagents_have_code_enforced_model_and_research_limits() -> None:
             isinstance(item, ModelCallLimitMiddleware)
             and item.run_limit == 12
             and item.exit_behavior == "end"
+            for item in subagent["middleware"]
+        )
+        for subagent in subs
+    )
+    assert all(
+        any(
+            isinstance(item, DynamicBudgetControlMiddleware) and item.convergence_lead == 1
             for item in subagent["middleware"]
         )
         for subagent in subs

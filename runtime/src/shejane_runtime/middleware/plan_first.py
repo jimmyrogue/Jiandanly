@@ -30,6 +30,8 @@ log = logging.getLogger("shejane_runtime.middleware.plan_first")
 # their presence as a signal to enable plan-first for this run.
 COMPLEXITY_HINTS = (
     "research",
+    "search the internet",
+    "search the web",
     "compare",
     "analyze",
     "summarize",
@@ -44,6 +46,11 @@ COMPLEXITY_HINTS = (
     "编写",
     "实现",
     "调研",
+    "查一下互联网",
+    "查查互联网",
+    "上网查",
+    "联网查",
+    "搜索互联网",
     "比较",
     "分析",
     "设计",
@@ -100,11 +107,18 @@ class PlanFirstMiddleware(AgentMiddleware):
         if not messages:
             return None
 
-        if self.mode == "auto" and not _looks_complex(messages):
+        context = getattr(runtime, "context", None)
+        policy = getattr(context, "execution_policy", None)
+        frozen_complexity = policy.get("complexity") if isinstance(policy, dict) else None
+        is_complex = (
+            frozen_complexity == "complex"
+            if frozen_complexity in {"simple", "complex"}
+            else _looks_complex(messages)
+        )
+        if self.mode == "auto" and not is_complex:
             log.debug("plan-first auto skipped: task looks trivial")
             return None
 
-        context = getattr(runtime, "context", None)
         run_id = str(getattr(context, "run_id", None) or "")
         log.info("incremental execution required (mode=%s)", self.mode)
         return {

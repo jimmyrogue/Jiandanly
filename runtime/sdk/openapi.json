@@ -950,6 +950,11 @@
             "title": "Complexity",
             "type": "string"
           },
+          "final_model_call_reserve": {
+            "minimum": 1.0,
+            "title": "Final Model Call Reserve",
+            "type": "integer"
+          },
           "max_model_calls": {
             "minimum": 1.0,
             "title": "Max Model Calls",
@@ -982,6 +987,11 @@
             "title": "Reason",
             "type": "string"
           },
+          "soft_model_call_limit": {
+            "minimum": 1.0,
+            "title": "Soft Model Call Limit",
+            "type": "integer"
+          },
           "subagent_allowed": {
             "title": "Subagent Allowed",
             "type": "boolean"
@@ -994,6 +1004,8 @@
           "subagent_allowed",
           "reason",
           "max_model_calls",
+          "soft_model_call_limit",
+          "final_model_call_reserve",
           "max_subagent_tasks",
           "max_subagent_model_calls"
         ],

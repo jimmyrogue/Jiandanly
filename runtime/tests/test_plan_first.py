@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from langchain_core.messages import HumanMessage
 
@@ -49,6 +51,10 @@ def test_looks_complex_long_message() -> None:
 
 def test_looks_complex_short_message_with_hint() -> None:
     assert _looks_complex([HumanMessage(content="please research X")]) is True
+
+
+def test_explicit_internet_research_is_complex() -> None:
+    assert _looks_complex([HumanMessage(content="你查一下互联网，核对这些银行的开户要求")])
 
 
 def test_looks_complex_short_simple_message() -> None:
@@ -157,6 +163,19 @@ def test_auto_mode_triggers_on_complex_task() -> None:
     result = mw.before_agent(state, runtime=None)
     assert result is not None
     assert result["incremental_execution"]["required"] is True
+
+
+def test_auto_mode_uses_frozen_execution_policy_instead_of_reclassifying_goal() -> None:
+    mw = PlanFirstMiddleware(mode="auto")
+    state = {"messages": [HumanMessage(content="please research and compare many sources")]}
+    runtime = SimpleNamespace(
+        context=SimpleNamespace(
+            run_id="run-frozen",
+            execution_policy={"complexity": "simple"},
+        )
+    )
+
+    assert mw.before_agent(state, runtime) is None
 
 
 def test_chinese_complex_task_uses_incremental_execution() -> None:

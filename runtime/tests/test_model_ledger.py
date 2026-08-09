@@ -497,6 +497,11 @@ async def test_review_budgets_are_separate_but_use_the_same_ledger(tmp_path: Pat
             "title_generation",
             "summarization",
         ]
+        assert await store.model_call_budget_status(str(run["id"]), purpose="agent") == {
+            "model_calls": 1,
+            "input_tokens": 7,
+            "output_tokens": 3,
+        }
     finally:
         await store.close()
 

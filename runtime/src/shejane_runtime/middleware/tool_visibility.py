@@ -179,11 +179,13 @@ def _goal_hidden_tools(
     messages: Sequence[Any] = (),
     *,
     collaboration_active: bool = False,
+    subagent_allowed: bool | None = None,
 ) -> frozenset[str]:
     text = str(task_goal or "").lower()
     hidden: set[str] = set()
-    policy = execution_policy_for_task(task_goal, messages)
-    if task_goal and not collaboration_active and not policy["subagent_allowed"]:
+    if subagent_allowed is None:
+        subagent_allowed = bool(execution_policy_for_task(task_goal, messages)["subagent_allowed"])
+    if task_goal and not collaboration_active and not subagent_allowed:
         hidden.update(_COLLABORATION_TOOLS)
     if any(signal in text for signal in _WEATHER_SIGNALS) and not any(
         signal in text for signal in _FILE_WORK_SIGNALS
@@ -198,6 +200,7 @@ def visible_tools_for_messages(
     *,
     task_goal: str | None = None,
     collaboration_active: bool = False,
+    subagent_allowed: bool | None = None,
 ) -> list[Any]:
     """Return the request-visible subset without changing registered tools."""
     corpus = (
@@ -227,6 +230,7 @@ def visible_tools_for_messages(
         task_goal,
         messages,
         collaboration_active=collaboration_active,
+        subagent_allowed=subagent_allowed,
     )
     return [tool for tool in visible if _tool_name(tool) not in hidden]
 
@@ -311,11 +315,18 @@ class ToolVisibilityMiddleware(AgentMiddleware):
     ) -> Any:
         context = getattr(getattr(request, "runtime", None), "context", None)
         task_goal = getattr(context, "task_goal", None)
+        policy = getattr(context, "execution_policy", None)
+        subagent_allowed = (
+            policy.get("subagent_allowed")
+            if isinstance(policy, dict) and isinstance(policy.get("subagent_allowed"), bool)
+            else None
+        )
         visible = visible_tools_for_messages(
             request.tools,
             request.messages,
             task_goal=task_goal,
             collaboration_active=getattr(context, "run_kind", None) == "child",
+            subagent_allowed=subagent_allowed,
         )
         deferred = deferred_tool_names or set()
         if deferred:
@@ -386,11 +397,18 @@ class ToolVisibilityMiddleware(AgentMiddleware):
         tool_name = str(request.tool_call.get("name") or "")
         context = getattr(getattr(request, "runtime", None), "context", None)
         task_goal = getattr(context, "task_goal", None)
+        policy = getattr(context, "execution_policy", None)
+        subagent_allowed = (
+            policy.get("subagent_allowed")
+            if isinstance(policy, dict) and isinstance(policy.get("subagent_allowed"), bool)
+            else None
+        )
         state = request.state if isinstance(request.state, dict) else {}
         if tool_name not in self.blocked_tool_names and tool_name not in _goal_hidden_tools(
             task_goal,
             state.get("messages") or (),
             collaboration_active=getattr(context, "run_kind", None) == "child",
+            subagent_allowed=subagent_allowed,
         ):
             return None
         return ToolMessage(

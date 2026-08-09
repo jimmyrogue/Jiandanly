@@ -1471,6 +1471,8 @@ class DiagnosticsExecutionPolicy(BaseModel):
     subagent_allowed: bool
     reason: str
     max_model_calls: int = Field(ge=1)
+    soft_model_call_limit: int = Field(ge=1)
+    final_model_call_reserve: int = Field(ge=1)
     max_subagent_tasks: int = Field(ge=0)
     max_subagent_model_calls: int = Field(ge=0)
 

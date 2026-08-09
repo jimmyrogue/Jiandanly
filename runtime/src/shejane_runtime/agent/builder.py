@@ -64,6 +64,10 @@ from ..config import Settings, get_settings
 from ..llm.ledger import LedgerChatModel
 from ..llm.runtime import RuntimeModelProxy
 from ..middleware.agent_mailbox import AgentMailboxMiddleware
+from ..middleware.budget_control import (
+    DynamicBudgetControlMiddleware,
+    finalization_attempt_reserve,
+)
 from ..middleware.completion_router import (
     CompletionRouterMiddleware,
     completion_repair_instruction,
@@ -121,9 +125,9 @@ _AGENT_DEFINITION_CACHE_MAX = 16
 _AGENT_STATE_SCHEMA_VERSION = 2
 MAX_SUBAGENT_TASKS_PER_RUN = 2
 SIMPLE_MODEL_CALL_LIMIT = 12
+COMPLEX_MODEL_CALL_SOFT_LIMIT = 24
 _MAX_TEAM_RUNS_PER_RUN = 2
 _MAX_CHILD_CONTROL_CALLS_PER_RUN = 16
-_PARENT_MODEL_CALL_RESERVE = 5
 _APPROVAL_REVIEW_MAX_CALLS = 20
 _CLARIFICATION_REVIEW_MAX_CALLS = 4
 _COMPLETION_REVIEW_MAX_CALLS = 4
@@ -136,10 +140,28 @@ _VISION_MEDIA_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 
 
 def _agent_model_call_limit(configured_limit: int, task_goal: str | None) -> int:
+    del task_goal
+    return max(1, int(configured_limit))
+
+
+def _agent_soft_model_call_limit(configured_limit: int, task_goal: str | None) -> int:
     policy = execution_policy_for_task(task_goal)
-    if policy["reason"] == "simple_task" and task_goal:
-        return min(configured_limit, SIMPLE_MODEL_CALL_LIMIT)
-    return configured_limit
+    return _agent_soft_model_call_limit_for_complexity(
+        configured_limit,
+        str(policy["complexity"]),
+    )
+
+
+def _agent_soft_model_call_limit_for_complexity(
+    configured_limit: int,
+    complexity: str,
+) -> int:
+    baseline = SIMPLE_MODEL_CALL_LIMIT if complexity == "simple" else COMPLEX_MODEL_CALL_SOFT_LIMIT
+    return max(1, min(int(configured_limit), baseline))
+
+
+def _agent_model_call_final_reserve(hard_limit: int) -> int:
+    return min(2, max(1, hard_limit))
 
 
 _SKILLS_SYSTEM_PROMPT = """<skills>
@@ -511,6 +533,7 @@ def _custom_middleware(
     """
     middleware: list[AgentMiddleware] = [
         RuntimePromptMiddleware(),
+        DynamicBudgetControlMiddleware(),
         RuntimeModelMiddleware(),
         ToolVisibilityMiddleware(
             deferred_tool_names=deferred_tool_names,
@@ -1272,7 +1295,21 @@ async def build_agent(
         model_api_key=model_api_key,
     )
     _register_model_cleanup(provider_model, resource_stack)
-    agent_model_call_limit = _agent_model_call_limit(settings.max_model_calls, task_goal)
+    agent_model_call_limit = (
+        runtime_context.model_call_hard_limit
+        if runtime_context is not None and runtime_context.model_call_hard_limit is not None
+        else _agent_model_call_limit(settings.max_model_calls, task_goal)
+    )
+    agent_model_call_soft_limit = (
+        runtime_context.model_call_soft_limit
+        if runtime_context is not None and runtime_context.model_call_soft_limit is not None
+        else _agent_soft_model_call_limit(settings.max_model_calls, task_goal)
+    )
+    agent_model_call_final_reserve = (
+        runtime_context.model_call_final_reserve
+        if runtime_context is not None and runtime_context.model_call_final_reserve is not None
+        else _agent_model_call_final_reserve(agent_model_call_limit)
+    )
     model = (
         LedgerChatModel(
             delegate=provider_model,
@@ -1328,7 +1365,14 @@ async def build_agent(
     )
     subagent_model = RuntimeModelProxy(
         profile=getattr(model, "profile", None),
-        max_model_calls=max(1, settings.max_model_calls - _PARENT_MODEL_CALL_RESERVE),
+        max_model_calls=max(
+            1,
+            agent_model_call_limit
+            - finalization_attempt_reserve(
+                agent_model_call_limit,
+                agent_model_call_final_reserve,
+            ),
+        ),
     )
 
     skills_dirs = _resolve_skills_dirs() if skills_enabled else []
@@ -1448,6 +1492,10 @@ async def build_agent(
             steering_emit=steering_emit,
             backend=backend,
             model=model,
+            model_call_soft_limit=agent_model_call_soft_limit,
+            model_call_hard_limit=agent_model_call_limit,
+            model_call_final_reserve=agent_model_call_final_reserve,
+            execution_policy=execution_policy_for_task(task_goal),
             approval_model=approval_model,
             clarification_model=clarification_model,
             completion_model=completion_model,
@@ -1494,6 +1542,14 @@ async def build_agent(
         runtime_context.enabled_skills = _active_skill_names(skills_arg)
         runtime_context.backend = backend
         runtime_context.model = model
+        if runtime_context.model_call_soft_limit is None:
+            runtime_context.model_call_soft_limit = agent_model_call_soft_limit
+        if runtime_context.model_call_hard_limit is None:
+            runtime_context.model_call_hard_limit = agent_model_call_limit
+        if runtime_context.model_call_final_reserve is None:
+            runtime_context.model_call_final_reserve = agent_model_call_final_reserve
+        if not runtime_context.execution_policy:
+            runtime_context.execution_policy = execution_policy_for_task(task_goal)
         runtime_context.approval_model = approval_model
         runtime_context.clarification_model = clarification_model
         runtime_context.completion_model = completion_model

@@ -101,6 +101,14 @@ async def test_child_admission_reuses_run_job_lease_and_projects_to_parent(
                 spawn_operation_id="toolop-child-spawn",
                 goal="Find primary sources",
                 agent_definition=CHILD_DEFINITION,
+                execution_policy={
+                    "complexity": "complex",
+                    "subagent_allowed": True,
+                    "reason": "complex_task",
+                    "max_model_calls": 100,
+                    "soft_model_call_limit": 24,
+                    "final_model_call_reserve": 2,
+                },
             )
 
         assert created is True
@@ -112,7 +120,12 @@ async def test_child_admission_reuses_run_job_lease_and_projects_to_parent(
         assert child["collaboration_depth"] == 1
         assert child["thread_id"] is None
         assert child["assistant_item_id"] is None
-        assert child["settings_json"] == parent["settings_json"]
+        parent_settings = json.loads(str(parent["settings_json"]))
+        child_settings = json.loads(str(child["settings_json"]))
+        assert {
+            key: value for key, value in child_settings.items() if key != "_execution_policy"
+        } == parent_settings
+        assert child_settings["_execution_policy"]["complexity"] == "complex"
         assert child["workspace_path"] == parent["workspace_path"]
 
         child_job = await store.get_active_run_job(str(child["id"]))

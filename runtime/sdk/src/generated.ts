@@ -1491,6 +1491,8 @@ export interface components {
              * @enum {string}
              */
             complexity: "simple" | "complex";
+            /** Final Model Call Reserve */
+            final_model_call_reserve: number;
             /** Max Model Calls */
             max_model_calls: number;
             /** Max Subagent Model Calls */
@@ -1506,6 +1508,8 @@ export interface components {
             plan_required: boolean;
             /** Reason */
             reason: string;
+            /** Soft Model Call Limit */
+            soft_model_call_limit: number;
             /** Subagent Allowed */
             subagent_allowed: boolean;
         };

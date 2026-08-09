@@ -417,6 +417,7 @@ function runFailedTimelineItem(
   const failureRecoveryAction = knownFailureRecoveryAction(payload.recovery_action)
   const failureCategory = stringValue(payload.category)
   const failureSuggestedAction = stringValue(payload.suggested_action)
+  const errorCode = stringValue(payload.error_code) || stringValue(payload.code)
   const rawRetryable = payload.retryable
   const failureRetryable = typeof rawRetryable === 'boolean' ? rawRetryable : undefined
   const baseLabel = stringValue(payload.message) || stringValue(payload.error) || t('chat.timeline.runFailed')
@@ -430,6 +431,7 @@ function runFailedTimelineItem(
     ...(failureActionKind ? { failureActionKind } : {}),
     ...(failureRecoveryAction ? { failureRecoveryAction } : {}),
     ...(failureSuggestedAction ? { failureSuggestedAction } : {}),
+    ...(errorCode ? { errorCode } : {}),
   }
 }
 

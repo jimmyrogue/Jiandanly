@@ -148,9 +148,58 @@ def test_create_run_returns_run_record(client: TestClient) -> None:
         "complexity": "simple",
         "subagent_allowed": False,
         "reason": "simple_task",
+        "max_model_calls": 100,
+        "soft_model_call_limit": 12,
+        "final_model_call_reserve": 2,
     }
     assert "capabilities" not in snapshot["_model_binding"]
     assert "test-cloud-token" not in stored["settings_json"]
+
+
+def test_legacy_execution_policy_uses_its_frozen_complexity_for_budget_defaults() -> None:
+    from shejane_runtime.runs import _execution_policy_snapshot
+
+    snapshot = {
+        "max_model_calls": 80,
+        "_execution_policy": {
+            "complexity": "simple",
+            "subagent_allowed": False,
+            "reason": "simple_task",
+        },
+    }
+
+    policy = _execution_policy_snapshot(
+        "research and compare multiple current sources",
+        snapshot,
+    )
+
+    assert policy["complexity"] == "simple"
+    assert policy["max_model_calls"] == 80
+    assert policy["soft_model_call_limit"] == 12
+    assert policy["final_model_call_reserve"] == 2
+
+
+def test_complete_execution_policy_preserves_accepted_budget() -> None:
+    from shejane_runtime.runs import _execution_policy_snapshot
+
+    policy = _execution_policy_snapshot(
+        "simple question",
+        {
+            "max_model_calls": 100,
+            "_execution_policy": {
+                "complexity": "complex",
+                "subagent_allowed": True,
+                "reason": "complex_task",
+                "max_model_calls": 60,
+                "soft_model_call_limit": 20,
+                "final_model_call_reserve": 2,
+            },
+        },
+    )
+
+    assert policy["complexity"] == "complex"
+    assert policy["max_model_calls"] == 60
+    assert policy["soft_model_call_limit"] == 20
 
 
 @pytest.mark.parametrize(
@@ -2588,7 +2637,9 @@ def test_run_diagnostics_include_handoff_summary(client: TestClient) -> None:
         "plan_required": False,
         "subagent_allowed": False,
         "reason": "simple_task",
-        "max_model_calls": 12,
+        "max_model_calls": 100,
+        "soft_model_call_limit": 12,
+        "final_model_call_reserve": 2,
         "max_subagent_tasks": 0,
         "max_subagent_model_calls": 0,
     }

@@ -67,19 +67,20 @@ def test_api_connection_error_is_a_retryable_transient_failure() -> None:
     assert failure["action_kind"] == "retry"
 
 
-def test_model_call_budget_exhaustion_is_an_operator_failure() -> None:
+def test_model_call_budget_exhaustion_is_a_distinct_user_recoverable_failure() -> None:
     failure = classify_failure_payload(
         "run.failed",
         {
             "error_code": "model_call_budget_exhausted",
             "message": "agent model call budget exhausted for run run-1: 20",
-            "recoverable": False,
             "retryable": False,
         },
     )
 
-    assert failure["category"] == "fatal"
-    assert failure["action_kind"] == "operator_action"
+    assert failure["category"] == "budget"
+    assert failure["recoverable"] is True
+    assert failure["retryable"] is False
+    assert failure["action_kind"] == "user_action"
     assert failure["recovery_action"] == "diagnostics"
 
 

@@ -44,10 +44,10 @@ def classify_failure_payload(event_type: str, payload: dict[str, Any]) -> dict[s
         recoverable = True
         suggested_action = "Confirm the exact fact to save to memory, then try again."
     elif _contains_any(haystack, "model_call_budget_exhausted"):
-        category = "fatal"
+        category = "budget"
+        recoverable = True
         suggested_action = (
-            "Inspect repeated agent steps or increase the model-call budget only when the task "
-            "legitimately needs more rounds."
+            "Narrow the task and retry; inspect repeated agent steps if this happens again."
         )
     elif _contains_any(
         haystack,
@@ -266,7 +266,7 @@ def _first_string(*values: Any) -> str | None:
 def _action_kind(category: str, *, retryable: bool) -> str:
     if retryable:
         return "retry"
-    if category in {"auth", "quota", "permission", "configuration", "workspace"}:
+    if category in {"auth", "budget", "quota", "permission", "configuration", "workspace"}:
         return "user_action"
     if category == "validation":
         return "repair"

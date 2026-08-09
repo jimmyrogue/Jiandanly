@@ -66,6 +66,13 @@ describe('ChatThread streaming display cache', () => {
     expect(scrollTo).toHaveBeenCalledWith({ top: 2000, behavior: 'auto' })
     expect(screen.queryByRole('button', { name: '回到底部' })).not.toBeInTheDocument()
   })
+
+  it('keeps a structured failure reason visible when a presentation snapshot exists', () => {
+    renderThread(conversationWithBudgetFailure())
+
+    expect(screen.getByText('本次任务已达到模型调用上限')).toBeInTheDocument()
+    expect(screen.queryByText('实现错误')).not.toBeInTheDocument()
+  })
 })
 
 function renderThread(conversation: Conversation) {
@@ -165,6 +172,40 @@ function conversationWithAnsweredQuestion(): Conversation {
         label: '已回答',
         questionRequestId: 'q1',
         questionAnswers: { '你想要什么风格？': ['简洁文字'] },
+      }],
+    }],
+  }
+}
+
+function conversationWithBudgetFailure(): Conversation {
+  return {
+    id: 'conv-budget-failure',
+    title: '预算失败',
+    archived: false,
+    createdAt: '2026-08-09T00:00:00Z',
+    updatedAt: '2026-08-09T00:00:01Z',
+    messages: [{
+      id: 'msg-budget-failure',
+      role: 'assistant',
+      content: '',
+      createdAt: '2026-08-09T00:00:01Z',
+      status: 'error',
+      runId: 'run-budget',
+      presentation: {
+        snapshot: {
+          schema_version: 1,
+          run_id: 'run-budget',
+          event_high_watermark: 1,
+          items: [],
+        },
+        drafts: {},
+      },
+      agentEvents: [{
+        type: 'run.failed',
+        label: 'agent model call budget exhausted for run run-budget: 12',
+        errorCode: 'model_call_budget_exhausted',
+        failureCategory: 'fatal',
+        failureActionKind: 'operator_action',
       }],
     }],
   }

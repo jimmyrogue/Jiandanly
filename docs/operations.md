@@ -46,7 +46,7 @@ Runtime 默认不要求用户环境变量。
 - Client Main 启动托管 Runtime 时，通过命令行传入本机地址、随机端口和配对 Token。
 - Client 不提供 Runtime 连接设置。开发者接入外部 loopback Runtime 时，地址与 Token 由 Electron Main 配置和保存，不回传明文 Token 给 Renderer。
 - 模型服务连接、模型资料和高级默认设置通过 Runtime API 保存。
-- 普通事实查询默认隐藏协作工具并把主执行模型调用限制为 12 次；复杂任务仍最多使用 100 次。单次最多派发 2 个子 Agent，每个子 Agent 最多使用 12 次模型调用。researcher 单次最多执行 10 次网页搜索和 10 次 `web.fetch`，且不能调用 shell 或写文件。用户明确要求 child、mailbox、team 或委派时不会套用简单查询限制。这些都是代码强制的上限，不依赖提示词自律。
+- 用户配置的主执行模型调用数是硬上限，默认 100。普通事实任务在 12 次、复杂或明确联网调研任务在 24 次进入软预算收敛，但不会因此直接失败；软阈值后关闭 `task` / `team.run` 同步委派，普通 Tool 仍可继续。相同只读调用近期重复 3 次，或进入最终 2 个逻辑回合（含供应商重试）的安全预留时，Runtime 会隐藏全部工具并要求 Agent 用已有证据生成最终回答。收敛仍须通过 required Tool、Todo 和验证门禁。单次最多派发 2 个子 Agent，每个子 Agent 最多使用 12 次模型调用。researcher 单次最多执行 10 次网页搜索和 10 次 `web.fetch`，且不能调用 shell 或写文件。这些边界由 Runtime 强制并记录在 diagnostics，不依赖提示词自律。
 - `web.fetch` 保持 DNS 固定和 SSRF 私网拦截；当系统代理使用 RFC 2544 `198.18.0.0/15` fake-IP DNS 时，仅 HTTPS 请求可通过该代理网段，TLS 仍校验原始主机名。HTTP fake-IP 与其他私网、回环、链路本地地址继续拒绝。
 - BYOK 密钥写入操作系统凭据库，不写入 SQLite、Run 快照或环境变量。
 - `--data-dir` 可以修改 Runtime 数据目录。
