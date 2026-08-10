@@ -17,6 +17,7 @@ async def test_image_generate_creates_a_file_artifact_without_returning_base64(
     monkeypatch,
 ) -> None:
     from shejane_runtime.tools import image as image_tools
+    from shejane_runtime.tools import image_provider
 
     png = base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR42mP8z4AdMDEMKQkA"
@@ -56,7 +57,7 @@ async def test_image_generate_creates_a_file_artifact_without_returning_base64(
             kwargs.pop("trust_env", None)
             super().__init__(transport=httpx.MockTransport(handler), **kwargs)
 
-    monkeypatch.setattr(image_tools.httpx, "AsyncClient", PatchedClient)
+    monkeypatch.setattr(image_provider.httpx, "AsyncClient", PatchedClient)
     monkeypatch.setattr(
         image_tools, "get_model_api_key", lambda *_args, **_kwargs: _async("secret")
     )

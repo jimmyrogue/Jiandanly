@@ -7,21 +7,14 @@ import hashlib
 import json
 import logging
 import os
-import re
-import sys
 import time
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from contextvars import copy_context
 from dataclasses import dataclass
-from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
-import httpx
 from langchain_core.tools import BaseTool
-from langchain_core.tools import tool as langchain_tool
-from langgraph.config import get_stream_writer
 
 from ..store.sqlite import LocalStore
 from .mcp_config import (  # noqa: F401 - compatibility exports
@@ -45,8 +38,51 @@ from .mcp_config import (  # noqa: F401 - compatibility exports
     mcp_sensitive_values,
     validate_mcp_tools,
 )
-from .mcp_stdio import bounded_stdio_client
-from .runtime import current_runtime_tool_execution
+from .mcp_loader import (
+    build_mcp_tools_from_config as _build_mcp_tools_from_config,
+)
+from .mcp_search import (
+    MCP_TOOL_SEARCH_DESCRIPTION_CHARS as MCP_TOOL_SEARCH_DESCRIPTION_CHARS,
+)
+from .mcp_search import (
+    MCP_TOOL_SEARCH_NAME as MCP_TOOL_SEARCH_NAME,
+)
+from .mcp_search import (
+    MCP_TOOL_SEARCH_QUERY_CHARS as MCP_TOOL_SEARCH_QUERY_CHARS,
+)
+from .mcp_search import (
+    MCP_TOOL_SEARCH_RESULT_KIND as MCP_TOOL_SEARCH_RESULT_KIND,
+)
+from .mcp_search import (
+    MCP_TOOL_SEARCH_THRESHOLD as MCP_TOOL_SEARCH_THRESHOLD,
+)
+from .mcp_search import (
+    make_mcp_tool_search as make_mcp_tool_search,
+)
+from .mcp_session import (
+    MCP_DISCOVERY_TIMEOUT_SECONDS as MCP_DISCOVERY_TIMEOUT_SECONDS,
+)
+from .mcp_session import (
+    MCPServerSupervisor,
+)
+from .mcp_transport import (
+    MAX_MCP_HTTP_BYTES as MAX_MCP_HTTP_BYTES,
+)
+from .mcp_transport import (
+    MAX_MCP_STDIO_FRAME_BYTES as MAX_MCP_STDIO_FRAME_BYTES,
+)
+from .mcp_transport import (
+    _bounded_http_client as _bounded_http_client,
+)
+from .mcp_transport import (
+    _bounded_mcp_connection as _bounded_mcp_connection,
+)
+from .mcp_transport import (
+    _discover_live_mcp_tools as _discover_live_mcp_tools,
+)
+from .mcp_transport import (
+    _tools_from_persisted_descriptors as _tools_from_persisted_descriptors,
+)
 
 log = logging.getLogger("shejane_runtime.tools.mcp")
 
@@ -59,66 +95,11 @@ def _bounded_timeout_from_env(name: str, *, default: float) -> float:
     return min(max(value, 0.01), 300.0)
 
 
-MAX_MCP_HTTP_BYTES = 4 * 1_024 * 1_024
-MAX_MCP_STDIO_FRAME_BYTES = 4 * 1_024 * 1_024
-MCP_DISCOVERY_TIMEOUT_SECONDS = 15
 MCP_TOOL_TIMEOUT_SECONDS = _bounded_timeout_from_env(
     "SHEJANE_MCP_TOOL_TIMEOUT_SECONDS",
     default=60.0,
 )
 MCP_RETRY_BACKOFF_SECONDS = 30
-MCP_TOOL_SEARCH_NAME = "mcp.search_tools"
-MCP_TOOL_SEARCH_RESULT_KIND = "mcp_tool_search_results"
-MCP_TOOL_SEARCH_THRESHOLD = 12
-MCP_TOOL_SEARCH_DESCRIPTION_CHARS = 512
-MCP_TOOL_SEARCH_QUERY_CHARS = 512
-
-
-def make_mcp_tool_search(tools: Sequence[BaseTool]) -> BaseTool:
-    """Expose a compact, provider-independent MCP tool directory."""
-    directory = tuple(
-        {
-            "name": item.name,
-            "description": (item.description or "").strip()[:MCP_TOOL_SEARCH_DESCRIPTION_CHARS],
-        }
-        for item in tools
-    )
-
-    @langchain_tool(MCP_TOOL_SEARCH_NAME)
-    def search_tools(query: str, limit: int = 5) -> dict[str, Any]:
-        """Search available MCP integrations by capability before using one."""
-        bounded_query = query.strip()[:MCP_TOOL_SEARCH_QUERY_CHARS]
-        normalized_query = bounded_query.lower()
-        bounded_limit = max(1, min(int(limit), 8))
-        ranked = sorted(
-            directory,
-            key=lambda item: (
-                _mcp_tool_search_score(normalized_query, item),
-                item["name"],
-            ),
-            reverse=True,
-        )
-        return {
-            "kind": MCP_TOOL_SEARCH_RESULT_KIND,
-            "query": bounded_query,
-            "tools": list(ranked[:bounded_limit]),
-        }
-
-    return search_tools
-
-
-def _mcp_tool_search_score(query: str, item: dict[str, str]) -> float:
-    if not query:
-        return 0
-    name = item["name"].lower()
-    description = item["description"].lower()
-    corpus = f"{name} {description}"
-    query_tokens = set(re.findall(r"[\w.-]+", query))
-    corpus_tokens = set(re.findall(r"[\w.-]+", corpus))
-    score = 8.0 if query in name else 3.0 if query in description else 0.0
-    score += 2.0 * len(query_tokens & corpus_tokens)
-    score += SequenceMatcher(None, query, name).ratio()
-    return score
 
 
 @dataclass
@@ -133,162 +114,13 @@ class _CatalogEntry:
     refresh_required: bool = False
 
 
-class _LiveSessionProxy:
-    def __init__(self, supervisor: _MCPServerSupervisor) -> None:
-        self._supervisor = supervisor
-
-    async def call_tool(self, name: str, arguments: dict[str, Any], **kwargs: Any) -> Any:
-        return await self._supervisor.call_tool(name, arguments, **kwargs)
-
-
-class _MCPServerSupervisor:
-    """Own one MCP session in the same task for its full lifetime."""
-
+class _MCPServerSupervisor(MCPServerSupervisor):
     def __init__(self, server_name: str, connection: dict[str, Any]) -> None:
-        self.server_name = server_name
-        self.connection = dict(connection)
-        self._ready: asyncio.Future[tuple[BaseTool, ...]] | None = None
-        self._stop = asyncio.Event()
-        self._task: asyncio.Task[None] | None = None
-        self._session: Any | None = None
-        self._on_tools_changed: Callable[[_MCPServerSupervisor], None] | None = None
-
-    def set_tools_changed_callback(
-        self,
-        callback: Callable[[_MCPServerSupervisor], None],
-    ) -> None:
-        self._on_tools_changed = callback
-
-    async def start(self) -> tuple[BaseTool, ...]:
-        if self._task is None:
-            self._ready = asyncio.get_running_loop().create_future()
-            self._task = asyncio.create_task(
-                self._serve(),
-                name=f"mcp-server:{self.server_name}",
-            )
-        assert self._ready is not None
-        return await self._ready
-
-    async def call_tool(self, name: str, arguments: dict[str, Any], **kwargs: Any) -> Any:
-        session = self._session
-        if session is None:
-            raise RuntimeError(f"MCP server {self.server_name!r} is not connected")
-        previous_progress_callback = kwargs.get("progress_callback")
-        try:
-            execution = current_runtime_tool_execution()
-            stream_writer = get_stream_writer()
-            stream_context = copy_context()
-        except RuntimeError:
-            execution = None
-            stream_writer = None
-            stream_context = None
-        if execution is not None and stream_writer is not None and stream_context is not None:
-
-            async def report_progress(
-                progress: float,
-                total: float | None,
-                message: str | None,
-            ) -> None:
-                stream_context.run(
-                    stream_writer,
-                    {
-                        "event": "tool.progress",
-                        "data": {
-                            "tool_call_id": execution.tool_call_id,
-                            "tool": f"{self.server_name}_{name}",
-                            "progress": progress,
-                            "total": total,
-                            "message": message,
-                        },
-                    },
-                )
-                if previous_progress_callback is not None:
-                    await previous_progress_callback(progress, total, message)
-
-            kwargs["progress_callback"] = report_progress
-        try:
-            async with asyncio.timeout(MCP_TOOL_TIMEOUT_SECONDS):
-                return await session.call_tool(name, arguments, **kwargs)
-        except asyncio.CancelledError:
-            self._retire_session()
-            raise
-        except Exception:
-            self._retire_session()
-            raise
-
-    def _retire_session(self) -> None:
-        self._session = None
-        self._stop.set()
-        if self._on_tools_changed is not None:
-            self._on_tools_changed(self)
-
-    async def stop(self) -> None:
-        self._stop.set()
-        if self._task is not None:
-            await self._task
-
-    async def _serve(self) -> None:
-        context: Any | None = None
-        entered = False
-        try:
-            import langchain_mcp_adapters.sessions as mcp_sessions
-
-            _install_bounded_stdio_transport(mcp_sessions)
-            connection = _bounded_mcp_connection(self.connection)
-            session_kwargs = dict(connection.get("session_kwargs") or {})
-            previous_handler = session_kwargs.get("message_handler")
-
-            async def message_handler(message: Any) -> None:
-                from mcp.types import ServerNotification, ToolListChangedNotification
-
-                if (
-                    isinstance(message, ServerNotification)
-                    and isinstance(message.root, ToolListChangedNotification)
-                    and self._on_tools_changed is not None
-                ):
-                    self._on_tools_changed(self)
-                if previous_handler is not None:
-                    await previous_handler(message)
-
-            session_kwargs["message_handler"] = message_handler
-            connection["session_kwargs"] = session_kwargs
-            context = mcp_sessions.create_session(connection)
-            async with asyncio.timeout(MCP_DISCOVERY_TIMEOUT_SECONDS):
-                session = await context.__aenter__()
-                entered = True
-                self._session = session
-                await session.initialize()
-                tools = await _discover_live_mcp_tools(
-                    session,
-                    server_name=self.server_name,
-                    execution_session=_LiveSessionProxy(self),
-                )
-            assert self._ready is not None
-            self._ready.set_result(tuple(tools))
-            await self._stop.wait()
-        except Exception as exc:
-            if self._ready is not None and not self._ready.done():
-                self._ready.set_exception(exc)
-            else:
-                log.warning(
-                    "MCP server %r session failed: %s",
-                    self.server_name,
-                    type(exc).__name__,
-                )
-                if self._on_tools_changed is not None:
-                    self._on_tools_changed(self)
-        finally:
-            self._session = None
-            if context is not None and entered:
-                try:
-                    async with asyncio.timeout(MCP_DISCOVERY_TIMEOUT_SECONDS):
-                        await context.__aexit__(None, None, None)
-                except Exception as exc:
-                    log.warning(
-                        "MCP server %r cleanup failed: %s",
-                        self.server_name,
-                        type(exc).__name__,
-                    )
+        super().__init__(
+            server_name,
+            connection,
+            tool_timeout=lambda: MCP_TOOL_TIMEOUT_SECONDS,
+        )
 
 
 async def _open_mcp_server(
@@ -664,168 +496,6 @@ def _with_tool_version(tool: BaseTool, version: str) -> BaseTool:
     )
 
 
-class _LimitedResponseStream(httpx.AsyncByteStream):
-    def __init__(self, stream: httpx.AsyncByteStream, budget: list[int]) -> None:
-        self._stream = stream
-        self._budget = budget
-
-    async def __aiter__(self):
-        async for chunk in self._stream:
-            self._budget[0] -= len(chunk)
-            if self._budget[0] < 0:
-                raise httpx.HTTPError("MCP response byte limit exceeded")
-            yield chunk
-
-    async def aclose(self) -> None:
-        await self._stream.aclose()
-
-
-class _LimitedHTTPTransport(httpx.AsyncBaseTransport):
-    def __init__(self, max_bytes: int) -> None:
-        self._transport = httpx.AsyncHTTPTransport()
-        self._budget = [max_bytes]
-
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        response = await self._transport.handle_async_request(request)
-        content_length = response.headers.get("content-length")
-        if content_length and content_length.isdigit() and int(content_length) > self._budget[0]:
-            await response.aclose()
-            raise httpx.HTTPError("MCP response byte limit exceeded")
-        return httpx.Response(
-            status_code=response.status_code,
-            headers=response.headers,
-            stream=_LimitedResponseStream(response.stream, self._budget),
-            extensions=response.extensions,
-        )
-
-    async def aclose(self) -> None:
-        await self._transport.aclose()
-
-
-def _bounded_http_client(
-    headers: dict[str, str] | None = None,
-    timeout: httpx.Timeout | None = None,
-    auth: httpx.Auth | None = None,
-) -> httpx.AsyncClient:
-    return httpx.AsyncClient(
-        transport=_LimitedHTTPTransport(MAX_MCP_HTTP_BYTES),
-        follow_redirects=True,
-        headers=headers,
-        timeout=timeout or httpx.Timeout(30, read=300),
-        auth=auth,
-    )
-
-
-def _install_bounded_stdio_transport(mcp_sessions: Any) -> None:
-    def bounded_adapter_stdio_client(server: Any, errlog: Any = sys.stderr):
-        return bounded_stdio_client(
-            server,
-            errlog,
-            max_frame_bytes=MAX_MCP_STDIO_FRAME_BYTES,
-        )
-
-    mcp_sessions.stdio_client = bounded_adapter_stdio_client
-
-
-def _bounded_mcp_connection(raw_connection: dict[str, Any]) -> dict[str, Any]:
-    connection = dict(raw_connection)
-    transport = connection.get("transport")
-    if transport == "websocket":
-        raise ValueError("websocket MCP transport is not bounded")
-    if transport in {"sse", "http", "streamable-http", "streamable_http"}:
-        connection["httpx_client_factory"] = _bounded_http_client
-    return connection
-
-
-async def _discover_live_mcp_tools(
-    session: Any,
-    *,
-    server_name: str,
-    execution_session: Any,
-) -> list[BaseTool]:
-    from langchain_mcp_adapters.tools import convert_mcp_tool_to_langchain_tool
-
-    tools: list[BaseTool] = []
-    candidates_seen = 0
-    raw_schema_bytes = 0
-    cursor: str | None = None
-    while candidates_seen < MAX_MCP_TOOLS:
-        page = await session.list_tools(cursor=cursor)
-        for raw_tool in page.tools:
-            candidates_seen += 1
-            if candidates_seen > MAX_MCP_TOOLS:
-                break
-            try:
-                schema = raw_tool.inputSchema
-                _validate_schema_tree(schema)
-                schema_size = len(
-                    json.dumps(
-                        schema,
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                        allow_nan=False,
-                    ).encode()
-                )
-            except Exception:
-                continue
-            if schema_size > MAX_MCP_SCHEMA_BYTES:
-                continue
-            if raw_schema_bytes + schema_size > MAX_MCP_TOTAL_SCHEMA_BYTES:
-                return tools
-            tools.append(
-                convert_mcp_tool_to_langchain_tool(
-                    execution_session,
-                    raw_tool,
-                    server_name=server_name,
-                    tool_name_prefix=True,
-                )
-            )
-            raw_schema_bytes += schema_size
-        cursor = page.nextCursor
-        if not cursor:
-            break
-    return tools
-
-
-def _tools_from_persisted_descriptors(
-    server_name: str,
-    raw_connection: dict[str, Any],
-    descriptors: list[Any],
-) -> list[BaseTool]:
-    from langchain_mcp_adapters.tools import convert_mcp_tool_to_langchain_tool
-    from mcp.types import Tool
-
-    connection = _bounded_mcp_connection(raw_connection)
-    tools: list[BaseTool] = []
-    for descriptor in descriptors[:MAX_MCP_TOOLS]:
-        if not isinstance(descriptor, dict):
-            continue
-        raw_name = descriptor.get("raw_name")
-        schema = descriptor.get("args_schema")
-        if not isinstance(raw_name, str) or not isinstance(schema, dict):
-            continue
-        try:
-            _validate_schema_tree(schema)
-            raw_tool = Tool(
-                name=raw_name,
-                description=str(descriptor.get("description") or ""),
-                inputSchema=schema,
-            )
-            tool = convert_mcp_tool_to_langchain_tool(
-                None,
-                raw_tool,
-                connection=connection,
-                server_name=server_name,
-                tool_name_prefix=True,
-            )
-        except Exception:
-            continue
-        if tool.name == descriptor.get("name"):
-            tools.append(tool)
-    return tools
-
-
 async def build_mcp_tools(
     data_dir: Path | None,
     *,
@@ -849,102 +519,3 @@ async def build_mcp_tools(
     if disabled_servers:
         config = {name: cfg for name, cfg in config.items() if name not in disabled_servers}
     return await _build_mcp_tools_from_config(config)
-
-
-async def _build_mcp_tools_from_config(
-    config: dict[str, dict[str, Any]],
-) -> list[BaseTool]:
-    if not config:
-        return []
-
-    try:
-        import langchain_mcp_adapters.sessions as mcp_sessions
-        from langchain_mcp_adapters.tools import convert_mcp_tool_to_langchain_tool
-    except ImportError:
-        log.warning("langchain-mcp-adapters not installed; skipping MCP")
-        return []
-
-    # The adapter resolves this module-level transport both during discovery
-    # and when a converted tool later opens its own session.
-    def bounded_adapter_stdio_client(server, errlog=sys.stderr):
-        return bounded_stdio_client(
-            server,
-            errlog,
-            max_frame_bytes=MAX_MCP_STDIO_FRAME_BYTES,
-        )
-
-    mcp_sessions.stdio_client = bounded_adapter_stdio_client
-    create_session = mcp_sessions.create_session
-
-    tools: list[BaseTool] = []
-    candidates_seen = 0
-    raw_schema_bytes = 0
-    servers = list(config.items())
-    if len(servers) > MAX_MCP_SERVERS:
-        log.warning(
-            "MCP server limit reached; ignoring %d excess servers", len(servers) - MAX_MCP_SERVERS
-        )
-    for server_index, (server_name, raw_connection) in enumerate(servers[:MAX_MCP_SERVERS]):
-        if candidates_seen >= MAX_MCP_TOOLS:
-            break
-        connection = dict(raw_connection)
-        transport = connection.get("transport")
-        if transport == "websocket":
-            log.warning(
-                "MCP server candidate %d skipped because websocket discovery is not bounded",
-                server_index,
-            )
-            continue
-        if transport in {"sse", "http", "streamable-http", "streamable_http"}:
-            connection["httpx_client_factory"] = _bounded_http_client
-        try:
-            async with asyncio.timeout(MCP_DISCOVERY_TIMEOUT_SECONDS):
-                async with create_session(connection) as session:
-                    await session.initialize()
-                    cursor: str | None = None
-                    while candidates_seen < MAX_MCP_TOOLS:
-                        page = await session.list_tools(cursor=cursor)
-                        for raw_tool in page.tools:
-                            candidates_seen += 1
-                            if candidates_seen > MAX_MCP_TOOLS:
-                                break
-                            try:
-                                schema = raw_tool.inputSchema
-                                _validate_schema_tree(schema)
-                                schema_size = len(
-                                    json.dumps(
-                                        schema,
-                                        ensure_ascii=False,
-                                        sort_keys=True,
-                                        separators=(",", ":"),
-                                        allow_nan=False,
-                                    ).encode()
-                                )
-                            except Exception:
-                                continue
-                            if schema_size > MAX_MCP_SCHEMA_BYTES:
-                                continue
-                            if raw_schema_bytes + schema_size > MAX_MCP_TOTAL_SCHEMA_BYTES:
-                                candidates_seen = MAX_MCP_TOOLS
-                                break
-                            tools.append(
-                                convert_mcp_tool_to_langchain_tool(
-                                    None,
-                                    raw_tool,
-                                    connection=connection,
-                                    server_name=server_name,
-                                    tool_name_prefix=True,
-                                )
-                            )
-                            raw_schema_bytes += schema_size
-                        cursor = page.nextCursor
-                        if not cursor:
-                            break
-        except Exception as exc:
-            log.warning(
-                "MCP server candidate %d discovery failed: %s",
-                server_index,
-                type(exc).__name__,
-            )
-    log.info("loaded %d MCP tools across %d servers", len(tools), len(config))
-    return tools
