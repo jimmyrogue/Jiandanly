@@ -14,6 +14,20 @@ from .middleware.tool_execution import serialize_tool_result
 from .store.sqlite import LocalStore, WaitDecisionConflictError
 
 
+def _event_payload(event: dict[str, Any]) -> dict[str, Any]:
+    payload = event.get("payload")
+    if isinstance(payload, dict):
+        return payload
+    payload_json = event.get("payload_json")
+    if isinstance(payload_json, str):
+        try:
+            parsed = json.loads(payload_json)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
 async def _owned_run(
     store: LocalStore,
     *,

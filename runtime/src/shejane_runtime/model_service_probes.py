@@ -12,7 +12,8 @@ from langchain_core.tools import StructuredTool
 
 from .agent.builder import _build_byok_chat_model
 from .config import Settings
-from .llm.ledger import _provider_tools, _rewrite_tool_names
+from .llm.tool_aliases import provider_tools as _provider_tools
+from .llm.tool_aliases import rewrite_tool_names as _rewrite_tool_names
 from .model_profiles import default_model_protocol
 from .model_services import openai_compatible_endpoint
 
