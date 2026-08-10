@@ -18,18 +18,32 @@ Runtime SQLite 是 P3 接纳后的执行真相：命令回执、Run、Job 租约
 |---|---|
 | `database.py` | SQLite 连接配置、共享连接生命周期、租约绑定与 fenced 写事务 |
 | `schema.py` / `migrations.py` | 新数据库完整 schema / 旧数据库兼容迁移 |
-| `run_commands.py` | 不可变命令回执、Run 接纳、取消与注入命令 |
+| `command_receipts.py` | Run、等待命令与插件共享的不可变命令回执 |
+| `run_commands.py` | Run 接纳、线程消息写入与启动 Job 的原子事务 |
+| `run_control_commands.py` | Run tree 取消、取消命令回执与运行中指令注入 |
 | `run_wait_commands.py` | question、permission、plan 与 tool reconciliation 的不可变恢复决定 |
-| `run_jobs.py` | Job 入队、领取、续租、过期恢复、隔离与清理确认 |
-| `run_state.py` | Run、graph head、原子结果提交、事件日志与 steering |
+| `run_jobs.py` | Job 入队、领取、续租与过期恢复 |
+| `run_job_quarantine.py` | 执行尝试隔离、清理证明确认与 fence 校验 |
+| `run_records.py` | Run 记录、graph branch head 与查询投影 |
+| `run_state.py` | 原子结果提交、事件日志、线程投影与 steering |
 | `threads.py` | Thread 分页、快照、元数据更新、删除与增量游标 |
-| `waits.py` | plan、permission、question 与 tool reconciliation 的持久等待状态 |
-| `tool_receipts.py` | P10 Tool Receipt、重放和 outcome-unknown 投影 |
-| `collaboration.py` | durable child Run、依赖/资源声明与 root collaboration snapshot |
+| `waits.py` | plan、permission 与 wait-cycle 恢复负载 |
+| `wait_questions.py` | `user.ask` question 的创建、查询与回答 |
+| `wait_reconciliation.py` | tool outcome-unknown reconciliation 状态与 Receipt 修复 |
+| `tool_receipts.py` | P10 Tool Receipt、重放和 outcome-unknown 状态转换 |
+| `subagent_receipts.py` | P10 `task` Receipt 的子代理快照、生命周期事件和线程游标投影 |
+| `collaboration.py` | durable child Run 接纳、依赖与资源声明的原子写事务 |
+| `collaboration_projection.py` | child Run 查询、资源所有权校验与 root collaboration 一致性快照 |
 | `agent_messages.py` | 同一 collaboration root 内的 Agent mailbox、额度、投递与确认 |
 | `artifacts.py` | Artifact、Run input 正文、配额与内容生命周期 |
-| `plugins.py` | plugin package、installation、binding 与生命周期命令 |
-| `configuration.py` | Runtime settings、MCP catalog、model connections/bindings |
+| `plugins.py` | 稳定的 Plugin Store 聚合门面 |
+| `plugin_catalog.py` | plugin catalog 查询与 Run binding 冻结解析 |
+| `plugin_packages.py` | plugin package 安装、更新、回滚与移除命令 |
+| `plugin_installations.py` | installation 启用状态与模型绑定配置 |
+| `plugin_setup.py` | revision-fenced plugin setup 流程 |
+| `configuration.py` | Runtime settings 与 MCP catalog 的稳定聚合门面 |
+| `model_connections.py` | model connection 生命周期与 official connection 原子替换 |
+| `model_capability_bindings.py` | model capability binding 的查询与修订 |
 | `model_calls.py` | 模型调用预算/结算、assistant draft 与 sandbox process 记录 |
 | `schedules.py` / `workspaces.py` | 定时 Run / 授权 workspace |
 | `codec.py` / `ids.py` / `errors.py` / `events.py` | 无状态共享原语与稳定类型 |

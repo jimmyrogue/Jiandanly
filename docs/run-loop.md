@@ -449,8 +449,15 @@ SheJane follows the same split as LangGraph's fault-tolerance model:
 
 | 概念 | 文件 |
 |---|---|
-| 入口 + 路由 | [`shejane_runtime/server.py`](../runtime/src/shejane_runtime/server.py) |
-| RunCoordinator + driver loop | [`shejane_runtime/runs.py`](../runtime/src/shejane_runtime/runs.py) |
+| 入口 + 路由 | [`shejane_runtime/server.py`](../runtime/src/shejane_runtime/server.py)、[`shejane_runtime/run_routes.py`](../runtime/src/shejane_runtime/run_routes.py)、[`shejane_runtime/run_decision_routes.py`](../runtime/src/shejane_runtime/run_decision_routes.py) |
+| RunCoordinator 稳定接口 + 生命周期编排 | [`shejane_runtime/runs.py`](../runtime/src/shejane_runtime/runs.py)、[`shejane_runtime/run_coordinator_lifecycle.py`](../runtime/src/shejane_runtime/run_coordinator_lifecycle.py) |
+| 模型连接变更与 Run 接纳/执行协调 | [`shejane_runtime/run_model_connection_coordination.py`](../runtime/src/shejane_runtime/run_model_connection_coordination.py) |
+| P5 leased Job Attempt + heartbeat | [`shejane_runtime/run_job_execution.py`](../runtime/src/shejane_runtime/run_job_execution.py) |
+| P7 LangGraph driver loop 与 assistant/failure 投影 | [`shejane_runtime/run_graph_driver.py`](../runtime/src/shejane_runtime/run_graph_driver.py)、[`shejane_runtime/run_assistant_projection.py`](../runtime/src/shejane_runtime/run_assistant_projection.py)、[`shejane_runtime/run_failure_projection.py`](../runtime/src/shejane_runtime/run_failure_projection.py) |
+| Run event / terminal result publication | [`shejane_runtime/run_event_publisher.py`](../runtime/src/shejane_runtime/run_event_publisher.py) |
+| P11 deterministic settlement | [`shejane_runtime/run_settlement.py`](../runtime/src/shejane_runtime/run_settlement.py) |
+| Run 接纳 / checkpoint fork | [`shejane_runtime/run_admission.py`](../runtime/src/shejane_runtime/run_admission.py) |
+| LangGraph interrupt → 持久等待状态 | [`shejane_runtime/run_interrupts.py`](../runtime/src/shejane_runtime/run_interrupts.py) |
 | build_agent + middleware 装配 | [`shejane_runtime/agent/builder.py`](../runtime/src/shejane_runtime/agent/builder.py) |
 | Subagent 定义 | [`shejane_runtime/agent/subagents.py`](../runtime/src/shejane_runtime/agent/subagents.py) |
 | Runtime middleware | [`shejane_runtime/middleware/`](../runtime/src/shejane_runtime/middleware/) |
