@@ -5,128 +5,34 @@ from __future__ import annotations
 import json
 import os
 import platform
-import signal
-import subprocess
 import sys
-import time
-from dataclasses import dataclass
 from pathlib import Path
+
+from .managed_worker_release import (
+    ManagedWorkerReleaseGate as ManagedWorkerReleaseGate,
+)
+from .managed_worker_release import (
+    managed_worker_release_gate as managed_worker_release_gate,
+)
+from .sandbox_process import (
+    SandboxProcessIdentity as SandboxProcessIdentity,
+)
+from .sandbox_process import (
+    read_process_command as read_process_command,
+)
+from .sandbox_process import (
+    read_process_start as read_process_start,
+)
+from .sandbox_process import (
+    sandbox_process_matches as sandbox_process_matches,
+)
+from .sandbox_process import (
+    terminate_sandbox_process as terminate_sandbox_process,
+)
 
 
 class SandboxRuntimeError(RuntimeError):
     """The configured OS sandbox cannot safely launch this worker."""
-
-
-@dataclass(frozen=True)
-class ManagedWorkerReleaseGate:
-    """Auditable platform evidence required before Registry enablement."""
-
-    target_platform: str
-    adapter_id: str | None
-    proved: tuple[str, ...]
-    blockers: tuple[str, ...]
-
-    @property
-    def enabled(self) -> bool:
-        return bool(self.proved) and not self.blockers
-
-
-def managed_worker_release_gate(target_platform: str) -> ManagedWorkerReleaseGate:
-    """Return the immutable, fail-closed release state for one target platform."""
-
-    if target_platform == "darwin/arm64":
-        return ManagedWorkerReleaseGate(
-            target_platform=target_platform,
-            adapter_id="darwin_vf_linux_vm_v1",
-            proved=(
-                "cooperative_guest_shutdown",
-                "deterministic_ext4_disk_images",
-                "deterministic_minimal_guest_boot",
-                "dynamic_node_worker_runtime",
-                "dynamic_python_worker_runtime",
-                "fixed_capacity_scratch_mount",
-                "frozen_read_only_guest_rootfs",
-                "frozen_vm_asset_set",
-                "guest_cancel_process_tree_cleanup",
-                "guest_cgroup_v2_resource_policy",
-                "guest_host_protocol",
-                "hard_cpu_memory_process_tree_limits",
-                "host_file_credential_network_ipc_isolation",
-                "input_output_disk_limits",
-                "invocation_private_noexec_tmp_mount",
-                "launcher_crash_cleanup",
-                "nonprivileged_guest_worker_action_protocol",
-                "production_asset_manifest_preflight",
-                "read_only_input_mount",
-                "read_only_package_mount",
-                "runtime_adapter_vm_roundtrip",
-                "runtime_crash_lease_recovery",
-                "virtio_socket_handshake",
-                "virtualization_framework_boot",
-                "vsock_artifact_extraction",
-                "worker_crash_vm_cleanup",
-            ),
-            blockers=("packaged_backend_absent", "release_ci_gate"),
-        )
-    if target_platform == "darwin/amd64":
-        return ManagedWorkerReleaseGate(
-            target_platform=target_platform,
-            adapter_id="darwin_vf_linux_vm_v1",
-            proved=(),
-            blockers=("architecture_conformance_gate",),
-        )
-    if target_platform == "linux/arm64":
-        return ManagedWorkerReleaseGate(
-            target_platform=target_platform,
-            adapter_id="linux_bwrap_cgroup_v1",
-            proved=(
-                "artifact_broker_declared_output_only",
-                "bubblewrap_namespaces",
-                "cgroup_v2_resource_limits",
-                "descendant_access_isolation",
-                "fixed_capacity_private_scratch",
-                "read_only_package_input_rootfs",
-                "seccomp_network_and_escape_filter",
-                "worker_tree_cancel_cleanup",
-            ),
-            blockers=("systemd_delegation_gate", "release_ci_gate"),
-        )
-    if target_platform == "linux/amd64":
-        return ManagedWorkerReleaseGate(
-            target_platform=target_platform,
-            adapter_id="linux_bwrap_cgroup_v1",
-            proved=(),
-            blockers=(
-                "architecture_conformance_gate",
-                "systemd_delegation_gate",
-                "release_ci_gate",
-            ),
-        )
-    if target_platform.startswith("windows/"):
-        return ManagedWorkerReleaseGate(
-            target_platform=target_platform,
-            adapter_id="windows_qemu_linux_vm_v1",
-            proved=(),
-            blockers=(
-                "appcontainer_lpac_vmm_isolation",
-                "architecture_conformance_gate",
-                "descendant_escape_and_cleanup",
-                "fixed_capacity_guest_scratch",
-                "guest_cgroup_v2_resource_policy",
-                "host_job_object_resource_limits",
-                "no_network_guest",
-                "packaged_launcher",
-                "qemu_supply_chain",
-                "read_only_package_input_media",
-                "release_ci_gate",
-            ),
-        )
-    return ManagedWorkerReleaseGate(
-        target_platform=target_platform,
-        adapter_id=None,
-        proved=(),
-        blockers=("unsupported_platform",),
-    )
 
 
 def configured_srt_launcher() -> tuple[str, ...] | None:
@@ -147,147 +53,6 @@ def configured_srt_launcher() -> tuple[str, ...] | None:
     if not executable.is_absolute() or not executable.is_file():
         raise SandboxRuntimeError("managed worker sandbox executable is unavailable")
     return tuple(value)
-
-
-@dataclass(frozen=True)
-class SandboxProcessIdentity:
-    """What must still hold before a recorded sandbox pid may be signalled.
-
-    A pid alone is not an identity: the kernel recycles pids, so a record left
-    behind by a killed Runtime can name a process that has nothing to do with
-    the sandbox. Pairing the pid with its start time and the settings path only
-    this invocation wrote makes a stale record fail to match instead of
-    resolving to an innocent bystander.
-    """
-
-    pid: int
-    started_at: str
-    settings_path: str
-
-
-def read_process_start(pid: int) -> str | None:
-    """Return an opaque, stable start-time token for a *live* ``pid``.
-
-    Compared only against another token read the same way -- the format differs
-    per platform and carries no meaning of its own.
-
-    A zombie reads as gone. It has already exited and only awaits its parent's
-    wait(), so counting it as live would leave a finished sandbox looking like
-    it never stopped.
-    """
-
-    if sys.platform.startswith("linux"):
-        try:
-            stat = Path(f"/proc/{pid}/stat").read_text()
-        except OSError:
-            return None
-        # Field 22 is starttime, but comm (field 2) may itself contain spaces
-        # and parentheses, so split after the final ')' rather than on spaces.
-        _, _, rest = stat.rpartition(")")
-        fields = rest.split()
-        # rest starts at field 3, so state is index 0 and starttime index 19.
-        if len(fields) <= 19 or fields[0] == "Z":
-            return None
-        return fields[19]
-    completed = subprocess.run(
-        ["ps", "-o", "state=,lstart=", "-p", str(pid)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    line = completed.stdout.strip()
-    if not line:
-        return None
-    state, _, started = line.partition(" ")
-    if state.startswith("Z"):
-        return None
-    return started.strip() or None
-
-
-def read_process_command(pid: int) -> str | None:
-    """Return ``pid``'s full argv as one string, or None when it is gone."""
-
-    if sys.platform.startswith("linux"):
-        try:
-            raw = Path(f"/proc/{pid}/cmdline").read_bytes()
-        except OSError:
-            return None
-        command = raw.replace(b"\0", b" ").decode("utf-8", errors="replace").strip()
-        return command or None
-    completed = subprocess.run(
-        ["ps", "-ww", "-o", "args=", "-p", str(pid)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    command = completed.stdout.strip()
-    return command or None
-
-
-def sandbox_process_matches(identity: SandboxProcessIdentity) -> bool:
-    """Whether the live process at ``identity.pid`` is still the one recorded.
-
-    Every check must pass. A mismatch means the record is stale -- the pid was
-    recycled, or the process was replaced -- and the caller must not signal it.
-    """
-
-    if identity.pid <= 1:
-        return False
-    started_at = read_process_start(identity.pid)
-    if started_at is None or started_at != identity.started_at:
-        return False
-    command = read_process_command(identity.pid)
-    return command is not None and identity.settings_path in command
-
-
-def terminate_sandbox_process(identity: SandboxProcessIdentity) -> str:
-    """Stop an orphaned sandbox launcher and everything it wrapped.
-
-    Returns ``reaped`` when this call signalled the process, ``gone`` when it
-    had already exited, and ``stale`` when the record no longer describes the
-    live process -- the pid was recycled, so signalling it would hit an
-    unrelated program.
-
-    The launcher is spawned into its own session, so its process group is
-    exactly the sandbox tree and nothing else. That makes the group the correct
-    unit to signal: killing the launcher alone would leave the wrapped command
-    running under the sandbox it no longer supervises.
-    """
-
-    if not sandbox_process_matches(identity):
-        return "gone" if read_process_start(identity.pid) is None else "stale"
-    try:
-        group = os.getpgid(identity.pid)
-    except ProcessLookupError:
-        return "gone"
-    except OSError:
-        group = None
-    target = -group if group is not None and group > 1 else identity.pid
-    signalled = False
-    for attempt in (signal.SIGTERM, signal.SIGKILL):
-        try:
-            os.kill(target, attempt)
-        except ProcessLookupError:
-            return "reaped" if signalled else "gone"
-        except PermissionError:
-            # Once a signal has landed, losing permission means the group has
-            # drained to processes that can no longer be signalled -- the tree
-            # is on its way out. Only an unsignallable group we never reached
-            # says the record names something this Runtime does not own.
-            return "reaped" if signalled else "stale"
-        signalled = True
-        if _await_process_exit(identity.pid):
-            return "reaped"
-    return "reaped"
-
-
-def _await_process_exit(pid: int, *, timeout: float = 2.0) -> bool:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if read_process_start(pid) is None:
-            return True
-        time.sleep(0.05)
-    return read_process_start(pid) is None
 
 
 _SECCOMP_ARCHITECTURES = {

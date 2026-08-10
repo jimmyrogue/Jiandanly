@@ -90,7 +90,7 @@ def test_runtime_asset_executable_uses_windows_chmod_fallback(
         if not follow_symlinks:
             raise NotImplementedError
 
-    monkeypatch.setattr("shejane_runtime.plugins.runtime_assets.os.chmod", windows_chmod)
+    monkeypatch.setattr("shejane_runtime.plugins.runtime_asset_store.os.chmod", windows_chmod)
 
     _prepare_asset_executables(source, manifest)
 
