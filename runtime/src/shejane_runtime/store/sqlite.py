@@ -66,9 +66,9 @@ from .migrations import (
 from .model_calls import ModelCallStore
 from .plugins import PluginStore
 from .run_commands import RunCommandStore
+from .run_commands.waits import RunWaitCommandStore
 from .run_jobs import RunJobStore
 from .run_state import RunStateStore
-from .run_wait_commands import RunWaitCommandStore
 from .schedules import ScheduledRunStore
 from .schema import SCHEMA
 from .threads import ThreadStore

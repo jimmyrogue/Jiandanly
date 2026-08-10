@@ -21,8 +21,8 @@ from .central_diagnostics_credentials import (
     get_diagnostics_token,
     set_diagnostics_token,
 )
-from .model_credentials import get_model_api_key
 from .model_services import openai_compatible_endpoint
+from .model_services.credentials import get_model_api_key
 
 log = logging.getLogger("shejane_runtime.central_diagnostics")
 

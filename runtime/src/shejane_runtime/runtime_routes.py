@@ -21,7 +21,7 @@ from .central_diagnostics import (
     CentralDiagnosticsUnavailable,
 )
 from .config import Settings
-from .model_credentials import CredentialStoreError, get_model_api_key
+from .model_services.credentials import CredentialStoreError, get_model_api_key
 from .run_configuration import RUNTIME_PROTOCOL_VERSION, runtime_capabilities
 from .store.sqlite import LocalStore
 

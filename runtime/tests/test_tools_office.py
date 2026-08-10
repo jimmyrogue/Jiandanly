@@ -851,7 +851,7 @@ def test_atomic_write_keeps_target_intact_on_verification_failure(
 ) -> None:
     """If verification fails after the tmp write, the target keeps its
     previous (last-successful) content and no tmp file is left behind."""
-    from shejane_runtime.tools import office_common
+    from shejane_runtime.tools.office import common as office_common
 
     p = _make_docx(tmp_path)
     # First do a real edit so .edited.docx exists with known content.
@@ -1097,7 +1097,7 @@ def test_pptx_atomic_rollback_on_verify_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Force-verify-fail on a pptx write → target keeps last-good state."""
-    from shejane_runtime.tools import office_common
+    from shejane_runtime.tools.office import common as office_common
 
     p = tmp_path / "deck.pptx"
     office_create_pptx.func(path=str(p), title="A")

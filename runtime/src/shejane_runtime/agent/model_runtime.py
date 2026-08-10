@@ -22,8 +22,8 @@ from ..llm.ledger import LedgerChatModel
 from ..llm.runtime import RuntimeModelProxy
 from ..middleware.budget_control import finalization_attempt_reserve
 from ..middleware.outbound_policy import sanitize_outbound_text
-from ..model_credentials import CredentialStoreError, get_model_api_key
-from ..model_profiles import apply_known_model_profile_defaults
+from ..model_services.credentials import CredentialStoreError, get_model_api_key
+from ..model_services.profiles import apply_known_model_profile_defaults
 from ..plugins.tools import PluginActionError
 from ..store.sqlite import LocalStore
 

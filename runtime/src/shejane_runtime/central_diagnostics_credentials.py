@@ -7,7 +7,7 @@ import asyncio
 import keyring
 from keyring.errors import KeyringError
 
-from .model_credentials import CredentialStoreError
+from .model_services.credentials import CredentialStoreError
 
 _SERVICE = "SheJane Runtime central diagnostics"
 

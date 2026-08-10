@@ -37,18 +37,18 @@ from .config import Settings, get_settings
 from .content_routes import content_router
 from .diagnostics_routes import diagnostics_router
 from .http_body_limit import RequestBodyLimitMiddleware
-from .model_service_authorization import _complete_shejane_authorization
-from .model_service_routes import model_service_router
+from .model_services.authorization import _complete_shejane_authorization
+from .model_services.routes import model_service_router
 from .plugin_routes import plugin_router
 from .plugins.browser_qa import BROWSER_QA_PLUGIN_ID
 from .plugins.catalog import PluginCatalog
 from .plugins.platforms import current_managed_worker_platform
 from .plugins.registry import PluginRegistry
-from .run_decision_routes import run_decision_router
-from .run_routes import run_router
 from .runs import (
     RunCoordinator,
 )
+from .runs.decision_routes import run_decision_router
+from .runs.routes import run_router
 from .runtime_routes import _apply_runtime_settings, runtime_router
 from .scheduler import ScheduledRunDispatcher
 from .shejane_authorization import (

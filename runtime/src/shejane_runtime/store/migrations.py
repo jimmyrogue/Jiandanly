@@ -12,7 +12,7 @@ import json
 import aiosqlite
 
 from ..auth import LOCAL_OWNER_PRINCIPAL_ID
-from ..model_credentials import delete_legacy_model_api_key
+from ..model_services.credentials import delete_legacy_model_api_key
 from .codec import encode_payload as _encode_payload
 from .codec import json_payload as _json_payload
 from .events import TRANSIENT_RUN_EVENT_TYPES

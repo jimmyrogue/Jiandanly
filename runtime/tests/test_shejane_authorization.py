@@ -14,13 +14,13 @@ import keyring
 import pytest
 from fastapi.testclient import TestClient
 
-import shejane_runtime.model_service_authorization as model_authorization
-import shejane_runtime.model_service_probes as model_probes
+import shejane_runtime.model_services.authorization as model_authorization
+import shejane_runtime.model_services.probes as model_probes
 import shejane_runtime.shejane_authorization as authorization_module
 import shejane_runtime.store.sqlite as sqlite_store_module
 from shejane_runtime.auth import LOCAL_OWNER_PRINCIPAL_ID
 from shejane_runtime.config import reset_settings_for_tests
-from shejane_runtime.model_credentials import CredentialStoreError
+from shejane_runtime.model_services.credentials import CredentialStoreError
 from shejane_runtime.runs import RunCoordinator
 from shejane_runtime.server import create_app
 from shejane_runtime.shejane_authorization import SheJaneAuthorizationManager

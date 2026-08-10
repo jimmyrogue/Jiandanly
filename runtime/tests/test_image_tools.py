@@ -17,7 +17,7 @@ async def test_image_generate_creates_a_file_artifact_without_returning_base64(
     monkeypatch,
 ) -> None:
     from shejane_runtime.tools import image as image_tools
-    from shejane_runtime.tools import image_provider
+    from shejane_runtime.tools.image import provider as image_provider
 
     png = base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR42mP8z4AdMDEMKQkA"

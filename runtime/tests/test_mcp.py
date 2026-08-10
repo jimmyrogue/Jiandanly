@@ -36,7 +36,7 @@ from shejane_runtime.tools.mcp import (
     mcp_sensitive_values,
     validate_mcp_tools,
 )
-from shejane_runtime.tools.mcp_stdio import MCPStdioFrameTooLargeError, bounded_stdio_client
+from shejane_runtime.tools.mcp.stdio import MCPStdioFrameTooLargeError, bounded_stdio_client
 
 
 @pytest.mark.asyncio

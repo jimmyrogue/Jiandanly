@@ -11,20 +11,20 @@ from . import __version__
 from .api_schemas import LocalRunDiagnostics
 from .diagnostics_trace import build_run_trace
 from .http_route_helpers import _owned_run, _run_with_inputs
-from .run_diagnostics_projection import (
+from .runs.diagnostics_projection import (
     build_diagnostics_handoff as _build_diagnostics_handoff,
 )
-from .run_diagnostics_projection import diagnostics_build as _diagnostics_build
-from .run_diagnostics_projection import (
+from .runs.diagnostics_projection import diagnostics_build as _diagnostics_build
+from .runs.diagnostics_projection import (
     diagnostics_execution_policy as _diagnostics_execution_policy,
 )
-from .run_diagnostics_projection import (
+from .runs.diagnostics_projection import (
     latest_checkpoint_reflection as _latest_checkpoint_reflection,
 )
-from .run_diagnostics_projection import (
+from .runs.diagnostics_projection import (
     latest_checkpoint_summary as _latest_checkpoint_summary,
 )
-from .run_diagnostics_projection import latest_feature_ledger as _latest_feature_ledger
+from .runs.diagnostics_projection import latest_feature_ledger as _latest_feature_ledger
 from .store.sqlite import LocalStore
 
 diagnostics_router = APIRouter()

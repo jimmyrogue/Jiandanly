@@ -12,19 +12,19 @@ import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, ToolMessage
 
-import shejane_runtime.model_service_catalog as model_catalog
-import shejane_runtime.model_service_probes as model_probes
-import shejane_runtime.model_service_routes as model_routes
+import shejane_runtime.model_services.catalog as model_catalog
+import shejane_runtime.model_services.probes as model_probes
+import shejane_runtime.model_services.routes as model_routes
 import shejane_runtime.server as server_module
 from shejane_runtime.auth import LOCAL_OWNER_PRINCIPAL_ID
 from shejane_runtime.config import reset_settings_for_tests
-from shejane_runtime.model_credentials import CredentialStoreError
-from shejane_runtime.model_profiles import default_model_protocol, discovered_model_profile
 from shejane_runtime.model_services import (
     adapter_for_custom_service,
     list_model_service_presets,
     model_service_preset,
 )
+from shejane_runtime.model_services.credentials import CredentialStoreError
+from shejane_runtime.model_services.profiles import default_model_protocol, discovered_model_profile
 from shejane_runtime.runs import RunCoordinator
 from shejane_runtime.server import create_app
 from shejane_runtime.store.sqlite import LocalStore
