@@ -9,17 +9,12 @@ import { runtimeStore } from './state/runtimeStore'
 import { workspaceStoreActions } from './state/workspaceStore'
 import { useStore } from './state/store'
 import type {
-  AgentTimelineItem,
   ChatMode,
-  ChatMessage,
   Conversation,
-  ConversationProject,
-  ConversationWorkspace,
   LocalAttachmentRef,
 } from '@/shared/local-data/types'
 import type {
   AgentSettings,
-  LocalRunMetadata,
   LocalThreadSnapshot,
   PendingPluginInstallCommand,
   PendingPluginModelBindCommand,
@@ -47,21 +42,12 @@ import {
   streamLocalRun,
 } from '@/runtime/client'
 import type { ConversationRenderContext } from './useConversationProject'
+import type { LocalHarnessRunOptions } from './runExecution'
 import {
   useRunDecisionCommands,
   type RunDecisionCommandContext,
   type RunDecisionCommandHandlers,
 } from './useRunDecisionCommands'
-
-interface LocalHarnessRunOptions {
-  parentRunId?: string
-  metadata?: LocalRunMetadata
-  initialAgentEvents?: AgentTimelineItem[]
-  replaceFromClientId?: string
-  hideUserMessage?: boolean
-  pluginReferences?: NonNullable<ChatMessage['pluginReferences']>
-  pluginCommand?: NonNullable<ChatMessage['pluginCommand']>
-}
 
 type PendingPluginCommand =
   | PendingPluginInstallCommand

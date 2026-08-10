@@ -127,6 +127,35 @@ class ScheduledRunStore(SqliteDatabase):
         )
         return [dict(row) for row in await cursor.fetchall()]
 
+    async def list_scheduled_runs_for_principal(
+        self,
+        *,
+        principal_id: str,
+        limit: int = 50,
+        status: str | None = None,
+        notify_pending: bool = False,
+    ) -> list[dict[str, Any]]:
+        clauses = ["principal_id = ?"]
+        params: list[Any] = [principal_id]
+        if notify_pending:
+            clauses.extend(["status IN ('completed', 'failed')", "notified_at IS NULL"])
+        elif status:
+            clauses.append("status = ?")
+            params.append(status)
+        if notify_pending:
+            order = "datetime(updated_at) ASC, id ASC"
+        elif status:
+            order = "datetime(run_at) ASC, id ASC"
+        else:
+            order = "datetime(run_at) DESC, id DESC"
+        params.append(limit)
+        cursor = await self._conn.execute(
+            f"SELECT * FROM local_scheduled_runs WHERE {' AND '.join(clauses)} "
+            f"ORDER BY {order} LIMIT ?",
+            tuple(params),
+        )
+        return [dict(row) for row in await cursor.fetchall()]
+
     async def claim_due_scheduled_runs(
         self,
         *,

@@ -71,12 +71,14 @@ from .run_state import RunStateStore
 from .run_wait_commands import RunWaitCommandStore
 from .schedules import ScheduledRunStore
 from .schema import SCHEMA
+from .threads import ThreadStore
 from .tool_receipts import ToolReceiptStore
 from .waits import WaitStore
 from .workspaces import WorkspaceStore
 
 
 class LocalStore(
+    ThreadStore,
     RunStateStore,
     RunCommandStore,
     RunWaitCommandStore,

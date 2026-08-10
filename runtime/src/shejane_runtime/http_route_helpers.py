@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import os
 from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
+from langchain_core.messages import ToolMessage
 
-from .store.sqlite import LocalStore
+from .middleware.tool_execution import serialize_tool_result
+from .store.sqlite import LocalStore, WaitDecisionConflictError
 
 
 async def _owned_run(
@@ -102,3 +106,65 @@ async def _authorized_workspace_path(
     if workspace_error is not None:
         raise HTTPException(status_code=409, detail=workspace_error)
     return resolved
+
+
+async def _tool_reconciliation_results(
+    store: LocalStore,
+    *,
+    operation_id: str,
+    decision: str,
+) -> dict[str, str | None]:
+    record = await store.get_wait_candidate(operation_id)
+    if record is None or record.get("kind") != "tool_reconciliation":
+        raise KeyError(operation_id)
+    payload = _json_object(record.get("payload_json"))
+    current_receipt = await store.get_tool_receipt(operation_id)
+    prior_operation_id = str(payload.get("prior_operation_id") or operation_id)
+    prior_receipt = await store.get_tool_receipt(prior_operation_id)
+    if current_receipt is None or prior_receipt is None:
+        raise WaitDecisionConflictError("tool reconciliation receipt is missing")
+    current_result = (
+        _tool_reconciliation_result(current_receipt, decision)
+        if decision != "retry_not_executed"
+        else None
+    )
+    prior_result = _tool_reconciliation_result(
+        prior_receipt,
+        "abort" if decision == "retry_not_executed" else decision,
+    )
+    return {
+        "current_result_json": current_result,
+        "current_result_hash": (
+            hashlib.sha256(current_result.encode()).hexdigest()
+            if current_result is not None
+            else None
+        ),
+        "prior_result_json": prior_result,
+        "prior_result_hash": hashlib.sha256(prior_result.encode()).hexdigest(),
+    }
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    try:
+        parsed = json.loads(str(value or "{}"))
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _tool_reconciliation_result(receipt: dict[str, Any], decision: str) -> str:
+    completed = decision == "confirmed_completed"
+    return serialize_tool_result(
+        ToolMessage(
+            content=(
+                "The user verified that the external action completed successfully."
+                if completed
+                else "The user verified that this uncertain action must not be retried automatically."
+            ),
+            name=str(receipt.get("tool_name") or ""),
+            tool_call_id=str(receipt.get("tool_call_id") or ""),
+            status="success" if completed else "error",
+        )
+    )

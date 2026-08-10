@@ -21,7 +21,8 @@ Runtime SQLite 是 P3 接纳后的执行真相：命令回执、Run、Job 租约
 | `run_commands.py` | 不可变命令回执、Run 接纳、取消与注入命令 |
 | `run_wait_commands.py` | question、permission、plan 与 tool reconciliation 的不可变恢复决定 |
 | `run_jobs.py` | Job 入队、领取、续租、过期恢复、隔离与清理确认 |
-| `run_state.py` | Run/Thread、graph head、结果提交、事件日志与 steering |
+| `run_state.py` | Run、graph head、原子结果提交、事件日志与 steering |
+| `threads.py` | Thread 分页、快照、元数据更新、删除与增量游标 |
 | `waits.py` | plan、permission、question 与 tool reconciliation 的持久等待状态 |
 | `tool_receipts.py` | P10 Tool Receipt、重放和 outcome-unknown 投影 |
 | `collaboration.py` | durable child Run、依赖/资源声明与 root collaboration snapshot |

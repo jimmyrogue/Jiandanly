@@ -10,7 +10,6 @@ Phase 2' deliverables:
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import os
@@ -24,7 +23,6 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from langchain_core.messages import ToolMessage
 from sse_starlette.sse import EventSourceResponse
 
 from . import __version__
@@ -33,11 +31,7 @@ from .agent.builder import (
     open_store,
 )
 from .api_schemas import (
-    AnswerQuestionCommand,
-    AnswerQuestionCommandReceipt,
     AnswerQuestionRequest,
-    CancelRunCommand,
-    CancelRunCommandReceipt,
     CancelRunResponse,
     CreateRunRequest,
     ForkRunRequest,
@@ -51,32 +45,10 @@ from .api_schemas import (
     LocalRun,
     PermissionResolution,
     PlanApprovalResolution,
-    PlanResolveCommand,
-    PlanResolveCommandReceipt,
-    PluginDisableCommand,
-    PluginEnableCommand,
-    PluginInstallCommand,
-    PluginInstallCommandReceipt,
-    PluginModelBindCommand,
-    PluginModelBindCommandReceipt,
-    PluginRemoveCommand,
-    PluginRemoveCommandReceipt,
-    PluginRollbackCommand,
-    PluginSetupAdvanceCommand,
-    PluginSetupAdvanceCommandReceipt,
-    PluginStateCommandReceipt,
-    PluginUpdateCommand,
-    PluginVersionSwitchCommandReceipt,
     QuestionAnswer,
     ReconcileToolRequest,
-    ResolvePermissionCommand,
-    ResolvePermissionCommandReceipt,
     ResolvePermissionRequest,
     ResolvePlanApprovalRequest,
-    RuntimeAssetInstallCommand,
-    RuntimeAssetInstallCommandReceipt,
-    ToolReconcileCommand,
-    ToolReconcileCommandReceipt,
     ToolReconciliationResolution,
 )
 from .auth import LOCAL_OWNER_PRINCIPAL_ID, PairingTokenAuthMiddleware
@@ -84,6 +56,7 @@ from .catalog_routes import catalog_router
 from .central_diagnostics import (
     CentralDiagnosticsManager,
 )
+from .command_routes import command_router
 from .config import Settings, get_settings
 from .content_routes import content_router
 from .diagnostics_routes import _first_string, diagnostics_router
@@ -94,8 +67,8 @@ from .http_route_helpers import (
     _owned_run,
     _run_with_inputs,
     _runs_with_inputs,
+    _tool_reconciliation_results,
 )
-from .middleware.tool_execution import serialize_tool_result
 from .model_service_authorization import _complete_shejane_authorization
 from .model_service_routes import model_service_router
 from .permission_policy import PermissionScopeNotAllowedError
@@ -103,7 +76,7 @@ from .plugin_routes import plugin_router
 from .plugins.browser_qa import BROWSER_QA_PLUGIN_ID
 from .plugins.catalog import PluginCatalog
 from .plugins.platforms import current_managed_worker_platform
-from .plugins.registry import PluginRegistry, PluginRegistryError
+from .plugins.registry import PluginRegistry
 from .runs import (
     CheckpointNotFoundError,
     RunCoordinator,
@@ -346,414 +319,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         runs = await store.list_runs(principal_id=request.state.principal_id)
         return {"runs": await _runs_with_inputs(store, runs)}
 
-    @app.post(
-        "/v1/commands",
-        response_model=(
-            CancelRunCommandReceipt
-            | AnswerQuestionCommandReceipt
-            | ResolvePermissionCommandReceipt
-            | PlanResolveCommandReceipt
-            | ToolReconcileCommandReceipt
-            | PluginInstallCommandReceipt
-            | PluginModelBindCommandReceipt
-            | RuntimeAssetInstallCommandReceipt
-            | PluginStateCommandReceipt
-            | PluginVersionSwitchCommandReceipt
-            | PluginRemoveCommandReceipt
-            | PluginSetupAdvanceCommandReceipt
-        ),
-    )
-    async def accept_command(
-        request: Request,
-        body: (
-            CancelRunCommand
-            | AnswerQuestionCommand
-            | ResolvePermissionCommand
-            | PlanResolveCommand
-            | ToolReconcileCommand
-            | PluginInstallCommand
-            | PluginModelBindCommand
-            | RuntimeAssetInstallCommand
-            | PluginEnableCommand
-            | PluginDisableCommand
-            | PluginUpdateCommand
-            | PluginRollbackCommand
-            | PluginRemoveCommand
-            | PluginSetupAdvanceCommand
-        ),
-    ) -> dict[str, Any]:
-        store: LocalStore = app.state.store
-        coordinator: RunCoordinator = app.state.coordinator
-        if isinstance(body, PluginSetupAdvanceCommand):
-            registry: PluginRegistry = app.state.plugin_registry
-            try:
-                return await registry.advance_computer_use_setup(
-                    principal_id=request.state.principal_id,
-                    command_id=body.command_id,
-                    expected_revision=body.expected_revision,
-                    action_id=body.action_id,
-                )
-            except CommandConflictError as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
-            except PluginRegistryError as exc:
-                raise HTTPException(
-                    status_code=exc.status_code,
-                    detail={"code": exc.code, "message": str(exc)},
-                ) from exc
-        if isinstance(body, PluginModelBindCommand):
-            registry: PluginRegistry = app.state.plugin_registry
-            async with coordinator._model_admission(
-                request.state.principal_id,
-                body.model,
-                ("image_inputs",),
-            ) as (binding, error):
-                if error is not None:
-                    raise HTTPException(
-                        status_code=409,
-                        detail={"code": error.code, "message": str(error)},
-                    )
-                try:
-                    return await registry.bind_model(
-                        principal_id=request.state.principal_id,
-                        command_id=body.command_id,
-                        plugin_id=body.plugin_id,
-                        binding_id=body.binding_id,
-                        requested_model=body.model,
-                        model_binding=binding,
-                        expected_digest=body.expected_digest,
-                    )
-                except CommandConflictError as exc:
-                    raise HTTPException(status_code=409, detail=str(exc)) from exc
-                except PluginRegistryError as exc:
-                    raise HTTPException(
-                        status_code=exc.status_code,
-                        detail={"code": exc.code, "message": str(exc)},
-                    ) from exc
-        if isinstance(body, RuntimeAssetInstallCommand):
-            registry: PluginRegistry = app.state.plugin_registry
-            try:
-                return await registry.install_runtime_asset(
-                    principal_id=request.state.principal_id,
-                    command_id=body.command_id,
-                    source_path=body.source_path,
-                    expected_digest=body.expected_digest,
-                )
-            except CommandConflictError as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
-            except PluginRegistryError as exc:
-                raise HTTPException(
-                    status_code=exc.status_code,
-                    detail={"code": exc.code, "message": str(exc)},
-                ) from exc
-        if isinstance(body, PluginInstallCommand):
-            registry: PluginRegistry = app.state.plugin_registry
-            try:
-                return await registry.install(
-                    principal_id=request.state.principal_id,
-                    command_id=body.command_id,
-                    source_path=body.source_path,
-                    expected_digest=body.expected_digest,
-                    allow_unsigned=body.allow_unsigned,
-                )
-            except CommandConflictError as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
-            except PluginRegistryError as exc:
-                raise HTTPException(
-                    status_code=exc.status_code,
-                    detail={"code": exc.code, "message": str(exc)},
-                ) from exc
-        if isinstance(body, PluginUpdateCommand):
-            registry = app.state.plugin_registry
-            try:
-                return await registry.update(
-                    principal_id=request.state.principal_id,
-                    command_id=body.command_id,
-                    plugin_id=body.plugin_id,
-                    source_path=body.source_path,
-                    expected_digest=body.expected_digest,
-                    allow_unsigned=body.allow_unsigned,
-                )
-            except CommandConflictError as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
-            except PluginRegistryError as exc:
-                raise HTTPException(
-                    status_code=exc.status_code,
-                    detail={"code": exc.code, "message": str(exc)},
-                ) from exc
-        if isinstance(body, PluginRollbackCommand):
-            registry = app.state.plugin_registry
-            try:
-                return await registry.rollback(
-                    principal_id=request.state.principal_id,
-                    command_id=body.command_id,
-                    plugin_id=body.plugin_id,
-                    target_digest=body.target_digest,
-                    expected_digest=body.expected_digest,
-                )
-            except CommandConflictError as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
-            except PluginRegistryError as exc:
-                raise HTTPException(
-                    status_code=exc.status_code,
-                    detail={"code": exc.code, "message": str(exc)},
-                ) from exc
-        if isinstance(body, PluginRemoveCommand):
-            registry = app.state.plugin_registry
-            try:
-                return await registry.remove(
-                    principal_id=request.state.principal_id,
-                    command_id=body.command_id,
-                    plugin_id=body.plugin_id,
-                    expected_digest=body.expected_digest,
-                )
-            except CommandConflictError as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
-            except PluginRegistryError as exc:
-                raise HTTPException(
-                    status_code=exc.status_code,
-                    detail={"code": exc.code, "message": str(exc)},
-                ) from exc
-        if isinstance(body, (PluginEnableCommand, PluginDisableCommand)):
-            registry = app.state.plugin_registry
-            try:
-                return await registry.set_enabled(
-                    principal_id=request.state.principal_id,
-                    command_id=body.command_id,
-                    plugin_id=body.plugin_id,
-                    expected_digest=body.expected_digest,
-                    enabled=isinstance(body, PluginEnableCommand),
-                )
-            except CommandConflictError as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
-            except PluginRegistryError as exc:
-                raise HTTPException(
-                    status_code=exc.status_code,
-                    detail={"code": exc.code, "message": str(exc)},
-                ) from exc
-        if isinstance(body, ToolReconcileCommand):
-            command_payload = {
-                "type": body.type,
-                "operation_id": body.operation_id,
-                "decision": body.decision,
-            }
-            try:
-                replay = await store.accepted_command_receipt(
-                    principal_id=request.state.principal_id,
-                    command_id=body.command_id,
-                    command_type=body.type,
-                    payload=command_payload,
-                )
-                if replay is not None:
-                    if replay.get("resumed"):
-                        coordinator.wake_jobs()
-                    return replay
-                reconciliation = await store.get_wait_candidate(body.operation_id)
-                if reconciliation is None or reconciliation.get("kind") != "tool_reconciliation":
-                    raise KeyError(body.operation_id)
-                run = await _owned_run(
-                    store,
-                    principal_id=request.state.principal_id,
-                    run_id=str(reconciliation["run_id"]),
-                    not_found_detail="tool reconciliation not found",
-                )
-                await _authorized_workspace_path(
-                    store,
-                    principal_id=request.state.principal_id,
-                    path=run.get("workspace_path"),
-                )
-                await coordinator.reconcile_resume_head(str(reconciliation["run_id"]))
-                results = await _tool_reconciliation_results(
-                    store,
-                    operation_id=body.operation_id,
-                    decision=body.decision,
-                )
-                receipt, _created = await store.request_tool_reconcile_command(
-                    principal_id=request.state.principal_id,
-                    command_id=body.command_id,
-                    operation_id=body.operation_id,
-                    decision=body.decision,
-                    **results,
-                )
-            except KeyError as exc:
-                raise HTTPException(
-                    status_code=404, detail="tool reconciliation not found"
-                ) from exc
-            except (CommandConflictError, WaitDecisionConflictError) as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
-            except WorkspaceAdmissionError as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
-            if receipt["resumed"]:
-                coordinator.wake_jobs()
-            return receipt
-        if isinstance(body, PlanResolveCommand):
-            instructions = (body.instructions or "").strip() or None
-            command_payload: dict[str, Any] = {
-                "type": body.type,
-                "approval_id": body.approval_id,
-                "decision": body.decision,
-            }
-            if instructions is not None:
-                command_payload["instructions"] = instructions
-            try:
-                replay = await store.accepted_command_receipt(
-                    principal_id=request.state.principal_id,
-                    command_id=body.command_id,
-                    command_type=body.type,
-                    payload=command_payload,
-                )
-                if replay is not None:
-                    if replay.get("resumed"):
-                        coordinator.wake_jobs()
-                    return replay
-                approval = await store.get_plan_approval(body.approval_id)
-                if approval is None:
-                    raise KeyError(body.approval_id)
-                run = await _owned_run(
-                    store,
-                    principal_id=request.state.principal_id,
-                    run_id=str(approval["run_id"]),
-                    not_found_detail="plan approval not found",
-                )
-                await _authorized_workspace_path(
-                    store,
-                    principal_id=request.state.principal_id,
-                    path=run.get("workspace_path"),
-                )
-                await coordinator.reconcile_resume_head(str(approval["run_id"]))
-                receipt, _created = await store.request_plan_resolve_command(
-                    principal_id=request.state.principal_id,
-                    command_id=body.command_id,
-                    approval_id=body.approval_id,
-                    decision=body.decision,
-                    instructions=instructions,
-                )
-            except KeyError as exc:
-                raise HTTPException(status_code=404, detail="plan approval not found") from exc
-            except (CommandConflictError, WaitDecisionConflictError) as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
-            except WorkspaceAdmissionError as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
-            if receipt["resumed"]:
-                coordinator.wake_jobs()
-            return receipt
-        if isinstance(body, ResolvePermissionCommand):
-            edited_action = body.edited_action.model_dump() if body.edited_action else None
-            command_payload: dict[str, Any] = {
-                "type": body.type,
-                "permission_id": body.permission_id,
-                "decision": body.decision,
-                "scope": body.scope,
-            }
-            if edited_action is not None:
-                command_payload["edited_action"] = edited_action
-            try:
-                replay = await store.accepted_command_receipt(
-                    principal_id=request.state.principal_id,
-                    command_id=body.command_id,
-                    command_type=body.type,
-                    payload=command_payload,
-                )
-                if replay is not None:
-                    if replay.get("resumed"):
-                        coordinator.wake_jobs()
-                    return replay
-                permission = await store.get_permission(body.permission_id)
-                if permission is None:
-                    raise KeyError(body.permission_id)
-                run = await _owned_run(
-                    store,
-                    principal_id=request.state.principal_id,
-                    run_id=str(permission["run_id"]),
-                    not_found_detail="permission not found",
-                )
-                await _authorized_workspace_path(
-                    store,
-                    principal_id=request.state.principal_id,
-                    path=run.get("workspace_path"),
-                )
-                await coordinator.reconcile_resume_head(str(permission["run_id"]))
-                receipt, _created = await store.request_permission_resolve_command(
-                    principal_id=request.state.principal_id,
-                    command_id=body.command_id,
-                    permission_id=body.permission_id,
-                    decision=body.decision,
-                    scope=body.scope,
-                    edited_action=edited_action,
-                )
-            except KeyError as exc:
-                raise HTTPException(status_code=404, detail="permission not found") from exc
-            except (CommandConflictError, WaitDecisionConflictError) as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
-            except PermissionScopeNotAllowedError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            except WorkspaceAdmissionError as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
-            if receipt["resumed"]:
-                coordinator.wake_jobs()
-            return receipt
-        if isinstance(body, AnswerQuestionCommand):
-            command_payload = {
-                "type": body.type,
-                "question_id": body.question_id,
-                "answers": body.answers,
-            }
-            try:
-                replay = await store.accepted_command_receipt(
-                    principal_id=request.state.principal_id,
-                    command_id=body.command_id,
-                    command_type=body.type,
-                    payload=command_payload,
-                )
-                if replay is not None:
-                    if replay.get("resumed"):
-                        coordinator.wake_jobs()
-                    return replay
-                question = await store.get_question(body.question_id)
-                if question is None:
-                    raise KeyError(body.question_id)
-                run = await _owned_run(
-                    store,
-                    principal_id=request.state.principal_id,
-                    run_id=str(question["run_id"]),
-                    not_found_detail="question not found",
-                )
-                await _authorized_workspace_path(
-                    store,
-                    principal_id=request.state.principal_id,
-                    path=run.get("workspace_path"),
-                )
-                await coordinator.reconcile_resume_head(str(question["run_id"]))
-                receipt, _created = await store.request_question_answer_command(
-                    principal_id=request.state.principal_id,
-                    command_id=body.command_id,
-                    question_id=body.question_id,
-                    answers=body.answers,
-                )
-            except KeyError as exc:
-                raise HTTPException(status_code=404, detail="question not found") from exc
-            except (CommandConflictError, WaitDecisionConflictError) as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
-            except WorkspaceAdmissionError as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
-            if receipt["resumed"]:
-                coordinator.wake_jobs()
-            return receipt
-        try:
-            receipt, created = await store.request_run_cancel_command(
-                principal_id=request.state.principal_id,
-                command_id=body.command_id,
-                run_id=body.run_id,
-            )
-        except KeyError as exc:
-            raise HTTPException(
-                status_code=404,
-                detail={"code": "run_not_found", "message": "run not found"},
-            ) from exc
-        except CommandConflictError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        if created and receipt["canceled"]:
-            await coordinator.cancel_run(body.run_id)
-        return receipt
+    app.include_router(command_router)
 
     @app.post("/v1/runs", response_model=LocalRun)
     async def create_run(request: Request, body: CreateRunRequest) -> dict[str, Any]:
@@ -1432,68 +998,6 @@ def _event_payload(event: dict[str, Any]) -> dict[str, Any]:
             return {}
         return parsed if isinstance(parsed, dict) else {}
     return {}
-
-
-def _json_object(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    try:
-        parsed = json.loads(str(value or "{}"))
-    except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
-
-
-async def _tool_reconciliation_results(
-    store: LocalStore,
-    *,
-    operation_id: str,
-    decision: str,
-) -> dict[str, str | None]:
-    record = await store.get_wait_candidate(operation_id)
-    if record is None or record.get("kind") != "tool_reconciliation":
-        raise KeyError(operation_id)
-    payload = _json_object(record.get("payload_json"))
-    current_receipt = await store.get_tool_receipt(operation_id)
-    prior_operation_id = str(payload.get("prior_operation_id") or operation_id)
-    prior_receipt = await store.get_tool_receipt(prior_operation_id)
-    if current_receipt is None or prior_receipt is None:
-        raise WaitDecisionConflictError("tool reconciliation receipt is missing")
-    current_result = (
-        _tool_reconciliation_result(current_receipt, decision)
-        if decision != "retry_not_executed"
-        else None
-    )
-    prior_result = _tool_reconciliation_result(
-        prior_receipt,
-        "abort" if decision == "retry_not_executed" else decision,
-    )
-    return {
-        "current_result_json": current_result,
-        "current_result_hash": (
-            hashlib.sha256(current_result.encode()).hexdigest()
-            if current_result is not None
-            else None
-        ),
-        "prior_result_json": prior_result,
-        "prior_result_hash": hashlib.sha256(prior_result.encode()).hexdigest(),
-    }
-
-
-def _tool_reconciliation_result(receipt: dict[str, Any], decision: str) -> str:
-    completed = decision == "confirmed_completed"
-    return serialize_tool_result(
-        ToolMessage(
-            content=(
-                "The user verified that the external action completed successfully."
-                if completed
-                else "The user verified that this uncertain action must not be retried automatically."
-            ),
-            name=str(receipt.get("tool_name") or ""),
-            tool_call_id=str(receipt.get("tool_call_id") or ""),
-            status="success" if completed else "error",
-        )
-    )
 
 
 def _hitl_decision_for_permission(permission: dict[str, Any]) -> dict[str, Any]:

@@ -28,8 +28,7 @@ import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import UTC, datetime
-from typing import Any, Literal
-from urllib.parse import urlparse
+from typing import Any
 
 from langchain_core.messages import AIMessageChunk, HumanMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -42,26 +41,23 @@ from .agent.builder import (
 )
 from .agent.child_runs import ChildRunControl
 from .agent.context_builder import RuntimeContext
-from .agent.mailbox import AgentMailboxControl, AgentMessageKind
+from .agent.mailbox import AgentMailboxControl
 from .build_info import runtime_build_identity
 from .config import Settings, get_settings
 from .dev_trace import trace_stream_event
 from .event_translator import translate
 from .llm.errors import ModelServiceError
 from .llm.runtime import bind_runtime_model
-from .model_credentials import (
-    CredentialStoreError,
-    get_model_api_key,
-)
-from .model_profiles import (
-    apply_known_model_profile_defaults,
-    model_capability,
-    normalized_model_capabilities,
-)
+from .model_credentials import get_model_api_key
 from .observability import build_callbacks
 from .plugins.catalog import PluginCatalog
 from .plugins.identity import plugin_action_tool_version
 from .progress_ledger import build_handoff_snapshot
+from .run_collaboration import (
+    _CHILD_TERMINAL_STATUSES,
+    RunCollaboration,
+    _collaboration_completion_summary,
+)
 from .run_configuration import (
     RUNTIME_PROTOCOL_VERSION,
     _apply_advanced_overrides,
@@ -94,6 +90,7 @@ from .run_inputs import (
     _prepare_run_inputs,
     _resolved_attachment_bindings,
 )
+from .run_model_bindings import RunModelBindings
 from .run_stream_state import (
     _assistant_draft_from_state,
     _assistant_draft_from_update,
@@ -143,111 +140,6 @@ _IMAGE_TOOL_CAPABILITIES = {
     "image.generate": "image_generation",
     "image.edit": "image_editing",
 }
-_CHILD_TERMINAL_STATUSES = {"completed", "failed", "canceled", "cleanup_required"}
-
-
-def _child_wait_satisfied(
-    children: Sequence[dict[str, Any]],
-    condition: Literal["all", "any"],
-) -> bool:
-    terminal = [child.get("status") in _CHILD_TERMINAL_STATUSES for child in children]
-    return all(terminal) if condition == "all" else any(terminal)
-
-
-def _collaboration_completion_summary(
-    children: Sequence[dict[str, Any]],
-) -> dict[str, Any]:
-    active = [
-        str(child["id"])
-        for child in children
-        if child.get("status") not in _CHILD_TERMINAL_STATUSES
-    ]
-    required = [child for child in children if child.get("completion_mode") == "required"]
-    required_failed = [
-        str(child["id"])
-        for child in required
-        if child.get("status") in _CHILD_TERMINAL_STATUSES and child.get("status") != "completed"
-    ]
-    required_waiting = [
-        str(child["id"])
-        for child in required
-        if child.get("status") not in _CHILD_TERMINAL_STATUSES
-    ]
-    best_effort_active = [
-        str(child["id"])
-        for child in children
-        if child.get("completion_mode") == "best_effort"
-        and child.get("status") not in _CHILD_TERMINAL_STATUSES
-    ]
-
-    quorum_members: dict[str, list[dict[str, Any]]] = {}
-    for child in children:
-        if child.get("completion_mode") != "quorum":
-            continue
-        quorum_members.setdefault(str(child.get("quorum_group") or ""), []).append(child)
-    quorum_groups: list[dict[str, Any]] = []
-    quorum_waiting: list[str] = []
-    quorum_cancel: list[str] = []
-    quorum_impossible = False
-    quorum_satisfied = True
-    for group, members in sorted(quorum_members.items()):
-        requirements = {int(member.get("quorum_required") or 0) for member in members}
-        required_count = next(iter(requirements)) if len(requirements) == 1 else 0
-        completed = sum(member.get("status") == "completed" for member in members)
-        member_active = [
-            str(member["id"])
-            for member in members
-            if member.get("status") not in _CHILD_TERMINAL_STATUSES
-        ]
-        failed = sum(
-            member.get("status") in _CHILD_TERMINAL_STATUSES and member.get("status") != "completed"
-            for member in members
-        )
-        satisfied = required_count > 0 and completed >= required_count
-        impossible = (
-            required_count <= 0
-            or len(members) < required_count
-            or completed + len(member_active) < required_count
-        )
-        if satisfied or impossible:
-            quorum_cancel.extend(member_active)
-        else:
-            quorum_waiting.extend(member_active)
-        quorum_satisfied = quorum_satisfied and satisfied
-        quorum_impossible = quorum_impossible or impossible
-        quorum_groups.append(
-            {
-                "group": group,
-                "required": required_count,
-                "completed": completed,
-                "active": len(member_active),
-                "failed": failed,
-                "satisfied": satisfied,
-                "impossible": impossible,
-            }
-        )
-
-    impossible = bool(required_failed) or quorum_impossible
-    required_satisfied = not required_failed and not required_waiting
-    satisfied = required_satisfied and quorum_satisfied and not impossible
-    wait_for = [] if impossible else [*required_waiting, *quorum_waiting]
-    cancel = [*best_effort_active, *quorum_cancel]
-    if impossible:
-        cancel = active
-    return {
-        "satisfied": satisfied,
-        "impossible": impossible,
-        "required": {
-            "total": len(required),
-            "completed": sum(child.get("status") == "completed" for child in required),
-            "failed": required_failed,
-            "active": len(required_waiting),
-        },
-        "quorum_groups": quorum_groups,
-        "best_effort_active": len(best_effort_active),
-        "wait_for": list(dict.fromkeys(wait_for)),
-        "cancel": list(dict.fromkeys(cancel)),
-    }
 
 
 class RunCoordinator:
@@ -291,16 +183,28 @@ class RunCoordinator:
         self._lease_seconds = lease_seconds
         self._slots = asyncio.Semaphore(max(1, max_concurrent_runs))
         self._job_wakeup = asyncio.Event()
+        self._collaboration = RunCollaboration(
+            store,
+            start_run=lambda *args, **kwargs: self.start_run(*args, **kwargs),
+            cancel_run=lambda run_id: self.cancel_run(run_id),
+            tasks=lambda: self._tasks,
+            slots=lambda: self._slots,
+            job_wakeup=lambda: self._job_wakeup,
+            event_stream=lambda: self._event_stream,
+        )
         self._dispatcher_task: asyncio.Task[None] | None = None
         self._shutting_down = False
         self._lost_leases: set[asyncio.Task[Any]] = set()
         self._last_sandbox_sweep = 0.0
         self._unconfirmed_cleanup: set[asyncio.Task[Any]] = set()
         self._started_jobs: set[asyncio.Task[Any]] = set()
-        self._model_connection_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        self._model_bindings = RunModelBindings(
+            store,
+            self.settings,
+            lambda *args, **kwargs: get_model_api_key(*args, **kwargs),
+        )
         self._agent_definitions: dict[str, Any] = {}
         self._agent_definition_lock = asyncio.Lock()
-        self._child_wait_locks: dict[str, asyncio.Lock] = {}
         self._fenced_checkpointer = (
             FencedCheckpointer(checkpointer, store) if checkpointer is not None else None
         )
@@ -455,88 +359,13 @@ class RunCoordinator:
         requested_model: str,
         required_capabilities: tuple[str, ...] = ("streaming", "tool_calling"),
     ) -> tuple[dict[str, Any], RunAdmissionError | None]:
-        connection = await self.store.get_model_connection(
+        return await self._model_bindings._local_model_binding_locked(
             principal_id=principal_id,
             connection_id=connection_id,
+            model_id=model_id,
+            requested_model=requested_model,
+            required_capabilities=required_capabilities,
         )
-        if connection is None:
-            return {}, RunAdmissionError(
-                "model_service_missing",
-                "model service is not connected",
-            )
-        try:
-            models = json.loads(connection.get("models_json") or "[]")
-        except (json.JSONDecodeError, TypeError):
-            models = []
-        profile = next(
-            (
-                model
-                for model in models
-                if isinstance(model, dict) and model.get("model_id") == model_id
-            ),
-            None,
-        )
-        if profile is None:
-            return {}, RunAdmissionError(
-                "model_not_found",
-                "model is not available from this connection",
-            )
-        profile = apply_known_model_profile_defaults(
-            profile,
-            service_base_url=str(connection.get("base_url") or ""),
-            trusted_model_catalog=connection.get("preset_id") == "shejane-official",
-        )
-        profile["capabilities"] = normalized_model_capabilities(
-            profile,
-            adapter_id=str(connection.get("adapter_id") or "openai_chat"),
-        )
-        agent_capability = model_capability(profile, "agent_chat")
-        if agent_capability is None:
-            return {}, RunAdmissionError(
-                "model_capability_unavailable",
-                "model does not declare Agent chat capability",
-            )
-        try:
-            if not await get_model_api_key(
-                principal_id,
-                connection_id,
-                str(connection["credential_ref"]),
-            ):
-                return {}, RunAdmissionError(
-                    "model_service_missing",
-                    "model service API key is not configured",
-                )
-        except CredentialStoreError as exc:
-            return {}, RunAdmissionError(
-                "model_credential_store_unavailable",
-                str(exc),
-            )
-        protocol = str(agent_capability.get("protocol"))
-        base_url = str(connection["base_url"])
-        preset_id = str(connection.get("preset_id") or "")
-        return {
-            "adapter_id": {
-                "openai_chat_completions": "openai_chat",
-                "openai_responses": "openai_chat",
-                "anthropic_messages": "anthropic_messages",
-                "google_generate_content": "google_genai",
-            }.get(protocol, str(connection["adapter_id"])),
-            "protocol": protocol,
-            "preset_id": preset_id,
-            "connection_id": connection_id,
-            "connection_version": int(connection.get("version") or 1),
-            "base_url": base_url,
-            "credential_ref": str(connection["credential_ref"]),
-            "requested_model": requested_model,
-            "model_id": model_id,
-            "profile": profile,
-            "required_capabilities": list(required_capabilities),
-            "display_reasoning_summary": (
-                protocol == "openai_responses"
-                and preset_id == "openai"
-                and urlparse(base_url).hostname == "api.openai.com"
-            ),
-        }, None
 
     async def _model_binding_error(
         self,
@@ -578,102 +407,13 @@ class RunCoordinator:
         principal_id: str,
         required_tools: list[str],
     ) -> tuple[dict[str, dict[str, Any]], RunAdmissionError | None]:
-        """Resolve Runtime-owned default image bindings into an immutable Run snapshot."""
-        rows = {
-            str(row["capability"]): row
-            for row in await self.store.list_model_capability_bindings(principal_id=principal_id)
-        }
-        snapshots: dict[str, dict[str, Any]] = {}
-        for capability in set(_IMAGE_TOOL_CAPABILITIES.values()):
-            row = rows.get(capability)
-            if row is None:
-                continue
-            connection_id = str(row["connection_id"])
-            connection = await self.store.get_model_connection(
-                principal_id=principal_id,
-                connection_id=connection_id,
-            )
-            if connection is None or int(connection.get("version") or 0) != int(
-                row["connection_version"]
-            ):
-                continue
-            try:
-                models = json.loads(connection.get("models_json") or "[]")
-            except (json.JSONDecodeError, TypeError):
-                models = []
-            profile = next(
-                (
-                    item
-                    for item in models
-                    if isinstance(item, dict) and item.get("model_id") == row["model_id"]
-                ),
-                None,
-            )
-            if profile is None:
-                continue
-            profile = apply_known_model_profile_defaults(
-                profile,
-                service_base_url=str(connection.get("base_url") or ""),
-                trusted_model_catalog=connection.get("preset_id") == "shejane-official",
-            )
-            profile["capabilities"] = normalized_model_capabilities(
-                profile,
-                adapter_id=str(connection.get("adapter_id") or "openai_chat"),
-            )
-            verified = model_capability(profile, capability)
-            if (
-                verified is None
-                or verified.get("verification") != "verified"
-                or verified.get("protocol") != row["protocol"]
-            ):
-                continue
-            try:
-                api_key = await get_model_api_key(
-                    principal_id,
-                    connection_id,
-                    str(connection["credential_ref"]),
-                )
-            except CredentialStoreError as exc:
-                return {}, RunAdmissionError("model_credential_store_unavailable", str(exc))
-            if not api_key:
-                continue
-            snapshots[capability] = {
-                "capability": capability,
-                "connection_id": connection_id,
-                "connection_version": int(connection["version"]),
-                "base_url": str(connection["base_url"]),
-                "credential_ref": str(connection["credential_ref"]),
-                "model_id": str(row["model_id"]),
-                "protocol": str(row["protocol"]),
-                "revision": int(row["revision"]),
-            }
-
-        missing = [
-            tool_name
-            for tool_name in required_tools
-            if _IMAGE_TOOL_CAPABILITIES[tool_name] not in snapshots
-        ]
-        if missing:
-            return snapshots, RunAdmissionError(
-                "required_tool_unavailable",
-                f"required tools are not configured: {', '.join(missing)}",
-            )
-        return snapshots, None
+        return await self._model_bindings._capability_binding_snapshots(
+            principal_id=principal_id,
+            required_tools=required_tools,
+        )
 
     async def _skill_binding_error(self, settings_snapshot: dict[str, Any]) -> str | None:
-        # Runs accepted before Skill fingerprints existed remain resumable.
-        if settings_snapshot.get("skills") != "on":
-            return None
-        admitted = settings_snapshot.get("_skills_fingerprint")
-        if not isinstance(admitted, str) or not admitted:
-            return None
-        try:
-            current = await asyncio.to_thread(skill_catalog_fingerprint)
-        except OSError as exc:
-            return f"Skill configuration is unavailable: {exc}"
-        if current != admitted:
-            return "Skill configuration changed after Run admission"
-        return None
+        return await self._model_bindings._skill_binding_error(settings_snapshot)
 
     async def _model_binding_error_locked(
         self,
@@ -682,27 +422,11 @@ class RunCoordinator:
         connection_id: str,
         binding: dict[str, Any],
     ) -> tuple[str | None, str | None]:
-        connection = await self.store.get_model_connection(
+        return await self._model_bindings._model_binding_error_locked(
             principal_id=principal_id,
             connection_id=connection_id,
+            binding=binding,
         )
-        if (
-            connection is None
-            or int(connection.get("version") or 0) != binding.get("connection_version")
-            or binding.get("credential_ref") != connection.get("credential_ref")
-        ):
-            return "model service connection was changed or removed", None
-        try:
-            api_key = await get_model_api_key(
-                principal_id,
-                connection_id,
-                str(binding["credential_ref"]),
-            )
-        except CredentialStoreError as exc:
-            return str(exc), None
-        if not api_key:
-            return "model service API key is no longer configured", None
-        return None, api_key
 
     async def start_run(
         self,
@@ -1994,162 +1718,23 @@ class RunCoordinator:
         return run_id in states
 
     def child_run_control(self) -> ChildRunControl:
-        return ChildRunControl(
-            spawn=self._spawn_child_run,
-            list=self.store.list_child_runs_for_run,
-            check=self.store.child_runs_for_parent,
-            wait=self._wait_for_child_runs,
-            cancel=self._cancel_child_runs,
-        )
+        return self._collaboration.child_run_control()
 
     def agent_mailbox_control(self) -> AgentMailboxControl:
-        return AgentMailboxControl(
-            send=self._send_agent_message,
-            reply=self._reply_agent_message,
-            inbox=self.store.list_agent_inbox,
-            ack=self._ack_agent_messages,
-        )
+        return self._collaboration.agent_mailbox_control()
 
     async def collaboration_snapshot(self, root_run_id: str) -> dict[str, Any]:
-        snapshot = await self.store.collaboration_snapshot(root_run_id)
-        snapshot["completion"] = _collaboration_completion_summary(snapshot["children"])
-        return snapshot
-
-    async def _send_agent_message(
-        self,
-        sender_run_id: str,
-        sender_operation_id: str,
-        recipient_run_id: str,
-        kind: AgentMessageKind,
-        text: str,
-        data: dict[str, Any],
-        artifact_refs: Sequence[str],
-        ttl_seconds: int,
-    ) -> dict[str, Any]:
-        message, _created = await self.store.send_agent_message(
-            sender_run_id=sender_run_id,
-            sender_operation_id=sender_operation_id,
-            recipient_run_id=recipient_run_id,
-            kind=kind,
-            text=text,
-            data=data,
-            artifact_refs=artifact_refs,
-            ttl_seconds=ttl_seconds,
-        )
-        return message
-
-    async def _reply_agent_message(
-        self,
-        sender_run_id: str,
-        sender_operation_id: str,
-        in_reply_to: str,
-        kind: AgentMessageKind,
-        text: str,
-        data: dict[str, Any],
-        artifact_refs: Sequence[str],
-        ttl_seconds: int,
-    ) -> dict[str, Any]:
-        message, _created = await self.store.reply_agent_message(
-            sender_run_id=sender_run_id,
-            sender_operation_id=sender_operation_id,
-            in_reply_to=in_reply_to,
-            kind=kind,
-            text=text,
-            data=data,
-            artifact_refs=artifact_refs,
-            ttl_seconds=ttl_seconds,
-        )
-        return message
-
-    async def _ack_agent_messages(
-        self,
-        recipient_run_id: str,
-        operation_id: str,
-        message_ids: Sequence[str],
-    ) -> list[dict[str, Any]]:
-        return await self.store.ack_agent_messages(
-            recipient_run_id=recipient_run_id,
-            message_ids=message_ids,
-            operation_id=operation_id,
-        )
-
-    async def _spawn_child_run(
-        self,
-        parent_run_id: str,
-        spawn_operation_id: str,
-        goal: str,
-        agent_definition: dict[str, Any],
-        coordination: dict[str, Any],
-    ) -> dict[str, Any]:
-        parent = await self.store.get_run(parent_run_id)
-        parent_settings = (
-            _json_object(parent.get("settings_json")) if isinstance(parent, dict) else {}
-        )
-        parent_settings.pop("_execution_policy", None)
-        child_execution_policy = _execution_policy_snapshot(goal, parent_settings)
-        child, created = await self.store.accept_child_run(
-            parent_run_id=parent_run_id,
-            spawn_operation_id=spawn_operation_id,
-            goal=goal,
-            agent_definition=agent_definition,
-            coordination=coordination,
-            execution_policy=child_execution_policy,
-        )
-        spawn_event = child.pop("_spawn_event", None)
-        if isinstance(spawn_event, dict):
-            async with self._event_stream.publication(parent_run_id):
-                self._event_stream.publish_live(
-                    parent_run_id,
-                    self._event_stream.stored_event_envelope(spawn_event),
-                )
-        if created:
-            self._job_wakeup.set()
-        return (await self.store.child_runs_for_parent(parent_run_id, [str(child["id"])]))[0]
-
-    async def _wait_for_child_runs(
-        self,
-        parent_run_id: str,
-        child_run_ids: Sequence[str],
-        condition: Literal["all", "any"],
-        timeout_seconds: float,
-    ) -> list[dict[str, Any]]:
-        snapshots = await self.store.child_runs_for_parent(parent_run_id, child_run_ids)
-        if _child_wait_satisfied(snapshots, condition) or timeout_seconds <= 0:
-            return snapshots
-        lock = self._child_wait_locks.setdefault(parent_run_id, asyncio.Lock())
-        async with lock:
-            deadline = asyncio.get_running_loop().time() + timeout_seconds
-            async with self._yield_execution_slot(parent_run_id):
-                while True:
-                    snapshots = await self.store.child_runs_for_parent(parent_run_id, child_run_ids)
-                    if _child_wait_satisfied(snapshots, condition):
-                        break
-                    remaining = deadline - asyncio.get_running_loop().time()
-                    if remaining <= 0:
-                        break
-                    await asyncio.sleep(min(0.25, remaining))
-        if not lock.locked():
-            self._child_wait_locks.pop(parent_run_id, None)
-        return snapshots
+        return await self._collaboration.collaboration_snapshot(root_run_id)
 
     async def _wait_for_child_runs_terminal(
         self,
         parent_run_id: str,
         child_run_ids: Sequence[str],
     ) -> list[dict[str, Any]]:
-        if not child_run_ids:
-            return []
-        lock = self._child_wait_locks.setdefault(parent_run_id, asyncio.Lock())
-        async with lock:
-            async with self._yield_execution_slot(parent_run_id):
-                while True:
-                    snapshots = await self.store.child_runs_for_parent(parent_run_id, child_run_ids)
-                    if _child_wait_satisfied(snapshots, "all"):
-                        break
-                    await asyncio.sleep(0.25)
-        if not lock.locked():
-            self._child_wait_locks.pop(parent_run_id, None)
-        return snapshots
+        return await self._collaboration._wait_for_child_runs_terminal(
+            parent_run_id,
+            child_run_ids,
+        )
 
     async def _wait_for_child_status_change(
         self,
@@ -2157,54 +1742,23 @@ class RunCoordinator:
         current: Sequence[dict[str, Any]],
         child_run_ids: Sequence[str],
     ) -> None:
-        previous = {
-            str(child["id"]): (str(child.get("status") or ""), str(child.get("updated_at") or ""))
-            for child in current
-            if str(child["id"]) in child_run_ids
-        }
-        lock = self._child_wait_locks.setdefault(parent_run_id, asyncio.Lock())
-        async with lock:
-            async with self._yield_execution_slot(parent_run_id):
-                while True:
-                    snapshots = await self.store.child_runs_for_parent(parent_run_id, child_run_ids)
-                    if any(
-                        previous.get(str(child["id"]))
-                        != (str(child.get("status") or ""), str(child.get("updated_at") or ""))
-                        for child in snapshots
-                    ):
-                        break
-                    await asyncio.sleep(0.25)
-        if not lock.locked():
-            self._child_wait_locks.pop(parent_run_id, None)
+        await self._collaboration._wait_for_child_status_change(
+            parent_run_id,
+            current,
+            child_run_ids,
+        )
 
     @asynccontextmanager
     async def _yield_execution_slot(self, parent_run_id: str):
-        task = self._tasks.get(parent_run_id)
-        should_yield = task is not None and not task.done()
-        if not should_yield:
+        async with self._collaboration._yield_execution_slot(parent_run_id):
             yield
-            return
-        self._slots.release()
-        self._job_wakeup.set()
-        try:
-            yield
-        finally:
-            acquire = asyncio.create_task(self._slots.acquire())
-            try:
-                await asyncio.shield(acquire)
-            except asyncio.CancelledError:
-                await acquire
-                raise
 
     async def _cancel_child_runs(
         self,
         parent_run_id: str,
         child_run_ids: Sequence[str],
     ) -> list[dict[str, Any]]:
-        await self.store.child_runs_for_parent(parent_run_id, child_run_ids)
-        for child_run_id in child_run_ids:
-            await self.cancel_run(str(child_run_id))
-        return await self.store.child_runs_for_parent(parent_run_id, child_run_ids)
+        return await self._collaboration._cancel_child_runs(parent_run_id, child_run_ids)
 
     async def cancel_model_connection_runs(
         self,
@@ -2247,12 +1801,7 @@ class RunCoordinator:
         return len(run_ids)
 
     def _model_connection_lock(self, principal_id: str, connection_id: str) -> asyncio.Lock:
-        key = (principal_id, connection_id)
-        lock = self._model_connection_locks.get(key)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._model_connection_locks[key] = lock
-        return lock
+        return self._model_bindings.connection_lock(principal_id, connection_id)
 
     @asynccontextmanager
     async def model_connection_mutation(
