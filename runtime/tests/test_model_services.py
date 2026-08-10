@@ -18,6 +18,7 @@ import shejane_runtime.model_service_routes as model_routes
 import shejane_runtime.server as server_module
 from shejane_runtime.auth import LOCAL_OWNER_PRINCIPAL_ID
 from shejane_runtime.config import reset_settings_for_tests
+from shejane_runtime.model_credentials import CredentialStoreError
 from shejane_runtime.model_profiles import default_model_protocol, discovered_model_profile
 from shejane_runtime.model_services import (
     adapter_for_custom_service,
@@ -1075,7 +1076,7 @@ def test_model_service_list_keeps_inaccessible_connections_recoverable(
             credential_reference: str | None = None,
         ) -> str | None:
             if connection_id == inaccessible["id"]:
-                raise server_module.CredentialStoreError("system credential store is unavailable")
+                raise CredentialStoreError("system credential store is unavailable")
             return await original_get_model_api_key(
                 principal_id,
                 connection_id,
@@ -1125,7 +1126,7 @@ def test_model_service_reconnects_when_old_credential_cannot_be_deleted(
             credential_reference: str | None = None,
         ) -> None:
             if credential_reference == old_credential_ref:
-                raise server_module.CredentialStoreError("system credential store is unavailable")
+                raise CredentialStoreError("system credential store is unavailable")
             await original_delete_model_api_key(
                 principal_id,
                 connection_id,

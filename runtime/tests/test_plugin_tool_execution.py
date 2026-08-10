@@ -18,7 +18,7 @@ from langchain.agents.middleware import ToolCallRequest
 from langchain_core.messages import AIMessage, ToolMessage
 from PIL import Image
 
-from shejane_runtime.agent import builder
+from shejane_runtime.agent import builder, model_runtime
 from shejane_runtime.agent.context_builder import RuntimeContext
 from shejane_runtime.auth import LOCAL_OWNER_PRINCIPAL_ID
 from shejane_runtime.config import reset_settings_for_tests
@@ -425,8 +425,12 @@ async def test_vision_service_call_uses_authorized_image_and_redacts_credentials
     async def get_key(*_args, **_kwargs):
         return "secret-token"
 
-    monkeypatch.setattr(builder, "get_model_api_key", get_key)
-    monkeypatch.setattr(builder, "_build_chat_model", lambda *_args, **_kwargs: FakeVisionModel())
+    monkeypatch.setattr(model_runtime, "get_model_api_key", get_key)
+    monkeypatch.setattr(
+        model_runtime,
+        "_build_chat_model",
+        lambda *_args, **_kwargs: FakeVisionModel(),
+    )
     binding = {
         "id": "vision-default",
         "requested_model": "local:vision:vision-a",

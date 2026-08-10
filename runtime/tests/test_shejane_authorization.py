@@ -16,11 +16,11 @@ from fastapi.testclient import TestClient
 
 import shejane_runtime.model_service_authorization as model_authorization
 import shejane_runtime.model_service_probes as model_probes
-import shejane_runtime.server as server_module
 import shejane_runtime.shejane_authorization as authorization_module
 import shejane_runtime.store.sqlite as sqlite_store_module
 from shejane_runtime.auth import LOCAL_OWNER_PRINCIPAL_ID
 from shejane_runtime.config import reset_settings_for_tests
+from shejane_runtime.model_credentials import CredentialStoreError
 from shejane_runtime.runs import RunCoordinator
 from shejane_runtime.server import create_app
 from shejane_runtime.shejane_authorization import SheJaneAuthorizationManager
@@ -190,7 +190,7 @@ async def test_official_authorization_cleans_partial_keyring_write_after_failure
 
     async def failed_write(*args, **kwargs):
         await original_set_model_api_key(*args, **kwargs)
-        raise server_module.CredentialStoreError("keyring write outcome is uncertain")
+        raise CredentialStoreError("keyring write outcome is uncertain")
 
     monkeypatch.setattr(model_authorization, "set_model_api_key", failed_write)
 

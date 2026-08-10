@@ -40,46 +40,29 @@ from .api_schemas import (
     CancelRunCommand,
     CancelRunCommandReceipt,
     CancelRunResponse,
-    CentralDiagnosticsStatusResponse,
-    ClearMemoryResponse,
     CreateRunRequest,
     CreateScheduledRunRequest,
-    CreateWorkspaceRequest,
-    DeleteLocalThreadResponse,
-    DiagnoseWorkspaceRequest,
-    FixedRuntimeAssetStatus,
     ForkRunRequest,
-    HealthResponse,
     InjectRunInstructionRequest,
     InjectRunInstructionResponse,
     ListAgentMessagesResponse,
     ListChildRunsResponse,
-    ListPluginsResponse,
     ListRunEventsResponse,
     ListRunsResponse,
     ListScheduledRunsResponse,
-    ListThreadChangesResponse,
-    ListThreadsResponse,
-    ListWorkspacesResponse,
     LocalCollaborationSnapshot,
     LocalRun,
     LocalScheduledRun,
-    LocalThread,
-    LocalThreadSnapshot,
-    LocalWorkspaceAuthorization,
-    LocalWorkspaceDiagnosis,
     PermissionResolution,
     PlanApprovalResolution,
     PlanResolveCommand,
     PlanResolveCommandReceipt,
-    PluginDetail,
     PluginDisableCommand,
     PluginEnableCommand,
     PluginInstallCommand,
     PluginInstallCommandReceipt,
     PluginModelBindCommand,
     PluginModelBindCommandReceipt,
-    PluginReadinessSnapshot,
     PluginRemoveCommand,
     PluginRemoveCommandReceipt,
     PluginRollbackCommand,
@@ -94,25 +77,16 @@ from .api_schemas import (
     ResolvePermissionCommandReceipt,
     ResolvePermissionRequest,
     ResolvePlanApprovalRequest,
-    RuntimeAssetCleanupResult,
     RuntimeAssetInstallCommand,
     RuntimeAssetInstallCommandReceipt,
-    RuntimeAssetStorage,
-    RuntimeInfo,
-    RuntimeSettingsResponse,
     ToolReconcileCommand,
     ToolReconcileCommandReceipt,
     ToolReconciliationResolution,
-    UpdateCentralDiagnosticsRequest,
-    UpdateLocalThreadRequest,
-    UpdateRuntimeSettingsRequest,
 )
 from .auth import LOCAL_OWNER_PRINCIPAL_ID, PairingTokenAuthMiddleware
 from .catalog_routes import catalog_router
 from .central_diagnostics import (
-    CentralDiagnosticsConfigurationError,
     CentralDiagnosticsManager,
-    CentralDiagnosticsUnavailable,
 )
 from .config import Settings, get_settings
 from .content_routes import content_router
@@ -126,27 +100,22 @@ from .http_route_helpers import (
     _runs_with_inputs,
 )
 from .middleware.tool_execution import serialize_tool_result
-from .model_credentials import (
-    CredentialStoreError,
-    get_model_api_key,
-)
 from .model_service_authorization import _complete_shejane_authorization
 from .model_service_routes import model_service_router
 from .permission_policy import PermissionScopeNotAllowedError
+from .plugin_routes import plugin_router
 from .plugins.browser_qa import BROWSER_QA_PLUGIN_ID
 from .plugins.catalog import PluginCatalog
 from .plugins.platforms import current_managed_worker_platform
 from .plugins.registry import PluginRegistry, PluginRegistryError
-from .presentation import project_run_presentation
 from .runs import (
-    RUNTIME_PROTOCOL_VERSION,
     CheckpointNotFoundError,
     RunCoordinator,
     RunNotFoundError,
     freeze_run_settings,
-    runtime_capabilities,
     sanitize_run_metadata,
 )
+from .runtime_routes import _apply_runtime_settings, runtime_router
 from .scheduler import ScheduledRunDispatcher
 from .shejane_authorization import (
     OFFICIAL_CLOUD_ORIGIN,
@@ -158,30 +127,14 @@ from .store.sqlite import (
     ParentRunAdmissionError,
     PermissionDecisionConflictError,
     RunAdmissionError,
-    RunResultConflictError,
     ThreadAdmissionError,
     WaitDecisionConflictError,
     WorkspaceAdmissionError,
 )
+from .thread_routes import thread_router
+from .workspace_routes import workspace_router
 
 log = logging.getLogger("shejane_runtime.server")
-
-
-_RUNTIME_SETTINGS_TO_FIELDS = {
-    "max_model_calls": "max_model_calls",
-    "max_tool_retries": "max_tool_retries",
-    "research_search_limit": "research_search_limit",
-    "unknown_model_max_input_tokens": "unknown_model_max_input_tokens",
-    "unknown_model_max_output_tokens": "unknown_model_max_output_tokens",
-    "model_request_timeout_seconds": "model_request_timeout_seconds",
-    "browser_headless": "browser_headless",
-    "subagents": "enable_subagents",
-    "input_guard": "input_guard_mode",
-    "plan_first": "plan_first_mode",
-    "verification_repair_max": "verification_repair_max",
-    "repair_workflow_max": "repair_workflow_max",
-    "pii_redact": "pii_redact_types",
-}
 
 
 def _fixed_runtime_asset_sources(settings: Settings) -> dict[str, Path | str]:
@@ -211,25 +164,6 @@ def _fixed_runtime_asset_sources(settings: Settings) -> dict[str, Path | str]:
             urljoin(settings.fixed_runtime_asset_base_url + "/", filename),
         )
     return sources
-
-
-def _runtime_settings_payload(settings: Settings, *, version: int) -> dict[str, Any]:
-    return {
-        "version": version,
-        **{
-            public_name: getattr(settings, field_name)
-            for public_name, field_name in _RUNTIME_SETTINGS_TO_FIELDS.items()
-        },
-    }
-
-
-def _apply_runtime_settings(settings: Settings, values: dict[str, Any]) -> Settings:
-    updates = {
-        field_name: values[public_name]
-        for public_name, field_name in _RUNTIME_SETTINGS_TO_FIELDS.items()
-        if public_name in values
-    }
-    return settings.model_copy(update=updates)
 
 
 _TERMINAL_RUN_STATUSES = {"completed", "failed", "canceled", "cleanup_required"}
@@ -417,316 +351,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
-    @app.get("/v1/health", response_model=HealthResponse)
-    async def health() -> HealthResponse:
-        # Two consumers, two contracts — both must be satisfied:
-        #   • the live Client contract test checks `ok == true`
-        #   • runtime/sdk/src/client.ts:probeRuntime
-        #     checks `status === "ok"` and reads mode/worker
-        # The HealthResponse defaults already encode `ok=True status="ok"`
-        # mode="ready" worker="python-langgraph" — only `version` and
-        # `pairing_configured` need to be filled per-request.
-        return HealthResponse(
-            version=__version__,
-            pairing_configured=bool(settings.pairing_token),
-        )
-
-    @app.get("/v1/runtime", response_model=RuntimeInfo)
-    async def runtime_info(request: Request) -> RuntimeInfo:
-        runtime_settings: Settings = app.state.settings
-        service_configured = False
-        store: LocalStore = app.state.store
-        try:
-            connections = await store.list_model_connections(
-                principal_id=request.state.principal_id
-            )
-            for connection in connections:
-                if await get_model_api_key(
-                    request.state.principal_id,
-                    str(connection["id"]),
-                    str(connection["credential_ref"]),
-                ):
-                    service_configured = True
-                    break
-        except CredentialStoreError:
-            service_configured = False
-        return RuntimeInfo(
-            protocol_version=RUNTIME_PROTOCOL_VERSION,
-            runtime_version=__version__,
-            capabilities=sorted(runtime_capabilities(runtime_settings)),
-            model_service_configured=service_configured,
-        )
-
-    @app.get("/v1/settings", response_model=RuntimeSettingsResponse)
-    async def get_runtime_settings() -> dict[str, Any]:
-        return _runtime_settings_payload(
-            app.state.settings,
-            version=app.state.runtime_settings_version,
-        )
-
-    @app.put("/v1/settings", response_model=RuntimeSettingsResponse)
-    async def update_runtime_settings(body: UpdateRuntimeSettingsRequest) -> dict[str, Any]:
-        patch = body.model_dump(exclude_none=True)
-        async with app.state.runtime_settings_lock:
-            current = _runtime_settings_payload(
-                app.state.settings,
-                version=app.state.runtime_settings_version,
-            )
-            current.update(patch)
-            validated = RuntimeSettingsResponse(**current)
-            candidate_values = validated.model_dump(exclude={"version"})
-            store: LocalStore = app.state.store
-            stored = await store.patch_runtime_settings(
-                patch,
-                initial_settings=candidate_values,
-            )
-            persisted = RuntimeSettingsResponse(
-                **{**candidate_values, **stored["settings"]},
-                version=int(stored["version"]),
-            )
-            values = persisted.model_dump(exclude={"version"})
-            updated = _apply_runtime_settings(app.state.settings, values)
-            app.state.settings = updated
-            app.state.coordinator.settings = updated
-            app.state.runtime_settings_version = int(stored["version"])
-            return _runtime_settings_payload(updated, version=int(stored["version"]))
-
-    @app.get(
-        "/v1/shejane/diagnostics",
-        response_model=CentralDiagnosticsStatusResponse,
-    )
-    async def get_central_diagnostics(request: Request) -> dict[str, Any]:
-        try:
-            return await app.state.central_diagnostics.status(request.state.principal_id)
-        except CredentialStoreError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-    @app.put(
-        "/v1/shejane/diagnostics",
-        response_model=CentralDiagnosticsStatusResponse,
-    )
-    async def update_central_diagnostics(
-        request: Request,
-        body: UpdateCentralDiagnosticsRequest,
-    ) -> dict[str, Any]:
-        try:
-            return await app.state.central_diagnostics.configure(
-                principal_id=request.state.principal_id,
-                enabled=body.enabled,
-                connection_id=body.connection_id,
-                success_sample_rate=body.success_sample_rate,
-            )
-        except CentralDiagnosticsConfigurationError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except (CentralDiagnosticsUnavailable, CredentialStoreError) as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-    @app.get("/v1/tools")
-    async def list_tools() -> dict[str, Any]:
-        from .tools.registry import describe_tools
-
-        # Phase 2': describe with the current store. workspace_root is
-        # None at this layer because fs tools are bound per-run by the
-        # agent builder (Phase 3'). Callers wanting the per-run view will
-        # use a different endpoint then.
-        store = getattr(app.state, "store", None)
-        return {"tools": describe_tools(store=store, workspace_root=None)}
-
-    @app.get("/v1/workspaces", response_model=ListWorkspacesResponse)
-    async def list_workspaces(request: Request) -> dict[str, Any]:
-        store: LocalStore = app.state.store
-        return {"workspaces": await store.list_workspaces(principal_id=request.state.principal_id)}
-
-    @app.post("/v1/workspaces", response_model=LocalWorkspaceAuthorization)
-    async def add_workspace(request: Request, body: CreateWorkspaceRequest) -> dict[str, Any]:
-        """Authorize a workspace path. Returns the flat row — the TS
-        `authorizeLocalWorkspace` reads `.id / .path / .label` directly
-        (no wrapper)."""
-        store: LocalStore = app.state.store
-        raw_path = body.path.strip()
-        if not raw_path:
-            raise HTTPException(status_code=400, detail="path required")
-        path = await _normalized_path(raw_path)
-        if not await asyncio.to_thread(Path(path).is_dir):
-            raise HTTPException(status_code=400, detail="workspace must be an existing directory")
-        return await store.create_workspace(
-            principal_id=request.state.principal_id,
-            path=path,
-            label=body.label.strip() or path,
-        )
-
-    @app.delete(
-        "/v1/workspaces/{workspace_id}",
-        response_model=LocalWorkspaceAuthorization,
-    )
-    async def remove_workspace(request: Request, workspace_id: str) -> dict[str, Any]:
-        """Revoke a workspace authorization. Returns the deleted row
-        matching the TS `revokeLocalWorkspace` →
-        `Promise<LocalWorkspaceAuthorization>` signature."""
-        store: LocalStore = app.state.store
-        # Fetch before delete so we can return the record. If it didn't
-        # exist, surface a 404 — client `decodeLocalResponse` throws
-        # which the renderer catches and shows to the user.
-        existing = None
-        principal_id = request.state.principal_id
-        for ws in await store.list_workspaces(principal_id=principal_id):
-            if ws["id"] == workspace_id:
-                existing = ws
-                break
-        if existing is None:
-            raise HTTPException(status_code=404, detail="workspace not found")
-        await store.delete_workspace(principal_id=principal_id, workspace_id=workspace_id)
-        return existing
-
-    @app.get("/v1/threads", response_model=ListThreadsResponse)
-    async def list_threads(
-        request: Request,
-        limit: int = Query(default=100, ge=1, le=500),
-        before_created_at: str | None = Query(default=None),
-        before_id: str | None = Query(default=None),
-    ):
-        store: LocalStore = app.state.store
-        if (before_created_at is None) != (before_id is None):
-            raise HTTPException(status_code=400, detail="both thread page cursors are required")
-        threads, cursor, has_more = await store.list_threads(
-            principal_id=request.state.principal_id,
-            limit=limit,
-            before_created_at=before_created_at,
-            before_id=before_id,
-        )
-        return {
-            "threads": [_thread_record_for_api(thread) for thread in threads],
-            "cursor": cursor,
-            "has_more": has_more,
-            "next_before_created_at": threads[-1]["created_at"] if has_more and threads else None,
-            "next_before_id": threads[-1]["id"] if has_more and threads else None,
-        }
-
-    @app.get("/v1/threads/changes", response_model=ListThreadChangesResponse)
-    async def list_thread_changes(
-        request: Request,
-        after: int = Query(default=0, ge=0),
-        limit: int = Query(default=500, ge=1, le=1000),
-    ):
-        store: LocalStore = app.state.store
-        changes, cursor = await store.thread_changes_since(
-            principal_id=request.state.principal_id,
-            after_cursor=after,
-            limit=limit,
-        )
-        return {"changes": changes, "cursor": cursor}
-
-    @app.get("/v1/threads/{thread_id}", response_model=LocalThreadSnapshot)
-    async def get_thread_snapshot(
-        request: Request,
-        thread_id: str,
-        before_position: int | None = Query(default=None, ge=1),
-        item_limit: int = Query(default=200, ge=2, le=500),
-        event_limit: int = Query(default=5000, ge=1, le=10000),
-        expected_version: int | None = Query(default=None, ge=1),
-    ):
-        store: LocalStore = app.state.store
-        try:
-            snapshot = await store.get_thread_snapshot(
-                principal_id=request.state.principal_id,
-                thread_id=thread_id,
-                before_position=before_position,
-                item_limit=item_limit,
-                event_limit=event_limit,
-                expected_version=expected_version,
-            )
-        except RunResultConflictError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        if snapshot is None:
-            raise HTTPException(status_code=404, detail="thread not found")
-        tool_receipts_by_run = snapshot.pop("tool_receipts_by_run", {})
-        wait_candidates_by_run = snapshot.pop("wait_candidates_by_run", {})
-        artifacts_by_run = snapshot.pop("artifacts_by_run", {})
-        raw_presentation_events = snapshot.pop("presentation_events", [])
-        presentation_high_watermarks = snapshot.pop("presentation_high_watermarks", {})
-        items = []
-        for item in snapshot["items"]:
-            try:
-                metadata = json.loads(item.get("metadata_json") or "{}")
-            except (json.JSONDecodeError, TypeError):
-                metadata = {}
-            items.append({**item, "metadata": metadata if isinstance(metadata, dict) else {}})
-        events = []
-        for event in snapshot["events"]:
-            try:
-                payload = json.loads(event.get("payload_json") or "{}")
-            except (json.JSONDecodeError, TypeError):
-                payload = {}
-            events.append({**event, "payload": payload if isinstance(payload, dict) else {}})
-        presentation_events_by_run: dict[str, list[dict[str, Any]]] = {}
-        for event in raw_presentation_events:
-            try:
-                payload = json.loads(event.get("payload_json") or "{}")
-            except (json.JSONDecodeError, TypeError):
-                payload = {}
-            decoded = {**event, "payload": payload if isinstance(payload, dict) else {}}
-            presentation_events_by_run.setdefault(str(event["run_id"]), []).append(decoded)
-        presentations = {}
-        for run in snapshot["runs"]:
-            run_id = str(run["id"])
-            presentations[run_id] = project_run_presentation(
-                run=run,
-                assistant_item=next(
-                    (
-                        item
-                        for item in items
-                        if item.get("run_id") == run_id
-                        and item.get("item_type") == "assistant_message"
-                    ),
-                    None,
-                ),
-                events=presentation_events_by_run.get(run_id, []),
-                tool_receipts=tool_receipts_by_run.get(run_id, []),
-                wait_candidates=wait_candidates_by_run.get(run_id, []),
-                artifacts=artifacts_by_run.get(run_id, []),
-                event_high_watermark=int(presentation_high_watermarks.get(run_id, 0)),
-            )
-        return {
-            **snapshot,
-            "thread": _thread_record_for_api(snapshot["thread"]),
-            "items": items,
-            "runs": await _runs_with_inputs(store, snapshot["runs"]),
-            "events": events,
-            "presentations": presentations,
-        }
-
-    @app.patch("/v1/threads/{thread_id}", response_model=LocalThread)
-    async def update_thread(
-        request: Request,
-        thread_id: str,
-        body: UpdateLocalThreadRequest,
-    ):
-        store: LocalStore = app.state.store
-        thread = await store.update_thread(
-            principal_id=request.state.principal_id,
-            thread_id=thread_id,
-            title=body.title,
-            metadata=body.metadata,
-            archived=body.archived,
-        )
-        if thread is None:
-            raise HTTPException(status_code=404, detail="thread not found")
-        return _thread_record_for_api(thread)
-
-    @app.delete("/v1/threads/{thread_id}", response_model=DeleteLocalThreadResponse)
-    async def delete_thread(request: Request, thread_id: str):
-        store: LocalStore = app.state.store
-        try:
-            version = await store.delete_thread(
-                principal_id=request.state.principal_id,
-                thread_id=thread_id,
-            )
-        except RunResultConflictError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        if version is None:
-            raise HTTPException(status_code=404, detail="thread not found")
-        return {"id": thread_id, "deleted": True, "version": version}
-
     @app.get("/v1/runs", response_model=ListRunsResponse)
     async def list_runs(request: Request) -> dict[str, Any]:
         """Recent runs newest-first.
@@ -739,129 +363,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         store: LocalStore = app.state.store
         runs = await store.list_runs(principal_id=request.state.principal_id)
         return {"runs": await _runs_with_inputs(store, runs)}
-
-    @app.get("/v1/plugins", response_model=ListPluginsResponse)
-    async def list_plugins(request: Request) -> dict[str, Any]:
-        registry: PluginRegistry = app.state.plugin_registry
-        return {"plugins": await registry.list(principal_id=request.state.principal_id)}
-
-    @app.get(
-        "/v1/plugins/runtime-assets/storage",
-        response_model=RuntimeAssetStorage,
-    )
-    async def inspect_runtime_asset_storage(request: Request) -> dict[str, Any]:
-        registry: PluginRegistry = app.state.plugin_registry
-        return await registry.runtime_asset_storage()
-
-    @app.delete(
-        "/v1/plugins/runtime-assets/storage",
-        response_model=RuntimeAssetCleanupResult,
-    )
-    async def cleanup_runtime_asset_storage(
-        request: Request,
-        scope: Literal["history", "all"] = Query(...),
-    ) -> dict[str, Any]:
-        registry: PluginRegistry = app.state.plugin_registry
-        try:
-            return await registry.cleanup_runtime_asset_storage(scope)
-        except PluginRegistryError as exc:
-            raise HTTPException(
-                status_code=exc.status_code,
-                detail={"code": exc.code, "message": str(exc)},
-            ) from exc
-
-    @app.get("/v1/plugins/{plugin_id}", response_model=PluginDetail)
-    async def inspect_plugin(request: Request, plugin_id: str) -> dict[str, Any]:
-        registry: PluginRegistry = app.state.plugin_registry
-        try:
-            return await registry.inspect(
-                principal_id=request.state.principal_id,
-                plugin_id=plugin_id,
-            )
-        except PluginRegistryError as exc:
-            raise HTTPException(
-                status_code=exc.status_code,
-                detail={"code": exc.code, "message": str(exc)},
-            ) from exc
-
-    @app.get(
-        "/v1/plugins/{plugin_id}/runtime-asset",
-        response_model=FixedRuntimeAssetStatus,
-        response_model_exclude_defaults=True,
-    )
-    async def inspect_fixed_runtime_asset(request: Request, plugin_id: str) -> dict[str, Any]:
-        registry: PluginRegistry = app.state.plugin_registry
-        try:
-            return await registry.fixed_runtime_asset_status(
-                principal_id=request.state.principal_id,
-                plugin_id=plugin_id,
-            )
-        except PluginRegistryError as exc:
-            if exc.status_code == 404 and plugin_id in {
-                "org.shejane.browser-qa",
-                "org.shejane.ocr",
-            }:
-                return {
-                    "plugin_id": plugin_id,
-                    "available": False,
-                    "downloaded": False,
-                }
-            raise HTTPException(
-                status_code=exc.status_code,
-                detail={"code": exc.code, "message": str(exc)},
-            ) from exc
-
-    @app.put(
-        "/v1/plugins/{plugin_id}/runtime-asset",
-        response_model=FixedRuntimeAssetStatus,
-        response_model_exclude_defaults=True,
-    )
-    async def prepare_fixed_runtime_asset(request: Request, plugin_id: str) -> dict[str, Any]:
-        registry: PluginRegistry = app.state.plugin_registry
-        try:
-            return await registry.prepare_fixed_runtime_asset(
-                principal_id=request.state.principal_id,
-                plugin_id=plugin_id,
-            )
-        except PluginRegistryError as exc:
-            raise HTTPException(
-                status_code=exc.status_code,
-                detail={"code": exc.code, "message": str(exc)},
-            ) from exc
-
-    @app.delete(
-        "/v1/plugins/{plugin_id}/runtime-asset",
-        response_model=FixedRuntimeAssetStatus,
-        response_model_exclude_defaults=True,
-    )
-    async def remove_fixed_runtime_asset(request: Request, plugin_id: str) -> dict[str, Any]:
-        registry: PluginRegistry = app.state.plugin_registry
-        try:
-            return await registry.remove_fixed_runtime_asset(
-                principal_id=request.state.principal_id,
-                plugin_id=plugin_id,
-            )
-        except PluginRegistryError as exc:
-            raise HTTPException(
-                status_code=exc.status_code,
-                detail={"code": exc.code, "message": str(exc)},
-            ) from exc
-
-    @app.get(
-        "/v1/plugins/{plugin_id}/readiness",
-        response_model=PluginReadinessSnapshot,
-    )
-    async def inspect_plugin_readiness(request: Request, plugin_id: str) -> dict[str, Any]:
-        if plugin_id != "org.shejane.computer-use":
-            raise HTTPException(status_code=404, detail="plugin readiness is unavailable")
-        registry: PluginRegistry = app.state.plugin_registry
-        try:
-            return await registry.computer_use_readiness(principal_id=request.state.principal_id)
-        except PluginRegistryError as exc:
-            raise HTTPException(
-                status_code=exc.status_code,
-                detail={"code": exc.code, "message": str(exc)},
-            ) from exc
 
     @app.post(
         "/v1/commands",
@@ -1900,119 +1401,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             coordinator.wake_jobs()
         return receipt
 
-    @app.post(
-        "/v1/workspaces/diagnose",
-        response_model=LocalWorkspaceDiagnosis,
-        response_model_exclude_none=True,
-    )
-    async def diagnose_workspace(
-        request: Request, body: DiagnoseWorkspaceRequest
-    ) -> dict[str, Any]:
-        """Inspect a candidate path against the authorization registry.
-
-        Response matches the TS `LocalWorkspaceDiagnosis` shape — the
-        `reason` enum drives the workspace-picker's "why disabled?"
-        copy, keep it stable.
-        """
-        store: LocalStore = app.state.store
-        path = body.path.strip()
-        if not path:
-            raise HTTPException(status_code=400, detail="path required")
-        resolved = await _normalized_path(path)
-        path_obj = Path(resolved)
-        exists, is_directory = await asyncio.gather(
-            asyncio.to_thread(path_obj.exists),
-            asyncio.to_thread(path_obj.is_dir),
-        )
-        workspace = await store.workspace_by_path(
-            principal_id=request.state.principal_id,
-            path=resolved,
-        )
-        authorized = workspace is not None
-        if not exists:
-            reason = "not_found"
-        elif not is_directory:
-            reason = "not_directory"
-        elif authorized:
-            reason = "authorized"
-        else:
-            reason = "not_authorized"
-        payload: dict[str, Any] = {
-            "path": resolved,
-            "exists": exists,
-            "is_directory": is_directory,
-            "authorized": authorized,
-            "reason": reason,
-        }
-        if workspace is not None:
-            payload["workspace"] = workspace
-        return payload
-
-    @app.delete("/v1/memory", response_model=ClearMemoryResponse)
-    async def clear_memory(request: Request) -> dict[str, Any]:
-        """Wipe this authenticated principal's long-term memory namespaces.
-
-        Backs the "清空记忆 / Clear memory" button in the agent settings
-        dialog. Walks every ("notes", ...) namespace in pages of 200
-        (matches the BaseStore default search limit ceiling for SQLite stores)
-        and deletes each key. Returns the total count so the UI can render an
-        accurate "cleared N memories" toast.
-
-        Idempotent: calling it on an empty store returns
-        `deleted_count: 0` without error.
-        """
-        from .tools.memory import NAMESPACE, memory_namespace_prefix
-
-        agent_store = getattr(app.state, "agent_store", None)
-        if agent_store is None:
-            raise HTTPException(status_code=503, detail="memory store not initialized")
-        deleted = 0
-        # `asearch(query=None)` returns everything in the namespace
-        # (no semantic ranking needed — we just want the keys).
-        # Loop until a page comes back smaller than `limit` so we don't
-        # over-fetch on a single-item store.
-        page_size = 200
-        principal_prefix = memory_namespace_prefix(request.state.principal_id)
-        namespaces = [principal_prefix]
-        if request.state.principal_id == LOCAL_OWNER_PRINCIPAL_ID:
-            namespaces.insert(0, NAMESPACE)
-        if hasattr(agent_store, "alist_namespaces"):
-            namespaces = (
-                [NAMESPACE] if request.state.principal_id == LOCAL_OWNER_PRINCIPAL_ID else []
-            )
-            offset = 0
-            while True:
-                page = await agent_store.alist_namespaces(
-                    prefix=principal_prefix,
-                    limit=page_size,
-                    offset=offset,
-                )
-                if not page:
-                    break
-                namespaces.extend(page)
-                if len(page) < page_size:
-                    break
-                offset += len(page)
-        for namespace in namespaces:
-            while True:
-                items = await agent_store.asearch(namespace, limit=page_size)
-                if not items:
-                    break
-                for item in items:
-                    try:
-                        await agent_store.adelete(namespace, item.key)
-                        deleted += 1
-                    except Exception as exc:
-                        log.warning(
-                            "memory delete failed namespace=%s key=%s: %s", namespace, item.key, exc
-                        )
-                if len(items) < page_size:
-                    break
-        return {"cleared": True, "deleted_count": deleted}
-
+    app.include_router(runtime_router)
+    app.include_router(workspace_router)
     app.include_router(model_service_router)
     app.include_router(diagnostics_router)
     app.include_router(content_router)
+    app.include_router(thread_router)
+    app.include_router(plugin_router)
     app.include_router(catalog_router)
     return app
 
@@ -2103,14 +1498,6 @@ def _current_permission_batch_ids(raw_events: list[dict[str, Any]]) -> list[str]
         seen.add(request_id)
         request_ids.append(request_id)
     return request_ids
-
-
-def _thread_record_for_api(thread: dict[str, Any]) -> dict[str, Any]:
-    try:
-        metadata = json.loads(thread.get("metadata_json") or "{}")
-    except (json.JSONDecodeError, TypeError):
-        metadata = {}
-    return {**thread, "metadata": metadata if isinstance(metadata, dict) else {}}
 
 
 def _event_payload(event: dict[str, Any]) -> dict[str, Any]:

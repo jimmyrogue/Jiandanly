@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils'
 import { formatMessageTime, useI18n, type Translator } from '@/shared/i18n/i18n'
 import { FileTypeIcon } from '@/shared/files/FileTypeIcon'
 import { filePreviewKind } from '@/shared/files/filePreview'
+import { pathBasename } from '@/shared/files/path'
 import type { AgentTimelineItem, ChatMessage, LocalFileRef } from '@/shared/local-data/types'
 import { useSmoothTextStream } from '@/shared/streaming/useSmoothTextStream'
 import { completePartialMarkdown } from '@/shared/streaming/completePartialMarkdown'
@@ -649,13 +650,6 @@ function processChildren(
  *  surrounding punctuation. Case-insensitive on the extension only.
  */
 const LOCAL_FILE_RE = /(["'])([^"'`\n]+?\.[A-Za-z0-9]{1,12})\1|([^\s"'`(){}\[\]<>]+\.[A-Za-z0-9]{1,12})/g
-
-/** Cross-platform basename. Mirror of the helper in App.tsx. */
-function pathBasename(path: string): string {
-  const trimmed = path.replace(/[/\\]+$/, '')
-  const idx = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
-  return idx >= 0 ? trimmed.slice(idx + 1) : trimmed
-}
 
 /** Returns true if `path` looks absolute (POSIX or Windows). Used to
  *  decide whether we need to prepend `workspaceRoot`. */

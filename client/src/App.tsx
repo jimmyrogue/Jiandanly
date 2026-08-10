@@ -17,6 +17,7 @@ import { parseSkillDraft } from './features/chat/skillDraft'
 import { findConversationPendingApproval } from './features/chat/pendingApproval'
 import { findConversationPendingPlanApproval } from './features/chat/pendingPlanApproval'
 import { findConversationPendingQuestion } from './features/chat/pendingQuestion'
+import { useConversationDataActions } from './features/app/useConversationDataActions'
 import { useConversationProject } from './features/app/useConversationProject'
 import { useRuntimeCommands } from './features/app/useRuntimeCommands'
 import { useRuntimeDelivery } from './features/app/useRuntimeDelivery'
@@ -28,11 +29,11 @@ import {
 } from './features/app/appStorage'
 import { useRuntimeModelSettings } from './features/app/useRuntimeModelSettings'
 import { useLocalDocuments } from './features/app/useLocalDocuments'
+import { findWorkspaceByPath, useWorkspaceActions } from './features/app/useWorkspaceActions'
 import { useSidebarLayout } from './features/app/useSidebarLayout'
 import { AppShell } from './features/app/AppShell'
 import {
   cloneConversation,
-  mergeAttachments,
   sortConversationsForSidebar,
   upsertConversation,
 } from './features/app/conversationState'
@@ -43,11 +44,10 @@ import { useStore } from './features/app/state/store'
 import { I18nProvider } from './shared/i18n/I18nProvider'
 import { useI18n } from './shared/i18n/i18n'
 import { createLocalID, LocalConversationStore } from './shared/local-data/localConversations'
-import type { AgentTimelineItem, ChatMessage, ChatMode, Conversation, ConversationProject, ConversationWorkspace, ExportedModelService, LocalAttachmentRef } from './shared/local-data/types'
+import type { AgentTimelineItem, ChatMessage, ChatMode, Conversation, ConversationWorkspace, LocalAttachmentRef } from './shared/local-data/types'
 import type { ConversationSidebarHandle } from './features/chat/components/ConversationSidebar'
 import type { PluginsHubTab } from './features/plugins/PluginsHub'
 import {
-  authorizeLocalWorkspace,
   advanceLocalPluginSetupCommand,
   clearLocalMemory,
   cleanupLocalRuntimeAssetStorage,
@@ -55,9 +55,7 @@ import {
   createLocalRun,
   createMcpServer,
   deleteLocalSkill,
-  deleteLocalThread,
   deleteMcpServer,
-  diagnoseLocalWorkspace,
   getLocalRunDiagnostics,
   getLocalThreadSnapshot,
   getRuntimeConnection,
@@ -72,17 +70,14 @@ import {
   listInstalledSkills,
   listLocalPlugins,
   listLocalRuns,
-  listModelServices,
   listLocalSchedules,
   listMcpServers,
   markLocalScheduleNotified,
-  importModelService,
   parseRuntimeModelSpec,
   prepareLocalFixedRuntimeAsset,
   removeLocalFixedRuntimeAsset,
   probeRuntime,
   updateLocalSkill,
-  updateLocalThread,
   updateMcpServer,
   type AgentSettings,
   type CreateLocalRunInput,
@@ -95,8 +90,6 @@ import {
   type LocalRun as LocalHarnessRun,
   type LocalRunMetadata,
   type LocalScheduledRun,
-  type LocalWorkspaceDiagnosis,
-  type LocalWorkspaceAuthorization,
 } from './runtime/client'
 import {
   finalizeLocalRunStatus,
@@ -111,11 +104,6 @@ import {
  } from './features/app/runStreaming'
 
 const appNoticeToastID = 'shejane-app-notice'
-
-async function chooseWorkspaceDirectory(): Promise<string | undefined> {
-  const selectedPath = await window.shejaneClient?.selectWorkspaceDirectory?.()
-  return selectedPath || undefined
-}
 
 function setNotice(message: string, options: NoticeOptions = {}) {
   if (!message.trim()) {
@@ -304,6 +292,26 @@ function useAppContentViewModel() {
     runtimeThreadStorageLoad: loadRuntimeThreadIDs,
     runtimeThreadStorageSave: storeRuntimeThreadIDs,
     detachVisibleSend,
+  })
+  const {
+    deleteConversationData,
+    exportConversationData,
+    exportLocalData,
+    importLocalData,
+    renameConversation,
+    togglePinConversation,
+    updateConversationMetadata,
+  } = useConversationDataActions({
+    activeIDRef,
+    agentSettings,
+    localData,
+    locale,
+    mode,
+    refreshConversations,
+    runtimeConnection,
+    runtimeThreadIDsRef,
+    setNotice,
+    t,
   })
 
   function changeMode(next: ChatMode): void {
@@ -532,6 +540,25 @@ function useAppContentViewModel() {
         authorized: Boolean(selectedWorkspace || activeWorkspace.authorized),
       }
     : undefined
+  const {
+    authorizeWorkspace,
+    diagnoseWorkspace,
+    dropAttachments,
+    removeAttachment,
+    removeProjectFromActiveConversation,
+    selectAttachments,
+    selectProjectForActiveConversation,
+  } = useWorkspaceActions({
+    activeIDRef,
+    hasActiveRun,
+    isSending,
+    retryRecoveryTarget,
+    runtimeConnection,
+    saveActiveConversationWorkspace,
+    setNotice,
+    t,
+    updateConversationMetadata,
+  })
 
   function beginVisibleSend(): number {
     const operation = sendingOperationRef.current + 1
@@ -1205,143 +1232,6 @@ function useAppContentViewModel() {
     }
   }
 
-  /** Composer's project-picker handler — opens the OS directory picker
-   *  and binds the chosen workspace as this chat's project. Two paths:
-   *
-   *  - **No active conversation yet** (user clicked "新对话" but hasn't
-   *    sent the first message): stash the project + workspace as
-   *    pending. The next `sendMessage` will pick them up when it
-   *    creates the conversation, so the user sees the locked chip in
-   *    the composer immediately without us writing an empty chat to
-   *    IndexedDB.
-   *
-   *  - **Active conversation exists**: bind workspace + project to it
-   *    in-place. The user can explicitly remove that binding before
-   *    choosing another directory for a later Run.
-   *
-   *  Returns silently if the user cancels the OS picker. Surfaces a
-   *  toast on runtime-side errors (e.g. not yet paired). */
-  async function selectProjectForActiveConversation(recoveryTarget?: RecoveryTarget) {
-    const config = runtimeConnection ?? getRuntimeConnection()
-    if (!hasRuntimeAuthorization(config)) {
-      setNotice(t('app.notice.runtimeNotPairedAuthorize'))
-      return
-    }
-    if (!runtimeConnection) {
-      runtimeStoreActions.setConnection(config)
-    }
-    const targetConversationID = recoveryTarget?.conversationID ?? activeIDRef.current
-    const picked = await chooseWorkspaceDirectory()
-    if (!picked) return
-    try {
-      const ws = await authorizeLocalWorkspace(picked, config)
-      workspaceStoreActions.setAuthorizedWorkspaces((items) => upsertWorkspace(items, ws))
-      const name = pathBasename(ws.path) || ws.label || ws.path
-      const workspace: ConversationWorkspace = {
-        path: ws.path,
-        label: ws.label,
-        authorized: true,
-        authorizationId: ws.id,
-      }
-      const project: ConversationProject = { name }
-      if (targetConversationID) {
-        await updateConversationMetadata(targetConversationID, (item) => {
-          item.project = project
-          item.workspace = workspace
-        })
-      } else {
-        workspaceStoreActions.setPendingWorkspace(workspace)
-        workspaceStoreActions.setPendingProject(project)
-      }
-      if (recoveryTarget) {
-        setNotice(t('app.notice.workspaceBound', { label: name }))
-        await retryRecoveryTarget(recoveryTarget)
-        return
-      }
-      setNotice(t('project.notice.bound', { name }))
-    } catch (err) {
-      setNotice(err instanceof Error ? err.message : t('app.notice.workspaceAuthorizeFailed'))
-    }
-  }
-
-  async function removeProjectFromActiveConversation() {
-    if (isSending || hasActiveRun) return
-    const conversationID = activeIDRef.current
-    if (!conversationID) {
-      workspaceStoreActions.setPendingWorkspace(undefined)
-      workspaceStoreActions.setPendingProject(undefined)
-      return
-    }
-    await updateConversationMetadata(conversationID, (conversation) => {
-      delete conversation.workspace
-      delete conversation.project
-    })
-  }
-
-  async function selectAttachments() {
-    if (isSending || hasActiveRun) return
-    const paths = await window.shejaneClient?.selectAttachmentFiles?.()
-    addAttachmentPaths(paths ?? [])
-  }
-
-  function addAttachmentPaths(paths: string[]) {
-    if (!paths.length) return
-    workspaceStoreActions.setPendingAttachments((current) => mergeAttachments(
-      current,
-      paths.map((path) => ({ path, name: pathBasename(path) || path })),
-    ))
-  }
-
-  function dropAttachments(files: File[]) {
-    if (isSending || hasActiveRun) return
-    const getPathForFile = window.shejaneClient?.getPathForFile
-    if (!getPathForFile) return
-    addAttachmentPaths(files.flatMap((file) => {
-      try {
-        const path = getPathForFile(file)
-        return path ? [path] : []
-      } catch {
-        return []
-      }
-    }))
-  }
-
-  function removeAttachment(path: string) {
-    if (isSending || hasActiveRun) return
-    workspaceStoreActions.setPendingAttachments((items) => items.filter((item) => item.path !== path))
-  }
-
-  async function authorizeWorkspace(path: string): Promise<LocalWorkspaceAuthorization> {
-    if (!hasRuntimeAuthorization(runtimeConnection)) {
-      throw new Error(t('app.notice.runtimeNotPairedAuthorize'))
-    }
-    const nextPath = path.trim()
-    if (!nextPath) {
-      throw new Error(t('app.notice.emptyWorkspacePath'))
-    }
-    const workspace = await authorizeLocalWorkspace(nextPath, runtimeConnection)
-    workspaceStoreActions.setAuthorizedWorkspaces((items) => upsertWorkspace(items, workspace))
-    await saveActiveConversationWorkspace({
-      path: workspace.path,
-      label: workspace.label,
-      authorized: true,
-      authorizationId: workspace.id,
-    })
-    setNotice(t('app.notice.workspaceBound', { label: workspace.label }))
-    return workspace
-  }
-
-  async function diagnoseWorkspace(path: string): Promise<LocalWorkspaceDiagnosis> {
-    if (!hasRuntimeAuthorization(runtimeConnection)) {
-      throw new Error(t('app.notice.runtimeNotPairedDiagnose'))
-    }
-    const nextPath = path.trim()
-    if (!nextPath) {
-      throw new Error(t('app.notice.emptyWorkspacePath'))
-    }
-    return diagnoseLocalWorkspace(nextPath, runtimeConnection)
-  }
-
   async function saveActiveConversationWorkspace(workspace: ConversationWorkspace | undefined) {
     if (!activeID) {
       workspaceStoreActions.setPendingWorkspace(workspace)
@@ -1360,179 +1250,6 @@ function useAppContentViewModel() {
     setConversations((items) => sortConversationsForSidebar(
       upsertConversation(items, cloneConversation(conversation)),
     ))
-  }
-
-  async function updateConversationMetadata(
-    conversationID: string,
-    update: (conversation: Conversation) => void,
-    options: { touch?: boolean } = {},
-  ): Promise<Conversation | undefined> {
-    const conversation = await localData.get(conversationID)
-    if (!conversation) {
-      setNotice(t('app.notice.conversationMissing'))
-      return undefined
-    }
-    update(conversation)
-    if (options.touch ?? true) {
-      conversation.updatedAt = new Date().toISOString()
-    }
-    const runtimeOwnsThread = runtimeThreadIDsRef.current.has(conversationID)
-    if (runtimeOwnsThread && hasRuntimeAuthorization(runtimeConnection)) {
-      try {
-        await updateLocalThread(
-          conversationID,
-          {
-            title: conversation.title,
-            archived: conversation.archived,
-            metadata: {
-              pinned: conversation.pinned ?? false,
-              model: conversation.model,
-              project: conversation.project,
-              workspace: conversation.workspace,
-            },
-          },
-          runtimeConnection,
-        )
-      } catch (error) {
-        setNotice(error instanceof Error ? error.message : t('app.notice.localRunFailed'))
-        return undefined
-      }
-    }
-    await localData.save(conversation)
-    await refreshConversations(activeIDRef.current ?? undefined, { preserveEmptyActive: !activeIDRef.current })
-    return conversation
-  }
-
-  async function togglePinConversation(conversationID: string) {
-    const conversation = await updateConversationMetadata(
-      conversationID,
-      (item) => {
-        item.pinned = !item.pinned
-      },
-      { touch: false },
-    )
-    if (conversation) {
-      setNotice(t(conversation.pinned ? 'app.notice.conversationPinned' : 'app.notice.conversationUnpinned', { title: conversation.title }))
-    }
-  }
-
-  async function renameConversation(conversationID: string, title: string) {
-    const nextTitle = title.trim()
-    if (!nextTitle) {
-      return
-    }
-    const conversation = await updateConversationMetadata(conversationID, (item) => {
-      item.title = nextTitle
-    })
-    if (conversation) {
-      setNotice(t('app.notice.conversationRenamed', { title: conversation.title }))
-    }
-  }
-
-  async function deleteConversationData(conversationID: string) {
-    const conversation = await localData.get(conversationID)
-    if (!conversation) {
-      setNotice(t('app.notice.conversationMissing'))
-      return
-    }
-    const deletedActive = activeIDRef.current === conversationID
-    const runtimeOwnsThread = runtimeThreadIDsRef.current.has(conversationID)
-    if (runtimeOwnsThread && hasRuntimeAuthorization(runtimeConnection)) {
-      try {
-        await deleteLocalThread(conversationID, runtimeConnection)
-        const nextRuntimeThreadIDs = new Set(runtimeThreadIDsRef.current)
-        nextRuntimeThreadIDs.delete(conversationID)
-        storeRuntimeThreadIDs(nextRuntimeThreadIDs)
-        runtimeThreadIDsRef.current = nextRuntimeThreadIDs
-      } catch (error) {
-        setNotice(error instanceof Error ? error.message : t('app.notice.localRunFailed'))
-        return
-      }
-    }
-    await localData.delete(conversationID)
-    if (deletedActive) {
-      workspaceStoreActions.setPendingWorkspace(undefined)
-      workspaceStoreActions.setPendingProject(undefined)
-    }
-    await refreshConversations(deletedActive ? undefined : activeIDRef.current ?? undefined, {
-      preserveEmptyActive: !deletedActive && !activeIDRef.current,
-    })
-    setNotice(t('app.notice.conversationDeleted', { title: conversation.title }))
-  }
-
-  async function exportConversationData(conversationID: string) {
-    const conversation = await localData.get(conversationID)
-    if (!conversation) {
-      setNotice(t('app.notice.conversationMissing'))
-      return
-    }
-    const payload = {
-      version: 1,
-      exportedAt: new Date().toISOString(),
-      conversations: [conversation],
-    } as const
-    const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }))
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `shejane-conversation-${safeFilename(conversation.title)}-${new Date().toISOString().slice(0, 10)}.json`
-    link.click()
-    URL.revokeObjectURL(url)
-    setNotice(t('app.notice.conversationExported', { title: conversation.title }))
-  }
-
-  async function importLocalData(file: File | undefined) {
-    if (!file) {
-      return
-    }
-    const modelServices = await localData.importAll(await file.text())
-    if (runtimeConnection && modelServices.length > 0) {
-      const existing = new Set(
-        (await listModelServices(runtimeConnection)).map((service) => service.id),
-      )
-      for (const service of modelServices) {
-        if (
-          service.preset_id !== 'custom'
-          && service.preset_id !== 'shejane-official'
-          && service.region !== 'official'
-          && !existing.has(service.id)
-        ) {
-          await importModelService({ ...service, region: service.region }, runtimeConnection)
-        }
-      }
-      runtimeStoreActions.bumpCatalogVersion()
-    }
-    await refreshConversations()
-    setNotice(t('app.notice.localDataImported'))
-  }
-
-  async function exportLocalData() {
-    const modelServices: ExportedModelService[] = runtimeConnection
-      ? (await listModelServices(runtimeConnection)).map((service) => ({
-          id: service.id,
-          preset_id: service.preset_id,
-          name: service.name,
-          region: service.region,
-          adapter_id: service.adapter_id,
-          base_url: service.base_url,
-          models: service.models,
-        }))
-      : []
-    const conversationExport = await localData.exportAll(modelServices)
-    const payload = {
-      ...conversationExport,
-      settings: {
-        agentSettings,
-        chatMode: mode,
-        locale,
-      },
-    }
-    const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }))
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `shejane-local-data-${new Date().toISOString().slice(0, 10)}.json`
-    link.click()
-    URL.revokeObjectURL(url)
-    setNotice(t('app.notice.localDataExported'))
   }
 
   // The renderer is always hosted by Electron; Runtime is its only execution backend.
@@ -1678,34 +1395,8 @@ function keyboardShortcutModifier(): string {
   return /Mac|iPhone|iPad|iPod/.test(navigator.platform) ? '⌘' : 'Ctrl+'
 }
 
-function upsertWorkspace(items: LocalWorkspaceAuthorization[], workspace: LocalWorkspaceAuthorization): LocalWorkspaceAuthorization[] {
-  return [workspace, ...items.filter((item) => item.id !== workspace.id && item.path !== workspace.path)]
-}
-
 function upsertLocalRun(items: LocalHarnessRun[], run: LocalHarnessRun): LocalHarnessRun[] {
   return [run, ...items.filter((item) => item.id !== run.id)]
-}
-
-function findWorkspaceByPath(items: LocalWorkspaceAuthorization[], path: string): LocalWorkspaceAuthorization | undefined {
-  const normalized = path.trim()
-  return normalized ? items.find((item) => pathInsideWorkspace(item.path, normalized)) : undefined
-}
-
-function pathInsideWorkspace(root: string, target: string): boolean {
-  const normalizedRoot = trimPath(root)
-  const normalizedTarget = trimPath(target)
-  if (!normalizedRoot || !normalizedTarget) {
-    return false
-  }
-  return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}/`) || normalizedTarget.startsWith(`${normalizedRoot}\\`)
-}
-
-function trimPath(path: string): string {
-  return path.trim().replace(/[\\/]+$/u, '')
-}
-
-function safeFilename(value: string): string {
-  return value.trim().replace(/[^\p{L}\p{N}_-]+/gu, '-').replace(/^-+|-+$/gu, '').slice(0, 48) || 'conversation'
 }
 
 function createConversation(firstMessage: string, timestamp: string, fallbackTitle: string): Conversation {
@@ -1717,14 +1408,4 @@ function createConversation(firstMessage: string, timestamp: string, fallbackTit
     updatedAt: timestamp,
     messages: [],
   }
-}
-
-/** Cross-platform basename: strips trailing separators then returns the
- *  segment after the last "/" or "\\". Used as the default name for a
- *  project conversation when the user picks a directory.
- */
-function pathBasename(path: string): string {
-  const trimmed = path.replace(/[/\\]+$/, '')
-  const idx = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
-  return idx >= 0 ? trimmed.slice(idx + 1) : trimmed
 }
