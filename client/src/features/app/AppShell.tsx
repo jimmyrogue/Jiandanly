@@ -31,14 +31,13 @@ import {
   type FixedRuntimeAssetPluginID,
 } from '@/runtime/client'
 import { AppChatWorkspace } from './AppChatWorkspace'
+import { maxSidebarWidth, minSidebarWidth } from './useSidebarLayout'
 
 const SkillsView = lazy(() => import('@/features/skills/SkillsView').then((module) => ({ default: module.SkillsView })))
 const PluginsView = lazy(() => import('@/features/plugins/PluginsView').then((module) => ({ default: module.PluginsView })))
 const MCPView = lazy(() => import('@/features/mcp/MCPView').then((module) => ({ default: module.MCPView })))
 const SettingsView = lazy(() => import('@/features/settings/SettingsView').then((module) => ({ default: module.SettingsView })))
 
-const minSidebarWidth = 190
-const maxSidebarWidth = 340
 const appNoticeToastID = 'app-notice-toast'
 
 export function AppShell({ shell, chat, plugins, common }: {

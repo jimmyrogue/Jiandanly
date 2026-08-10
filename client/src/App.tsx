@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Toaster } from '@/components/ui/sonner'
 import type { ModelOption } from './features/chat/components/ModeSelector'
@@ -22,6 +22,15 @@ import { findConversationPendingQuestion } from './features/chat/pendingQuestion
 import { useConversationProject } from './features/app/useConversationProject'
 import { useRuntimeCommands } from './features/app/useRuntimeCommands'
 import { useRuntimeDelivery } from './features/app/useRuntimeDelivery'
+import {
+  loadRuntimeThreadIDs,
+  readAgentSettings,
+  readChatMode,
+  storeRuntimeThreadIDs,
+  writeAgentSettings,
+  writeChatMode,
+} from './features/app/appStorage'
+import { useSidebarLayout } from './features/app/useSidebarLayout'
 import { AppShell } from './features/app/AppShell'
 import {
   cloneConversation,
@@ -35,7 +44,7 @@ import { runtimeStore, runtimeStoreActions } from './features/app/state/runtimeS
 import { workspaceStore, workspaceStoreActions } from './features/app/state/workspaceStore'
 import { useStore } from './features/app/state/store'
 import { I18nProvider } from './shared/i18n/I18nProvider'
-import { useI18n, type Translator } from './shared/i18n/i18n'
+import { useI18n } from './shared/i18n/i18n'
 import { createLocalID, LocalConversationStore } from './shared/local-data/localConversations'
 import type { AgentTimelineItem, ChatMessage, ChatMode, Conversation, ConversationProject, ConversationWorkspace, ExportedModelService, LocalAttachmentRef, LocalFileRef, OpenDocument } from './shared/local-data/types'
 import type { ConversationSidebarHandle } from './features/chat/components/ConversationSidebar'
@@ -91,9 +100,7 @@ import {
   type CreateLocalRunInput,
   type FixedRuntimeAssetPluginID,
   type LocalArtifact,
-  type RuntimeConnection,
   type LocalToolReconciliationDecision,
-  type RuntimeProbe,
   type LocalPlanApprovalDecision,
   type LocalPermissionScope,
   type PendingRunStartCommand,
@@ -137,9 +144,6 @@ function setNotice(message: string, options: NoticeOptions = {}) {
     id: appNoticeToastID,
   })
 }
-const sidebarWidthStorageKey = 'shejane.sidebar.width.v2'
-const sidebarCollapsedStorageKey = 'shejane.sidebar.collapsed.v1'
-const runtimeThreadIDsStorageKey = 'shejane.runtime-thread-ids.v1'
 const scheduledRunNotificationPollMs = 30_000
 const runtimeHealthPollMs = 2_000
 interface LocalHarnessRunOptions {
@@ -152,163 +156,10 @@ interface LocalHarnessRunOptions {
   pluginCommand?: NonNullable<ChatMessage['pluginCommand']>
 }
 
-// Skill and MCP discovery are always available. Client stores only the user
-// choices that still exist: memory and individually disabled MCP servers.
-const agentSettingsStorageKey = 'shejane.agentSettings.v9'
-const legacyAgentSettingsStorageKey = 'shejane-agent-settings'
-// Concrete Runtime model selection. Stale values are reconciled against the
-// Runtime catalog after connection.
-const chatModeStorageKey = 'shejane.chatMode.v2'
-const defaultAgentSettings: Required<AgentSettings> = {
-  memory: 'on',
-  skills: 'on',
-  mcp: 'on',
-  mcpDisabled: [],
-  // Empty = every advanced knob inherits the runtime's own default. The user
-  // only ever populates the fields they explicitly change in the panel.
-  advanced: {},
-}
-const defaultChatMode: ChatMode = ''
-const defaultSidebarWidth = 252
-const minSidebarWidth = 190
-const maxSidebarWidth = 340
-const sidebarKeyboardStep = 12
-const sidebarMotionMs = 220
 type NoticeOptions = Omit<NonNullable<Parameters<typeof toast.message>[1]>, 'id'>
 
 interface ConversationRenderContext {
   navigationVersionAtStart: number
-}
-
-function clampSidebarWidth(width: number): number {
-  return Math.min(maxSidebarWidth, Math.max(minSidebarWidth, Math.round(width)))
-}
-
-function readSidebarWidth(): number {
-  if (typeof window === 'undefined') {
-    return defaultSidebarWidth
-  }
-  try {
-    const rawWidth = window.localStorage.getItem(sidebarWidthStorageKey)
-    if (!rawWidth) {
-      return defaultSidebarWidth
-    }
-    const parsedWidth = Number(rawWidth)
-    return Number.isFinite(parsedWidth) ? clampSidebarWidth(parsedWidth) : defaultSidebarWidth
-  } catch {
-    return defaultSidebarWidth
-  }
-}
-
-function readSidebarCollapsed(): boolean {
-  if (typeof window === 'undefined') {
-    return false
-  }
-  try {
-    return window.localStorage.getItem(sidebarCollapsedStorageKey) === '1'
-  } catch {
-    return false
-  }
-}
-
-function writeSidebarCollapsed(collapsed: boolean) {
-  try {
-    window.localStorage.setItem(sidebarCollapsedStorageKey, collapsed ? '1' : '0')
-  } catch {
-    // Local storage can be unavailable in restricted browser contexts.
-  }
-}
-
-function writeSidebarWidth(width: number) {
-  try {
-    window.localStorage.setItem(sidebarWidthStorageKey, String(clampSidebarWidth(width)))
-  } catch {
-    // Local storage can be unavailable in restricted browser contexts.
-  }
-}
-
-function readAgentSettings(): Required<AgentSettings> {
-  if (typeof window === 'undefined') {
-    return { ...defaultAgentSettings }
-  }
-  try {
-    const canonicalRaw = window.localStorage.getItem(agentSettingsStorageKey)
-    const legacyRaw = window.localStorage.getItem(legacyAgentSettingsStorageKey)
-    const canonical = parseAgentSettings(canonicalRaw)
-    const legacy = parseAgentSettings(legacyRaw)
-    const settings: Required<AgentSettings> = {
-      memory: canonical.memory === 'off' || (!canonicalRaw && legacy.memory === 'off') ? 'off' : 'on',
-      skills: 'on',
-      mcp: 'on',
-      mcpDisabled: [...new Set(
-        Array.isArray(legacy.mcpDisabled)
-          ? storedMcpDisabled(legacy)
-          : storedMcpDisabled(canonical),
-      )],
-      advanced: {},
-    }
-    if (legacyRaw !== null && writeAgentSettings(settings)) {
-      try {
-        window.localStorage.removeItem(legacyAgentSettingsStorageKey)
-      } catch {
-        // The canonical copy is durable even if legacy cleanup is unavailable.
-      }
-    }
-    return settings
-  } catch {
-    return { ...defaultAgentSettings }
-  }
-}
-
-function parseAgentSettings(raw: string | null): Partial<AgentSettings> {
-  if (!raw) return {}
-  try {
-    const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === 'object' ? parsed as Partial<AgentSettings> : {}
-  } catch {
-    return {}
-  }
-}
-
-function storedMcpDisabled(settings: Partial<AgentSettings>): string[] {
-  return Array.isArray(settings.mcpDisabled)
-    ? settings.mcpDisabled.filter((name): name is string => typeof name === 'string')
-    : []
-}
-
-function writeAgentSettings(settings: Required<AgentSettings>): boolean {
-  try {
-    window.localStorage.setItem(agentSettingsStorageKey, JSON.stringify({
-      memory: settings.memory,
-      mcpDisabled: settings.mcpDisabled,
-    }))
-    return true
-  } catch {
-    // Local storage can be unavailable in restricted browser contexts.
-    return false
-  }
-}
-
-function readChatMode(): ChatMode {
-  if (typeof window === 'undefined') {
-    return defaultChatMode
-  }
-  try {
-    const raw = window.localStorage.getItem(chatModeStorageKey)?.trim()
-    // The Runtime catalog reconciles selections that are no longer available.
-    if (raw) return parseRuntimeModelSpec(raw) ?? defaultChatMode
-  } catch {
-    // Local storage can be unavailable in restricted browser contexts.
-  }
-  return defaultChatMode
-}
-
-function writeChatMode(mode: ChatMode) {
-  try {
-    window.localStorage.setItem(chatModeStorageKey, mode)
-  } catch {
-    // Local storage can be unavailable in restricted browser contexts.
-  }
 }
 
 export function App() {
@@ -345,8 +196,6 @@ function useAppContentViewModel() {
   const clearRuntimeCommandFailureNotice = useCallback((commandId: string) => {
     runtimeCommandFailureNoticeSuppressionRef.current.delete(commandId)
   }, [])
-  const sidebarResizeStateRef = useRef<{ startX: number, startWidth: number } | null>(null)
-  const sidebarMotionTimerRef = useRef<number>()
   const runtimeThreadCursorRef = useRef(0)
   const runtimeThreadIDsRef = useRef(new Set<string>())
   const questionAnswersInFlightRef = useRef(new Set<string>())
@@ -355,6 +204,17 @@ function useAppContentViewModel() {
   const toolReconciliationsInFlightRef = useRef(new Set<string>())
   const sendingOperationRef = useRef(0)
   const conversationSidebarRef = useRef<ConversationSidebarHandle>(null)
+  const {
+    appShellStyle,
+    beginSidebarResize,
+    collapseSidebar,
+    expandSidebar,
+    handleSidebarResizeKeyDown,
+    isResizingSidebar,
+    sidebarCollapsed,
+    sidebarMotion,
+    sidebarWidth,
+  } = useSidebarLayout()
 
   const [submittedPermissionRequestIDs, setSubmittedPermissionRequestIDs] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -366,13 +226,9 @@ function useAppContentViewModel() {
   const [isSending, setIsSending] = useState(false)
   const [pendingDeleteMessageID, setPendingDeleteMessageID] = useState<string>()
   const [pendingDiagnosticsRunID, setPendingDiagnosticsRunID] = useState<string>()
-  const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed)
-  const [sidebarMotion, setSidebarMotion] = useState<'idle' | 'closing' | 'opening'>('idle')
   const [agentSettings, setAgentSettings] = useState<Required<AgentSettings>>(readAgentSettings)
   const [mainView, setMainView] = useState<'chat' | 'plugins' | 'settings'>('chat')
   const [pluginsTab, setPluginsTab] = useState<PluginsHubTab>('plugins')
-  const [isResizingSidebar, setIsResizingSidebar] = useState(false)
   const [keyboardHelpOpen, setKeyboardHelpOpen] = useState(false)
   const [modelRequiredOpen, setModelRequiredOpen] = useState(false)
   const [modelServiceAddRequested, setModelServiceAddRequested] = useState(false)
@@ -721,33 +577,6 @@ function useAppContentViewModel() {
     }
   }, [runtime?.online, runtimeConnection])
 
-  useEffect(() => {
-    writeSidebarWidth(sidebarWidth)
-  }, [sidebarWidth])
-
-  useEffect(() => {
-    writeSidebarCollapsed(sidebarCollapsed)
-  }, [sidebarCollapsed])
-
-  useEffect(() => {
-    return () => {
-      if (sidebarMotionTimerRef.current) {
-        window.clearTimeout(sidebarMotionTimerRef.current)
-      }
-    }
-  }, [])
-
-  /** Mirror the visible sidebar width onto `:root` so the sonner
-   *  toaster — which portals to <body> and therefore can't inherit the
-   *  `--sidebar-width` set on `.app-shell` — can offset its
-   *  horizontal centering to land over the chat area, not the whole
-   *  viewport. Collapsed sidebar → 0px; expanded → the same
-   *  clamp(190, sidebarWidth, 340) used in styles.css. */
-  useEffect(() => {
-    const visible = sidebarCollapsed ? 0 : Math.min(maxSidebarWidth, Math.max(minSidebarWidth, sidebarWidth))
-    document.documentElement.style.setProperty('--toast-center-offset', `${visible / 2}px`)
-  }, [sidebarWidth, sidebarCollapsed])
-
   /** Global app shortcuts. Bypass browser/OS defaults only for app-level
    *  actions that are already visible in the shell. */
   useEffect(() => {
@@ -783,39 +612,6 @@ function useAppContentViewModel() {
     })
     return unsubscribe
   }, [])
-
-  useEffect(() => {
-    if (!isResizingSidebar) {
-      return undefined
-    }
-
-    document.body.classList.add('sidebar-resizing')
-
-    function handlePointerMove(event: PointerEvent) {
-      const resizeState = sidebarResizeStateRef.current
-      if (!resizeState || !Number.isFinite(event.clientX)) {
-        return
-      }
-      const nextWidth = clampSidebarWidth(resizeState.startWidth + event.clientX - resizeState.startX)
-      setSidebarWidth(nextWidth)
-    }
-
-    function finishResize() {
-      sidebarResizeStateRef.current = null
-      setIsResizingSidebar(false)
-    }
-
-    window.addEventListener('pointermove', handlePointerMove)
-    window.addEventListener('pointerup', finishResize)
-    window.addEventListener('pointercancel', finishResize)
-
-    return () => {
-      document.body.classList.remove('sidebar-resizing')
-      window.removeEventListener('pointermove', handlePointerMove)
-      window.removeEventListener('pointerup', finishResize)
-      window.removeEventListener('pointercancel', finishResize)
-    }
-  }, [isResizingSidebar])
 
   const {
     settleDeliveredLocalRunCommand,
@@ -2026,7 +1822,6 @@ function useAppContentViewModel() {
 
   // The renderer is always hosted by Electron; Runtime is its only execution backend.
   const shellClassName = isDesktop ? 'app-window-shell electron-window-shell' : 'app-window-shell'
-  const appShellStyle = { '--sidebar-width': `${sidebarWidth}px` } as CSSProperties
   const shortcutModifier = keyboardShortcutModifier()
   const shortcutRows = [
     { label: t('shortcuts.newChat'), keys: [`${shortcutModifier}N`] },
@@ -2035,60 +1830,6 @@ function useAppContentViewModel() {
     { label: t('shortcuts.help'), keys: ['?'] },
   ]
 
-  function beginSidebarResize(event: ReactPointerEvent<HTMLDivElement>) {
-    if (event.pointerType === 'mouse' && event.button !== 0) {
-      return
-    }
-    if (!Number.isFinite(event.clientX)) {
-      return
-    }
-    event.preventDefault()
-    sidebarResizeStateRef.current = {
-      startX: event.clientX,
-      startWidth: sidebarWidth,
-    }
-    setIsResizingSidebar(true)
-  }
-
-  function handleSidebarResizeKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
-    if (event.key === 'ArrowLeft') {
-      event.preventDefault()
-      setSidebarWidth((current) => clampSidebarWidth(current - sidebarKeyboardStep))
-      return
-    }
-    if (event.key === 'ArrowRight') {
-      event.preventDefault()
-      setSidebarWidth((current) => clampSidebarWidth(current + sidebarKeyboardStep))
-      return
-    }
-    if (event.key === 'Home') {
-      event.preventDefault()
-      setSidebarWidth(minSidebarWidth)
-      return
-    }
-    if (event.key === 'End') {
-      event.preventDefault()
-      setSidebarWidth(maxSidebarWidth)
-    }
-  }
-
-  function collapseSidebar() {
-    if (sidebarMotionTimerRef.current) {
-      window.clearTimeout(sidebarMotionTimerRef.current)
-    }
-    setSidebarMotion('closing')
-    setSidebarCollapsed(true)
-    sidebarMotionTimerRef.current = window.setTimeout(() => setSidebarMotion('idle'), sidebarMotionMs)
-  }
-
-  function expandSidebar() {
-    if (sidebarMotionTimerRef.current) {
-      window.clearTimeout(sidebarMotionTimerRef.current)
-    }
-    setSidebarMotion('opening')
-    setSidebarCollapsed(false)
-    sidebarMotionTimerRef.current = window.setTimeout(() => setSidebarMotion('idle'), sidebarMotionMs)
-  }
   return {
     shell: {
       activeID,
@@ -2222,20 +1963,6 @@ function keyboardShortcutModifier(): string {
   return /Mac|iPhone|iPad|iPod/.test(navigator.platform) ? '⌘' : 'Ctrl+'
 }
 
-function runtimeStatusLabel(
-  runtime: RuntimeProbe | null,
-  config: RuntimeConnection | null,
-  t: Translator,
-): string {
-  if (!runtime?.online) {
-    return t('app.localStatus.runtimeOffline')
-  }
-  if (!hasRuntimeAuthorization(config)) {
-    return t('app.localStatus.unpaired')
-  }
-  return t('app.localStatus.connected')
-}
-
 function upsertWorkspace(items: LocalWorkspaceAuthorization[], workspace: LocalWorkspaceAuthorization): LocalWorkspaceAuthorization[] {
   return [workspace, ...items.filter((item) => item.id !== workspace.id && item.path !== workspace.path)]
 }
@@ -2275,21 +2002,6 @@ function createConversation(firstMessage: string, timestamp: string, fallbackTit
     updatedAt: timestamp,
     messages: [],
   }
-}
-
-function loadRuntimeThreadIDs(): Set<string> {
-  try {
-    const value = JSON.parse(localStorage.getItem(runtimeThreadIDsStorageKey) ?? '[]')
-    return new Set(
-      Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : [],
-    )
-  } catch {
-    return new Set()
-  }
-}
-
-function storeRuntimeThreadIDs(ids: Set<string>) {
-  localStorage.setItem(runtimeThreadIDsStorageKey, JSON.stringify([...ids]))
 }
 
 /** Cross-platform basename: strips trailing separators then returns the
