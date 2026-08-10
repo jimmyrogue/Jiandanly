@@ -3,32 +3,22 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 from contextlib import AsyncExitStack
 from typing import Any
 
-from langchain_core.messages import AIMessageChunk, HumanMessage
+from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 
 from ..agent.builder import build_agent
 from ..agent.context_builder import RuntimeContext
-from ..event_translator import translate
 from ..llm.errors import ModelServiceError
-from ..llm.runtime import bind_runtime_model
 from ..observability import build_callbacks
 from ..plugins.identity import plugin_action_tool_version
 from ..run_configuration import _apply_advanced_overrides, _execution_policy_snapshot
 from ..tools.memory import extract_memory_write_facts
-from ..tools.runtime import bind_runtime_tools
-from .assistant_projection import (
-    _assistant_draft_from_state,
-    _assistant_draft_from_update,
-    _assistant_round_from_update,
-)
-from .errors import ExecutionIdentityError, ExecutionSettlementError, RunOutcome
+from .errors import ExecutionIdentityError, RunOutcome
 from .failure_projection import (
-    _completion_failure_payload,
     _repair_context_from_metadata,
     _repair_context_rejected,
     _repair_rejected_failure_payload,
@@ -36,13 +26,8 @@ from .failure_projection import (
     _retry_context_from_metadata,
     _run_failed_payload,
 )
-from .inputs import _generate_conversation_title, _plugin_input_snapshots
-from .interrupts import build_waiting_handoff, handle_run_interrupt
-from .stream_state import (
-    _checkpoint_id_from_stream,
-    _task_interrupts,
-    _waiting_status_for_interrupts,
-)
+from .graph_execution import GraphStreamExecution
+from .inputs import _plugin_input_snapshots
 
 log = logging.getLogger("shejane_runtime.runs")
 
@@ -408,273 +393,21 @@ class RunGraphDriverMixin:
                 # run.started + the "running" status were already emitted at
                 # the top of the try block (before resolution/agent build).
 
-            # Auto-approve loop. We may iterate multiple times if the
-            # run hits successive HITL gates and every gated tool has
-            # an in-run `scope=run` grant. Each iteration drains one
-            # astream() cycle; on every paused state we either:
-            #   • surface to the user (one-shot approval or a tool the
-            #     user hasn't granted run-scope on), OR
-            #   • build a synthetic Command(resume={"decisions": [...]})
-            #     and loop again — making the pause invisible to the UI.
-            current_checkpoint_id = graph_checkpoint_id
-            while True:
-                latest_checkpoint: dict[str, Any] | None = None
-                if runtime_context.model is None:
-                    raise RuntimeError("agent model is not bound")
-                with (
-                    bind_runtime_model(runtime_context.model),  # type: ignore[arg-type]
-                    bind_runtime_tools(runtime_context.dynamic_tools),  # type: ignore[arg-type]
-                ):
-                    active_model_round: tuple[object, object] | None = None
-                    active_model_call_id: str | None = None
-                    async for part in agent.astream(
-                        input_payload,
-                        config=config,
-                        context=runtime_context,
-                        stream_mode=["updates", "messages", "custom", "checkpoints"],
-                        durability="sync",
-                        version="v2",
-                    ):
-                        if not isinstance(part, dict):
-                            continue
-                        kind = part.get("type")
-                        payload = part.get("data")
-                        if not isinstance(kind, str):
-                            continue
-                        if kind == "messages" and isinstance(payload, tuple) and len(payload) == 2:
-                            chunk, metadata = payload
-                            if isinstance(chunk, AIMessageChunk):
-                                if (
-                                    not isinstance(metadata, dict)
-                                    or metadata.get("langgraph_node") != "model"
-                                    or part.get("ns")
-                                ):
-                                    continue
-                                chunk_round_id = str(
-                                    chunk.additional_kwargs.get("runtime_model_call_id") or ""
-                                )
-                                if chunk_round_id:
-                                    active_model_call_id = chunk_round_id
-                                model_round = (
-                                    metadata.get("langgraph_checkpoint_ns"),
-                                    metadata.get("langgraph_step"),
-                                )
-                                if model_round != active_model_round:
-                                    await self._enqueue(
-                                        wakeup,
-                                        run_id,
-                                        "llm.round.started",
-                                        {"round_id": active_model_call_id},
-                                    )
-                                    active_model_round = model_round
-                        if kind == "checkpoints":
-                            checkpoint_id = _checkpoint_id_from_stream(payload)
-                            if checkpoint_id is not None:
-                                await self.store.advance_graph_checkpoint(
-                                    run_id,
-                                    graph_thread_id=graph_thread_id,
-                                    expected_checkpoint_id=current_checkpoint_id,
-                                    checkpoint_id=checkpoint_id,
-                                )
-                                current_checkpoint_id = checkpoint_id
-                                latest_checkpoint = payload
-                            continue
-                        if kind == "updates" and not part.get("ns"):
-                            draft = _assistant_draft_from_update(payload)
-                            if draft is not None:
-                                await self.store.update_assistant_draft(
-                                    run_id=run_id,
-                                    **draft,
-                                )
-                            assistant_round = _assistant_round_from_update(
-                                payload,
-                                allow_reasoning_summary=bool(
-                                    isinstance(model_binding, dict)
-                                    and model_binding.get("display_reasoning_summary") is True
-                                ),
-                            )
-                            if assistant_round is not None:
-                                (
-                                    round_event,
-                                    round_created,
-                                ) = await self.store.commit_assistant_round(run_id, assistant_round)
-                                if round_created:
-                                    self._trace_stream_event(
-                                        self._event_stream.stored_event_envelope(round_event)
-                                    )
-                                committed_item_ids = []
-                                if str(assistant_round.get("reasoning_summary") or "").strip():
-                                    committed_item_ids.append(
-                                        f"round:{assistant_round['round_id']}:reasoning"
-                                    )
-                                if str(assistant_round.get("text") or "").strip():
-                                    committed_item_ids.append(
-                                        f"round:{assistant_round['round_id']}:progress"
-                                    )
-                                await self._enqueue(
-                                    wakeup,
-                                    run_id,
-                                    "llm.round.closed",
-                                    {
-                                        "round_id": assistant_round["round_id"],
-                                        "committed_item_ids": committed_item_ids,
-                                    },
-                                )
-                        if part.get("ns"):
-                            continue
-                        for translated in translate(kind, payload):
-                            data = (
-                                translated["data"]
-                                if isinstance(translated["data"], dict)
-                                else {"value": translated["data"]}
-                            )
-                            if translated["event"].startswith("llm.") and active_model_call_id:
-                                data.setdefault("round_id", active_model_call_id)
-                            await self._enqueue(wakeup, run_id, translated["event"], data)
-
-                if current_checkpoint_id is None:
-                    raise RuntimeError("graph execution produced no checkpoint")
-                if latest_checkpoint is None:
-                    raise RuntimeError("graph execution produced no checkpoint payload")
-                config = {
-                    **config,
-                    "configurable": {
-                        **config["configurable"],
-                        "checkpoint_id": current_checkpoint_id,
-                    },
-                }
-                # v2 checkpoint parts are emitted before pending interrupt
-                # writes are folded into tasks. The public state read at this
-                # exact branch head includes them; v3 lifecycle streams can
-                # replace this once that API is stable.
-                snapshot = await agent.aget_state(config)
-                next_nodes = list(snapshot.next)
-                if not next_nodes:
-                    completion_failure = _completion_failure_payload(
-                        snapshot.values,
-                        current_run_id=run_id,
-                    )
-                    if completion_failure is not None:
-                        if repair_context is not None:
-                            await self._enqueue(
-                                wakeup,
-                                run_id,
-                                "repair.workflow",
-                                _repair_workflow_payload(
-                                    repair_context,
-                                    status="failed",
-                                    reason=str(completion_failure["error"]),
-                                ),
-                            )
-                        return RunOutcome(
-                            status="failed",
-                            event_type="run.failed",
-                            payload=completion_failure,
-                        )
-                    final_draft = _assistant_draft_from_state(snapshot.values, run_id=run_id)
-                    if final_draft is not None:
-                        await self.store.update_assistant_draft(run_id=run_id, **final_draft)
-                    draft = await self.store.get_assistant_draft(run_id)
-                    if draft is None:
-                        raise ExecutionSettlementError("final assistant draft is missing")
-                    if repair_context is not None:
-                        await self._enqueue(
-                            wakeup,
-                            run_id,
-                            "repair.workflow",
-                            _repair_workflow_payload(repair_context, status="completed"),
-                        )
-                    result_payload: dict[str, Any] = {}
-                    if thread_title_seed:
-                        try:
-                            generated_title = await _generate_conversation_title(
-                                getattr(runtime_context, "title_model", None),
-                                user_input=self._user_inputs.get(run_id, goal),
-                                assistant_answer=str(draft.get("content") or ""),
-                            )
-                        except asyncio.CancelledError:
-                            raise
-                        except Exception as exc:
-                            log.warning(
-                                "run %s title generation failed: %s",
-                                run_id,
-                                type(exc).__name__,
-                            )
-                        else:
-                            if generated_title:
-                                result_payload = {
-                                    "thread_title": generated_title,
-                                    "thread_title_seed": thread_title_seed,
-                                }
-                    return RunOutcome(
-                        status="completed",
-                        event_type="run.completed",
-                        payload=result_payload,
-                    )
-
-                # Gather interrupts from BOTH places LangGraph stores them:
-                #   • snapshot.interrupts — aggregated top-level list
-                #     (LangGraph 1.x). Reliable when present.
-                #   • snapshot.tasks[*].interrupts — per-task lists. With
-                #     parallel tool calls (e.g. ToolNode dispatches 3
-                #     web.search + 1 user.ask in one step), each tool
-                #     gets its own task; the user.ask interrupt lands in
-                #     whichever task index ran it, NOT necessarily
-                #     tasks[0]. Earlier code only checked tasks[0] and
-                #     missed the interrupt → run stalled with empty
-                #     interrupts and `next=["tools"]`.
-                # We prefer the top-level list and fall back to scanning
-                # every task. Dedupe by interrupt id so neither source
-                # double-counts.
-                interrupts_top = list(getattr(snapshot, "interrupts", ()) or ())
-                interrupts_per_task = [
-                    intr for task in (snapshot.tasks or ()) for intr in _task_interrupts(task)
-                ]
-                seen_ids: set[Any] = set()
-                interrupts: list[Any] = []
-                for intr in interrupts_top + interrupts_per_task:
-                    key = getattr(intr, "id", None)
-                    if key is None:
-                        interrupts.append(intr)
-                        continue
-                    if key in seen_ids:
-                        continue
-                    seen_ids.add(key)
-                    interrupts.append(intr)
-                interrupt_ids = [
-                    str(getattr(interrupt, "id", None) or f"anonymous-{index}")
-                    for index, interrupt in enumerate(interrupts)
-                ]
-                wait_cycle_id = (
-                    "wait_"
-                    + hashlib.sha256(
-                        f"{run_id}\0{current_checkpoint_id}\0".encode()
-                        + "\0".join(interrupt_ids).encode()
-                    ).hexdigest()[:32]
-                )
-                # Surface to user.
-                for snap_interrupt in interrupts:
-                    await handle_run_interrupt(
-                        self.store,
-                        self._enqueue,
-                        wakeup,
-                        run_id,
-                        snap_interrupt,
-                        wait_cycle_id=wait_cycle_id,
-                    )
-                return RunOutcome(
-                    status=_waiting_status_for_interrupts(interrupts),
-                    event_type="run.waiting",
-                    payload={
-                        "next": next_nodes,
-                        "wait_cycle_id": wait_cycle_id,
-                        "interrupts": [
-                            {"value": getattr(i, "value", None), "id": getattr(i, "id", None)}
-                            for i in interrupts
-                        ],
-                        "handoff": await build_waiting_handoff(self.store, run_id),
-                    },
-                )
+            return await GraphStreamExecution(
+                coordinator=self,
+                agent=agent,
+                runtime_context=runtime_context,
+                config=config,
+                input_payload=input_payload,
+                run_id=run_id,
+                graph_thread_id=graph_thread_id,
+                checkpoint_id=graph_checkpoint_id,
+                model_binding=model_binding,
+                repair_context=repair_context,
+                thread_title_seed=thread_title_seed,
+                goal=goal,
+                wakeup=wakeup,
+            ).run()
 
         except asyncio.CancelledError:
             current_task = asyncio.current_task()
