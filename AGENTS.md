@@ -31,7 +31,7 @@ See CLAUDE.md for the architecture map and critical invariants. Use the canonica
 
 ## Commands
 
-Run before handing work back:
+Do not run automated tests, lint, builds, or `make ci` after routine edits, bug fixes, refactors, or commits. Run the full local gate only when preparing a release or when the user explicitly requests verification:
 
 ```bash
 make ci          # everything CI runs locally: lint + test + build + test-e2e
@@ -39,7 +39,9 @@ make build
 git diff --check
 ```
 
-Focused checks by fault domain:
+Outside release preparation, `git diff --check` is the only default handoff check because it does not execute the product or a test suite.
+
+Focused checks by fault domain are reference commands for release investigation or explicit user requests; do not run them automatically during routine work:
 
 ```bash
 make test-client         # Vitest (pnpm --filter @shejane/client test --run)
@@ -98,12 +100,7 @@ Client UI expectations:
 
 ## Testing Expectations
 
-Use TDD for new behavior whenever practical:
-
-1. Add a focused failing test.
-2. Run the focused command and see the expected failure.
-3. Implement the smallest passing change.
-4. Run focused tests, then `make test`.
+Do not execute tests during routine feature work, bug fixes, refactors, documentation changes, or commits. Execute tests only as part of release preparation or when the user explicitly asks for tests or verification.
 
 Add or update tests when touching:
 
