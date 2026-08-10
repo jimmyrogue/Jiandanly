@@ -5,11 +5,11 @@ import {
   type SubagentLifecycleEventType,
   type SubagentLifecyclePayload,
 } from '@shejane/runtime-sdk'
-import { createTranslator, type TranslationKey, type Translator } from '../../shared/i18n/i18n'
+import { createTranslator, type TranslationKey, type Translator } from '../../../shared/i18n/i18n'
 import type {
   AgentSubagentStatus,
   AgentTimelineItem,
-} from '../../shared/local-data/types'
+} from '../../../shared/local-data/types'
 import { decisionTimelineItem } from './chatDecisionTimeline'
 import {
   stringValue,

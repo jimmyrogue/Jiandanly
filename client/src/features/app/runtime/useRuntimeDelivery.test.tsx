@@ -2,8 +2,8 @@ import { act, cleanup, render, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LocalConversationStore } from '@/shared/local-data/localConversations'
 import type { PendingRuntimeCommand } from '@/runtime/client'
-import { runtimeStoreActions } from './state/runtimeStore'
-import { workspaceStoreActions } from './state/workspaceStore'
+import { runtimeStoreActions } from '../state/runtimeStore'
+import { workspaceStoreActions } from '../state/workspaceStore'
 import { useRuntimeDelivery } from './useRuntimeDelivery'
 
 const deliverPendingRuntimeCommands = vi.hoisted(() => vi.fn())

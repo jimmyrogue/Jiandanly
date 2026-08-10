@@ -4,7 +4,7 @@ import {
   type RunPresentationItem,
   type RunPresentationState,
 } from '@shejane/runtime-sdk'
-import type { LocalThreadItem } from '../../runtime/client'
+import type { LocalThreadItem } from '../../../runtime/client'
 
 /** Compatibility Adapter for Runtime builds that predate `presentations`. */
 export function projectLegacyRunPresentation(

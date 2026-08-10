@@ -16,7 +16,7 @@ import {
   pluginCommandToken,
   pluginToken,
   skillToken,
-} from '../skillDraft'
+} from '../../skillDraft'
 
 // Display labels for function ids. Extensible: add more capabilities here.
 export const FUNCTION_LABELS: Record<string, string> = {

@@ -2,12 +2,12 @@ import {
   createRunPresentationState,
   type AgentRunEvent,
 } from '@shejane/runtime-sdk'
-import { createTranslator, type Translator } from '../../shared/i18n/i18n'
+import { createTranslator, type Translator } from '../../../shared/i18n/i18n'
 import type {
   ChatMessage,
   Conversation,
   MessageStatus,
-} from '../../shared/local-data/types'
+} from '../../../shared/local-data/types'
 import {
   listLocalRunEvents,
   parseRuntimeModelSpec,
@@ -15,7 +15,7 @@ import {
   type LocalThreadItem,
   type LocalThreadSnapshot,
   type RuntimeConnection,
-} from '../../runtime/client'
+} from '../../../runtime/client'
 import { timelineItem } from './chatStore'
 import { projectLegacyRunPresentation } from './legacyRunPresentation'
 import { projectSubagents } from './runtimeSubagentProjection'

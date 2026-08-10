@@ -2,12 +2,12 @@ import { useCallback, type MutableRefObject, type Dispatch, type SetStateAction 
 import { toast } from 'sonner'
 import { createLocalID } from '@/shared/local-data/localConversations'
 import type { Translator } from '@/shared/i18n/i18n'
-import { mergeAttachments } from './conversationState'
+import { mergeAttachments } from '../conversationState'
 import { runtimeCommandErrorMessage } from './runtimeCommandError'
-import { conversationStore } from './state/conversationStore'
-import { runtimeStore } from './state/runtimeStore'
-import { workspaceStoreActions } from './state/workspaceStore'
-import { useStore } from './state/store'
+import { conversationStore } from '../state/conversationStore'
+import { runtimeStore } from '../state/runtimeStore'
+import { workspaceStoreActions } from '../state/workspaceStore'
+import { useStore } from '../state/store'
 import type {
   ChatMode,
   Conversation,
@@ -28,7 +28,7 @@ import {
   injectLocalRunInstruction,
   parseRuntimeModelSpec,
 } from '@/runtime/client'
-import type { ConversationRenderContext } from './useConversationProject'
+import type { ConversationRenderContext } from '../useConversationProject'
 import type { LocalHarnessRunOptions } from './runExecution'
 import {
   useRunDecisionCommands,

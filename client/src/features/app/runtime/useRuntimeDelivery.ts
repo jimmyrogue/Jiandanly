@@ -11,9 +11,9 @@ import {
   type RuntimeCommandResult,
   type RuntimeConnection,
 } from '@/runtime/client'
-import { runtimeStore } from './state/runtimeStore'
-import { workspaceStore } from './state/workspaceStore'
-import { useStore } from './state/store'
+import { runtimeStore } from '../state/runtimeStore'
+import { workspaceStore } from '../state/workspaceStore'
+import { useStore } from '../state/store'
 
 type NoticeOptions = Omit<NonNullable<Parameters<typeof toast.message>[1]>, 'id'>
 

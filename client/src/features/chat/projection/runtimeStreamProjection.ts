@@ -3,12 +3,12 @@ import {
   createRunPresentationState,
   type AgentRunEvent,
 } from '@shejane/runtime-sdk'
-import type { Translator } from '../../shared/i18n/i18n'
+import type { Translator } from '../../../shared/i18n/i18n'
 import type {
   AgentTimelineItem,
   ChatMessage,
   LocalFileRef,
-} from '../../shared/local-data/types'
+} from '../../../shared/local-data/types'
 import { projectTransientAssistantText, timelineItem } from './chatStore'
 import { applySubagentLifecycleEvent } from './runtimeSubagentProjection'
 

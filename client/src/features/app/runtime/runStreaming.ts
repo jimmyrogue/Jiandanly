@@ -5,7 +5,7 @@ import {
   projectRuntimeThread,
   recordLocalEventCursor,
   type ToolArgsByCallId,
-} from '@/features/chat/runtimeProjection'
+} from '@/features/chat/projection/runtimeProjection'
 import type { Translator } from '@/shared/i18n/i18n'
 import type { ChatMessage, Conversation, LocalFileRef } from '@/shared/local-data/types'
 import {

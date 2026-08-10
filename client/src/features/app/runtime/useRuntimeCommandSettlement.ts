@@ -23,10 +23,10 @@ import {
   type RuntimeCommandResult,
   type RuntimeConnection,
 } from '@/runtime/client'
-import { upsertConversation } from './conversationState'
+import { upsertConversation } from '../conversationState'
 import { runtimeCommandErrorMessage } from './runtimeCommandError'
-import { conversationStoreActions } from './state/conversationStore'
-import { workspaceStoreActions } from './state/workspaceStore'
+import { conversationStoreActions } from '../state/conversationStore'
+import { workspaceStoreActions } from '../state/workspaceStore'
 
 export type PendingPluginCommand =
   | PendingPluginInstallCommand

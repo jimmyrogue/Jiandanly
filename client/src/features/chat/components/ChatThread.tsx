@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useRef } from 'react'
-import { AgentProgress, type AgentFailureAction } from './AgentProgress'
+import { AgentProgress, type AgentFailureAction } from './progress/AgentProgress'
 import { AnsweredQuestions } from './AnsweredQuestions'
 import { MessageBubble } from './MessageBubble'
 import { RunProcess } from './RunProcess'

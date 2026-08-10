@@ -7,8 +7,8 @@ import type {
   AgentSubagentProjection,
   AgentSubagentReceiptStatus,
   AgentSubagentStatus,
-} from '../../shared/local-data/types'
-import type { LocalRun } from '../../runtime/client'
+} from '../../../shared/local-data/types'
+import type { LocalRun } from '../../../runtime/client'
 
 /** Advance the disposable Client projection from one Runtime event.
  *

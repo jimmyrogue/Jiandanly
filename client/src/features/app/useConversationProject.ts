@@ -23,7 +23,7 @@ import {
   type RuntimeConnection,
 } from '@/runtime/client'
 import type { LocalConversationStore } from '@/shared/local-data/localConversations'
-import { projectRuntimeThreadCache } from '@/features/chat/runtimeProjection'
+import { projectRuntimeThreadCache } from '@/features/chat/projection/runtimeProjection'
 import type { Translator } from '@/shared/i18n/i18n'
 import {
   cloneConversation,
@@ -32,7 +32,7 @@ import {
   upsertConversation,
 } from './conversationState'
 import { chooseAvailableMode } from './modelSelection'
-import { createConversation } from './runExecution'
+import { createConversation } from './runtime/runExecution'
 import { conversationStore, conversationStoreActions } from './state/conversationStore'
 import { runtimeStore } from './state/runtimeStore'
 import { workspaceStoreActions } from './state/workspaceStore'

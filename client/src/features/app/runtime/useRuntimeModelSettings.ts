@@ -15,10 +15,10 @@ import {
   updateRuntimeSettings,
   type AgentSettings,
 } from '@/runtime/client'
-import { readAgentSettings, readChatMode, writeAgentSettings, writeChatMode } from './appStorage'
-import { chooseAvailableMode } from './modelSelection'
-import { runtimeStore, runtimeStoreActions } from './state/runtimeStore'
-import { useStore } from './state/store'
+import { readAgentSettings, readChatMode, writeAgentSettings, writeChatMode } from '../appStorage'
+import { chooseAvailableMode } from '../modelSelection'
+import { runtimeStore, runtimeStoreActions } from '../state/runtimeStore'
+import { useStore } from '../state/store'
 
 export function useRuntimeModelSettings({
   t,

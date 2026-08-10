@@ -10,27 +10,27 @@ import {
   useConversationProject,
   type ConversationRenderContext,
 } from './features/app/useConversationProject'
-import { useRuntimeCommands } from './features/app/useRuntimeCommands'
-import { useRuntimeDelivery } from './features/app/useRuntimeDelivery'
-import { useRunDecisionGuards } from './features/app/useRunDecisionGuards'
-import { useRuntimeObservers } from './features/app/useRuntimeObservers'
-import { useMessageRecoveryActions } from './features/app/useMessageRecoveryActions'
+import { useRuntimeCommands } from './features/app/runtime/useRuntimeCommands'
+import { useRuntimeDelivery } from './features/app/runtime/useRuntimeDelivery'
+import { useRunDecisionGuards } from './features/app/runtime/useRunDecisionGuards'
+import { useRuntimeObservers } from './features/app/runtime/useRuntimeObservers'
+import { useMessageRecoveryActions } from './features/app/runtime/useMessageRecoveryActions'
 import { useAppShortcuts } from './features/app/useAppShortcuts'
 import {
   executeLocalHarnessMessage,
   type LocalHarnessRunOptions,
-} from './features/app/runExecution'
+} from './features/app/runtime/runExecution'
 import {
   loadRuntimeThreadIDs,
   readChatMode,
   storeRuntimeThreadIDs,
 } from './features/app/appStorage'
-import { useRuntimeModelSettings } from './features/app/useRuntimeModelSettings'
+import { useRuntimeModelSettings } from './features/app/runtime/useRuntimeModelSettings'
 import { useLocalDocuments } from './features/app/useLocalDocuments'
 import { findWorkspaceByPath, useWorkspaceActions } from './features/app/useWorkspaceActions'
 import { useSidebarLayout } from './features/app/useSidebarLayout'
 import { AppShell } from './features/app/AppShell'
-import { runtimeCommandErrorMessage } from './features/app/runtimeCommandError'
+import { runtimeCommandErrorMessage } from './features/app/runtime/runtimeCommandError'
 import { runtimeStoreActions } from './features/app/state/runtimeStore'
 import { workspaceStore, workspaceStoreActions } from './features/app/state/workspaceStore'
 import { useStore } from './features/app/state/store'
@@ -68,11 +68,11 @@ import {
 import {
   finalizeLocalRunStatus,
   projectRuntimeThreadCache,
-} from './features/chat/runtimeProjection'
+} from './features/chat/projection/runtimeProjection'
 import {
   downloadLocalRunDiagnostics,
   streamLocalMessage,
-} from './features/app/runStreaming'
+} from './features/app/runtime/runStreaming'
 
 const appNoticeToastID = 'shejane-app-notice'
 

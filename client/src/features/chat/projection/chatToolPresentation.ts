@@ -1,5 +1,5 @@
-import type { Translator } from '../../shared/i18n/i18n'
-import type { AgentToolDetail } from '../../shared/local-data/types'
+import type { Translator } from '../../../shared/i18n/i18n'
+import type { AgentToolDetail } from '../../../shared/local-data/types'
 
 export const TOOL_TARGET_MAX = 40
 

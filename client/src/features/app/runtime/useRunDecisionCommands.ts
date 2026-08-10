@@ -17,13 +17,13 @@ import {
   type PendingQuestionAnswerCommand,
   type PendingToolReconcileCommand,
 } from '@/runtime/client'
-import { cloneConversation } from './conversationState'
+import { cloneConversation } from '../conversationState'
 import { runtimeCommandErrorMessage } from './runtimeCommandError'
-import { conversationStore } from './state/conversationStore'
-import { runtimeStore } from './state/runtimeStore'
-import { useStore } from './state/store'
-import { workspaceStoreActions } from './state/workspaceStore'
-import type { ConversationRenderContext } from './useConversationProject'
+import { conversationStore } from '../state/conversationStore'
+import { runtimeStore } from '../state/runtimeStore'
+import { useStore } from '../state/store'
+import { workspaceStoreActions } from '../state/workspaceStore'
+import type { ConversationRenderContext } from '../useConversationProject'
 
 type NoticeOptions = Omit<NonNullable<Parameters<typeof toast.message>[1]>, 'id'>
 type RuntimeLocalMessageStreamer = typeof import('./runStreaming').streamLocalMessage

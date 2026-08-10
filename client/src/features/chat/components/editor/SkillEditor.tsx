@@ -36,7 +36,7 @@ import {
   PluginNode,
   SkillNode,
 } from './SkillNode'
-import { tokenizeDraft } from '../skillDraft'
+import { tokenizeDraft } from '../../skillDraft'
 import { useI18n } from '@/shared/i18n/i18n'
 import type { InstalledSkill, McpServerInfo, PluginDetail } from '@/runtime/client'
 import { PluginMentionTypeaheadPlugin } from './PluginMentionTypeaheadPlugin'

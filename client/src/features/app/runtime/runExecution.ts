@@ -30,18 +30,18 @@ import { deriveAgentHistory } from '@/features/chat/conversationHistory'
 import {
   finalizeLocalRunStatus,
   projectRuntimeThreadCache,
-} from '@/features/chat/runtimeProjection'
+} from '@/features/chat/projection/runtimeProjection'
 import { parseSkillDraft } from '@/features/chat/skillDraft'
 import { runtimeCommandErrorMessage } from './runtimeCommandError'
-import { runtimeStoreActions } from './state/runtimeStore'
-import { workspaceStoreActions } from './state/workspaceStore'
-import { writeChatMode } from './appStorage'
+import { runtimeStoreActions } from '../state/runtimeStore'
+import { workspaceStoreActions } from '../state/workspaceStore'
+import { writeChatMode } from '../appStorage'
 import {
   notifyAgentCompleted,
   notifyAgentFailed,
   streamLocalMessage,
 } from './runStreaming'
-import type { ConversationRenderContext } from './useConversationProject'
+import type { ConversationRenderContext } from '../useConversationProject'
 
 export interface LocalHarnessRunOptions {
   parentRunId?: string

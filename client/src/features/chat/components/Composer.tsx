@@ -15,7 +15,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { ModeSelector, type ModelOption } from './ModeSelector'
-import { SkillEditor } from './SkillEditor'
+import { SkillEditor } from './editor/SkillEditor'
 import { useI18n } from '@/shared/i18n/i18n'
 import { FileTypeIcon } from '@/shared/files/FileTypeIcon'
 import type {

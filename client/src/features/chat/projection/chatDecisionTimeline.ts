@@ -1,9 +1,9 @@
-import type { Translator } from '../../shared/i18n/i18n'
+import type { Translator } from '../../../shared/i18n/i18n'
 import type {
   AgentPlanTodo,
   AgentQuestionItem,
   AgentTimelineItem,
-} from '../../shared/local-data/types'
+} from '../../../shared/local-data/types'
 import { stringValue, toolActionLabel } from './chatToolPresentation'
 
 export function decisionTimelineItem(

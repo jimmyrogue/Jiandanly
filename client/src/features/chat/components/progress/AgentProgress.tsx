@@ -4,8 +4,8 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/shared/i18n/i18n'
 import type { AgentToolDetail, ChatMessage } from '@/shared/local-data/types'
-import { withStableTimelineKeys } from '../timelineKeys'
-import type { AgentFailureAction } from '../recovery'
+import { withStableTimelineKeys } from '../../timelineKeys'
+import type { AgentFailureAction } from '../../recovery'
 import {
   ACTIVE_RUN_STATUSES,
   OPERATION_TYPES,
@@ -23,7 +23,7 @@ import {
   type AgentProgressState,
 } from './agentProgressState'
 
-export type { AgentFailureAction } from '../recovery'
+export type { AgentFailureAction } from '../../recovery'
 
 export function AgentProgress({
   message,

@@ -1,6 +1,6 @@
 import type { Translator } from '@/shared/i18n/i18n'
 import type { AgentTimelineItem, ChatMessage } from '@/shared/local-data/types'
-import { failureRecoveryAction, type AgentFailureAction } from '../recovery'
+import { failureRecoveryAction, type AgentFailureAction } from '../../recovery'
 
 export interface FailureActionCTA {
   action: AgentFailureAction

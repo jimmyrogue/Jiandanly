@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentRunEvent } from '@shejane/runtime-sdk'
-import type { LocalThreadSnapshot } from '../../runtime/client'
-import { createTranslator } from '../../shared/i18n/i18n'
-import type { ChatMessage, Conversation, LocalFileRef } from '../../shared/local-data/types'
+import type { LocalThreadSnapshot } from '../../../runtime/client'
+import { createTranslator } from '../../../shared/i18n/i18n'
+import type { ChatMessage, Conversation, LocalFileRef } from '../../../shared/local-data/types'
 import { timelineItem } from './chatStore'
-import { findConversationPendingApproval } from './pendingApproval'
+import { findConversationPendingApproval } from '../pendingApproval'
 import {
   appendLocalDelta,
   applyRunPresentationEvent,

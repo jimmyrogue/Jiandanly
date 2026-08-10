@@ -12,8 +12,8 @@ import {
   type RuntimeProbe,
 } from '@/runtime/client'
 import { notifyScheduledRun } from './runStreaming'
-import { runtimeStoreActions } from './state/runtimeStore'
-import { workspaceStoreActions } from './state/workspaceStore'
+import { runtimeStoreActions } from '../state/runtimeStore'
+import { workspaceStoreActions } from '../state/workspaceStore'
 
 const scheduledRunNotificationPollMs = 30_000
 const runtimeHealthPollMs = 2_000
