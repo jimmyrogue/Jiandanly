@@ -27,6 +27,7 @@ import {
   writeChatMode,
 } from './features/app/appStorage'
 import { useRuntimeModelSettings } from './features/app/useRuntimeModelSettings'
+import { useLocalDocuments } from './features/app/useLocalDocuments'
 import { useSidebarLayout } from './features/app/useSidebarLayout'
 import { AppShell } from './features/app/AppShell'
 import {
@@ -42,7 +43,7 @@ import { useStore } from './features/app/state/store'
 import { I18nProvider } from './shared/i18n/I18nProvider'
 import { useI18n } from './shared/i18n/i18n'
 import { createLocalID, LocalConversationStore } from './shared/local-data/localConversations'
-import type { AgentTimelineItem, ChatMessage, ChatMode, Conversation, ConversationProject, ConversationWorkspace, ExportedModelService, LocalAttachmentRef, LocalFileRef, OpenDocument } from './shared/local-data/types'
+import type { AgentTimelineItem, ChatMessage, ChatMode, Conversation, ConversationProject, ConversationWorkspace, ExportedModelService, LocalAttachmentRef } from './shared/local-data/types'
 import type { ConversationSidebarHandle } from './features/chat/components/ConversationSidebar'
 import type { PluginsHubTab } from './features/plugins/PluginsHub'
 import {
@@ -57,13 +58,10 @@ import {
   deleteLocalThread,
   deleteMcpServer,
   diagnoseLocalWorkspace,
-  fetchWorkspaceFile,
-  fetchRunInput,
   getLocalRunDiagnostics,
   getLocalThreadSnapshot,
   getRuntimeConnection,
   hasRuntimeAuthorization,
-  getLocalArtifact,
   getLocalArtifactContent,
   getLocalFixedRuntimeAssetStatus,
   getLocalRuntimeAssetStorage,
@@ -89,7 +87,6 @@ import {
   type AgentSettings,
   type CreateLocalRunInput,
   type FixedRuntimeAssetPluginID,
-  type LocalArtifact,
   type LocalToolReconciliationDecision,
   type LocalPlanApprovalDecision,
   type LocalPermissionScope,
@@ -101,8 +98,6 @@ import {
   type LocalWorkspaceDiagnosis,
   type LocalWorkspaceAuthorization,
 } from './runtime/client'
-import { filePreviewKind } from './shared/files/filePreview'
-import { downloadFile } from './shared/files/downloadFile'
 import {
   finalizeLocalRunStatus,
   projectRuntimeThreadCache,
@@ -264,11 +259,20 @@ function useAppContentViewModel() {
   } = useStore(workspaceStore)
   const [pluginCatalogVersion, setPluginCatalogVersion] = useState(0)
   const scheduledNotificationIDs = useRef(new Set<string>())
-  const [artifactPreview, setArtifactPreview] = useState<LocalArtifact | null>(null)
-  const [activeDocument, setActiveDocument] = useState<OpenDocument | null>(null)
-  // Bumped on `doc.changed` (Phase 2 territory) to force the renderer to
-  // re-fetch the file bytes. Phase 1 only needs the initial open path.
-  const [docPreviewRefreshKey, setDocPreviewRefreshKey] = useState(0)
+  const {
+    activeDocument,
+    artifactPreview,
+    docPreviewRefreshKey,
+    openLocalArtifact,
+    openLocalDocument,
+    setActiveDocument,
+    setArtifactPreview,
+    showLocalFileContextMenu,
+  } = useLocalDocuments({
+    runtimeConnection,
+    t,
+    setNotice,
+  })
 
   const {
     activeConversation,
@@ -313,88 +317,6 @@ function useAppContentViewModel() {
         { touch: false },
       )
     }
-  }
-
-  function loadLocalFileBytes(ref: LocalFileRef): Promise<ArrayBuffer> {
-    if (!runtimeConnection) {
-      return Promise.reject(new Error(t('app.notice.runtimeDisconnected')))
-    }
-    if (ref.runId && ref.inputId) {
-      return fetchRunInput(ref.runId, ref.inputId, runtimeConnection)
-    }
-    return fetchWorkspaceFile(ref.path, runtimeConnection)
-  }
-
-  /** Open supported files in the right panel; external-only files use their OS app. */
-  function openLocalDocument(ref: LocalFileRef) {
-    const kind = ref.kind ?? filePreviewKind(ref.name)
-    if (!kind) {
-      void openLocalFileNatively(ref)
-      return
-    }
-    setActiveDocument({
-      sourceKey: ref.runId && ref.inputId
-        ? `run-input:${ref.runId}:${ref.inputId}`
-        : `local:${ref.path}`,
-      kind,
-      name: ref.name,
-      tooltip: ref.path,
-      loadBytes: () => loadLocalFileBytes(ref),
-      localPath: ref.path,
-      runId: ref.runId,
-      inputId: ref.inputId,
-    })
-    setDocPreviewRefreshKey((k) => k + 1)
-  }
-
-  async function openLocalFileNatively(ref: LocalFileRef) {
-    try {
-      const error = ref.runId && ref.inputId
-        ? await window.shejaneClient?.openFileSnapshot?.({
-          name: ref.name,
-          bytes: new Uint8Array(await loadLocalFileBytes(ref)),
-          action: 'open',
-        })
-        : await window.shejaneClient?.openFileWithDefaultApp?.(ref.path)
-      if (error) setNotice(error)
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : String(error))
-    }
-  }
-
-  async function revealLocalFile(ref: LocalFileRef) {
-    try {
-      if (ref.runId && ref.inputId) {
-        const error = await window.shejaneClient?.openFileSnapshot?.({
-          name: ref.name,
-          bytes: new Uint8Array(await loadLocalFileBytes(ref)),
-          action: 'reveal',
-        })
-        if (error) setNotice(error)
-        return
-      }
-      await window.shejaneClient?.revealFileInFolder?.(ref.path)
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : String(error))
-    }
-  }
-
-  async function downloadLocalFile(ref: LocalFileRef) {
-    try {
-      await downloadFile(ref.name, () => loadLocalFileBytes(ref))
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : String(error))
-    }
-  }
-
-  async function showLocalFileContextMenu(ref: LocalFileRef) {
-    const action = await window.shejaneClient?.showFileContextMenu?.({
-      canPreview: Boolean(ref.kind ?? filePreviewKind(ref.name)),
-    })
-    if (action === 'preview') openLocalDocument(ref)
-    if (action === 'open') await openLocalFileNatively(ref)
-    if (action === 'save') await downloadLocalFile(ref)
-    if (action === 'reveal') await revealLocalFile(ref)
   }
 
   /** Global app shortcuts. Bypass browser/OS defaults only for app-level
@@ -1212,19 +1134,6 @@ function useAppContentViewModel() {
       )
     } finally {
       planDecisionsInFlightRef.current.delete(requestID)
-    }
-  }
-
-  async function openLocalArtifact(artifactID: string) {
-    if (!runtimeConnection) {
-      setNotice(t('app.notice.runtimeDisconnected'))
-      return
-    }
-    setNotice('')
-    try {
-      setArtifactPreview(await getLocalArtifact(artifactID, runtimeConnection))
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : t('app.notice.artifactReadFailed'))
     }
   }
 

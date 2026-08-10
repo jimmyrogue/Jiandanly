@@ -14,6 +14,8 @@ import keyring
 import pytest
 from fastapi.testclient import TestClient
 
+import shejane_runtime.model_service_authorization as model_authorization
+import shejane_runtime.model_service_probes as model_probes
 import shejane_runtime.server as server_module
 import shejane_runtime.shejane_authorization as authorization_module
 import shejane_runtime.store.sqlite as sqlite_store_module
@@ -95,14 +97,14 @@ def test_official_authorization_cleans_up_when_response_validation_fails(
     async def fail_response(*_args, **_kwargs):
         raise ValueError("response validation failed")
 
-    monkeypatch.setattr(server_module, "_refresh_model_service_models", catalog)
-    monkeypatch.setattr(server_module, "_model_service_response", fail_response)
+    monkeypatch.setattr(model_authorization, "_refresh_model_service_models", catalog)
+    monkeypatch.setattr(model_authorization, "_model_service_response", fail_response)
 
     with TestClient(create_app(settings)) as client:
         with pytest.raises(ValueError, match="response validation failed"):
             client.portal.call(
                 partial(
-                    server_module._complete_shejane_authorization,
+                    model_authorization._complete_shejane_authorization,
                     client.app,
                     "local:owner",
                     "inference-secret",
@@ -136,7 +138,7 @@ async def test_official_authorization_cleans_completed_keyring_write_after_cance
     )
     write_started = asyncio.Event()
     release_write = asyncio.Event()
-    original_set_model_api_key = server_module.set_model_api_key
+    original_set_model_api_key = model_authorization.set_model_api_key
 
     async def delayed_write(*args, **kwargs):
         write_started.set()
@@ -150,10 +152,10 @@ async def test_official_authorization_cleans_completed_keyring_write_after_cance
     async def unexpected_catalog(**_kwargs):
         raise AssertionError("canceled authorization must not refresh the catalog")
 
-    monkeypatch.setattr(server_module, "set_model_api_key", delayed_write)
-    monkeypatch.setattr(server_module, "_refresh_model_service_models", unexpected_catalog)
+    monkeypatch.setattr(model_authorization, "set_model_api_key", delayed_write)
+    monkeypatch.setattr(model_authorization, "_refresh_model_service_models", unexpected_catalog)
     task = asyncio.create_task(
-        server_module._complete_shejane_authorization(
+        model_authorization._complete_shejane_authorization(
             object(),
             LOCAL_OWNER_PRINCIPAL_ID,
             "canceled-token",
@@ -184,16 +186,16 @@ async def test_official_authorization_cleans_partial_keyring_write_after_failure
         "delete_password",
         lambda _service, account: credential_vault.pop(account, None),
     )
-    original_set_model_api_key = server_module.set_model_api_key
+    original_set_model_api_key = model_authorization.set_model_api_key
 
     async def failed_write(*args, **kwargs):
         await original_set_model_api_key(*args, **kwargs)
         raise server_module.CredentialStoreError("keyring write outcome is uncertain")
 
-    monkeypatch.setattr(server_module, "set_model_api_key", failed_write)
+    monkeypatch.setattr(model_authorization, "set_model_api_key", failed_write)
 
     with pytest.raises(RuntimeError, match="system credential store is unavailable"):
-        await server_module._complete_shejane_authorization(
+        await model_authorization._complete_shejane_authorization(
             object(),
             LOCAL_OWNER_PRINCIPAL_ID,
             "failed-token",
@@ -354,7 +356,7 @@ def test_runtime_authorization_persists_only_the_official_connection(
         data_dir=tmp_path,
     )
     monkeypatch.setattr(RunCoordinator, "start", lambda _self: None)
-    monkeypatch.setattr(server_module, "OFFICIAL_CLOUD_ORIGIN", "https://cloud.example.test")
+    monkeypatch.setattr(model_authorization, "OFFICIAL_CLOUD_ORIGIN", "https://cloud.example.test")
     credential_vault: dict[str, str] = {}
     monkeypatch.setattr(
         keyring,
@@ -429,7 +431,7 @@ def test_runtime_authorization_persists_only_the_official_connection(
         assert kwargs["base_url"] == "https://cloud.example.test/v1"
         verified_models.append(kwargs["model_id"])
 
-    monkeypatch.setattr(server_module, "_verify_model_service_compatibility", compatible)
+    monkeypatch.setattr(model_probes, "_verify_model_service_compatibility", compatible)
 
     with TestClient(create_app(settings)) as client:
         started = client.post(
@@ -829,12 +831,12 @@ def test_official_reauthorization_replaces_connection_and_moves_bindings(
             }
         ], "ready"
 
-    monkeypatch.setattr(server_module, "_refresh_model_service_models", catalog)
+    monkeypatch.setattr(model_authorization, "_refresh_model_service_models", catalog)
 
     with TestClient(create_app(settings)) as client:
         first = client.portal.call(
             partial(
-                server_module._complete_shejane_authorization,
+                model_authorization._complete_shejane_authorization,
                 client.app,
                 LOCAL_OWNER_PRINCIPAL_ID,
                 "first-token",
@@ -842,7 +844,7 @@ def test_official_reauthorization_replaces_connection_and_moves_bindings(
         )
         second = client.portal.call(
             partial(
-                server_module._complete_shejane_authorization,
+                model_authorization._complete_shejane_authorization,
                 client.app,
                 LOCAL_OWNER_PRINCIPAL_ID,
                 "second-token",
@@ -918,12 +920,12 @@ def test_official_reauthorization_retains_last_known_good_catalog_when_refresh_f
         calls += 1
         return (last_known_good, "ready") if calls == 1 else ([], "unavailable")
 
-    monkeypatch.setattr(server_module, "_refresh_model_service_models", catalog)
+    monkeypatch.setattr(model_authorization, "_refresh_model_service_models", catalog)
 
     with TestClient(create_app(settings)) as client:
         first = client.portal.call(
             partial(
-                server_module._complete_shejane_authorization,
+                model_authorization._complete_shejane_authorization,
                 client.app,
                 LOCAL_OWNER_PRINCIPAL_ID,
                 "first-token",
@@ -931,7 +933,7 @@ def test_official_reauthorization_retains_last_known_good_catalog_when_refresh_f
         )
         second = client.portal.call(
             partial(
-                server_module._complete_shejane_authorization,
+                model_authorization._complete_shejane_authorization,
                 client.app,
                 LOCAL_OWNER_PRINCIPAL_ID,
                 "second-token",
@@ -985,7 +987,7 @@ def test_official_replacement_fences_old_connections_in_deterministic_order(
             }
         ], "ready"
 
-    monkeypatch.setattr(server_module, "_refresh_model_service_models", catalog)
+    monkeypatch.setattr(model_authorization, "_refresh_model_service_models", catalog)
     events: list[str] = []
 
     with TestClient(create_app(settings)) as client:
@@ -1019,7 +1021,7 @@ def test_official_replacement_fences_old_connections_in_deterministic_order(
         monkeypatch.setattr(client.app.state.coordinator, "model_connection_mutation", mutation)
         client.portal.call(
             partial(
-                server_module._complete_shejane_authorization,
+                model_authorization._complete_shejane_authorization,
                 client.app,
                 LOCAL_OWNER_PRINCIPAL_ID,
                 "new-token",
@@ -1056,12 +1058,12 @@ def test_official_replacement_resolves_cancellation_during_commit(
     async def catalog(**_kwargs):
         return _official_chat_models(), "ready"
 
-    monkeypatch.setattr(server_module, "_refresh_model_service_models", catalog)
+    monkeypatch.setattr(model_authorization, "_refresh_model_service_models", catalog)
 
     with TestClient(create_app(settings)) as client:
         first = client.portal.call(
             partial(
-                server_module._complete_shejane_authorization,
+                model_authorization._complete_shejane_authorization,
                 client.app,
                 LOCAL_OWNER_PRINCIPAL_ID,
                 "first-token",
@@ -1080,7 +1082,7 @@ def test_official_replacement_resolves_cancellation_during_commit(
 
         async def cancel_during_commit():
             task = asyncio.create_task(
-                server_module._complete_shejane_authorization(
+                model_authorization._complete_shejane_authorization(
                     client.app,
                     LOCAL_OWNER_PRINCIPAL_ID,
                     "second-token",
@@ -1167,7 +1169,7 @@ def test_official_authorization_auto_binds_only_the_new_readable_connection(
     async def catalog(**_kwargs):
         return new_models, "ready"
 
-    monkeypatch.setattr(server_module, "_refresh_model_service_models", catalog)
+    monkeypatch.setattr(model_authorization, "_refresh_model_service_models", catalog)
 
     with TestClient(create_app(settings)) as client:
         client.portal.call(
@@ -1188,7 +1190,7 @@ def test_official_authorization_auto_binds_only_the_new_readable_connection(
         )
         authorized = client.portal.call(
             partial(
-                server_module._complete_shejane_authorization,
+                model_authorization._complete_shejane_authorization,
                 client.app,
                 LOCAL_OWNER_PRINCIPAL_ID,
                 "readable-token",
@@ -1242,18 +1244,18 @@ def test_concurrent_official_authorizations_leave_one_connection_and_credential(
         await asyncio.sleep(0)
         return _official_chat_models(), "ready"
 
-    monkeypatch.setattr(server_module, "_refresh_model_service_models", catalog)
+    monkeypatch.setattr(model_authorization, "_refresh_model_service_models", catalog)
 
     with TestClient(create_app(settings)) as client:
 
         async def authorize_twice():
             return await asyncio.gather(
-                server_module._complete_shejane_authorization(
+                model_authorization._complete_shejane_authorization(
                     client.app,
                     LOCAL_OWNER_PRINCIPAL_ID,
                     "concurrent-token-1",
                 ),
-                server_module._complete_shejane_authorization(
+                model_authorization._complete_shejane_authorization(
                     client.app,
                     LOCAL_OWNER_PRINCIPAL_ID,
                     "concurrent-token-2",

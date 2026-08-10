@@ -12,6 +12,9 @@ import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, ToolMessage
 
+import shejane_runtime.model_service_catalog as model_catalog
+import shejane_runtime.model_service_probes as model_probes
+import shejane_runtime.model_service_routes as model_routes
 import shejane_runtime.server as server_module
 from shejane_runtime.auth import LOCAL_OWNER_PRINCIPAL_ID
 from shejane_runtime.config import reset_settings_for_tests
@@ -182,9 +185,9 @@ async def test_google_catalog_discovery_uses_native_models_endpoint(monkeypatch)
         def __init__(self, **kwargs) -> None:
             super().__init__(transport=httpx.MockTransport(handler), **kwargs)
 
-    monkeypatch.setattr(server_module.httpx, "AsyncClient", PatchedClient)
+    monkeypatch.setattr(model_catalog.httpx, "AsyncClient", PatchedClient)
 
-    models, status = await server_module._refresh_model_service_models(
+    models, status = await model_routes._refresh_model_service_models(
         preset=model_service_preset("google") or {},
         base_url="https://generativelanguage.googleapis.com",
         adapter_id="google_genai",
@@ -229,12 +232,12 @@ async def test_model_catalog_purposes_are_declared_only_for_official_service(
         def __init__(self, **kwargs) -> None:
             super().__init__(transport=httpx.MockTransport(handler), **kwargs)
 
-    monkeypatch.setattr(server_module.httpx, "AsyncClient", PatchedClient)
+    monkeypatch.setattr(model_catalog.httpx, "AsyncClient", PatchedClient)
     preset = model_service_preset(preset_id)
     assert preset is not None
     preset["models"] = ()
 
-    models, status = await server_module._refresh_model_service_models(
+    models, status = await model_routes._refresh_model_service_models(
         preset=preset,
         base_url="https://cloud.example.test",
         adapter_id="openai_chat",
@@ -279,11 +282,11 @@ async def test_official_catalog_keeps_known_agent_capabilities_and_limits(monkey
         def __init__(self, **kwargs) -> None:
             super().__init__(transport=httpx.MockTransport(handler), **kwargs)
 
-    monkeypatch.setattr(server_module.httpx, "AsyncClient", PatchedClient)
+    monkeypatch.setattr(model_catalog.httpx, "AsyncClient", PatchedClient)
     preset = model_service_preset("shejane-official")
     assert preset is not None
 
-    models, status = await server_module._refresh_model_service_models(
+    models, status = await model_routes._refresh_model_service_models(
         preset=preset,
         base_url="https://cloud.example.test/v1",
         adapter_id="openai_chat",
@@ -454,7 +457,7 @@ def test_discovered_models_are_candidates_without_assumed_agent_capabilities() -
 
 
 def test_legacy_verified_models_remain_agent_models() -> None:
-    models = server_module._model_connection_models(
+    models = model_routes._model_connection_models(
         {
             "adapter_id": "anthropic_messages",
             "base_url": "https://gateway.example/v1",
@@ -484,7 +487,7 @@ def test_legacy_verified_models_remain_agent_models() -> None:
 
 
 def test_official_image_capabilities_created_before_the_fix_are_restored() -> None:
-    models = server_module._model_connection_models(
+    models = model_routes._model_connection_models(
         {
             "preset_id": "shejane-official",
             "adapter_id": "openai_chat",
@@ -514,7 +517,7 @@ def test_official_image_capabilities_created_before_the_fix_are_restored() -> No
 
 
 def test_official_deepseek_agent_capabilities_created_before_the_fix_are_restored() -> None:
-    models = server_module._model_connection_models(
+    models = model_routes._model_connection_models(
         {
             "preset_id": "shejane-official",
             "adapter_id": "openai_chat",
@@ -619,7 +622,7 @@ def test_catalog_refresh_preserves_manual_and_verified_models() -> None:
         },
     ]
 
-    merged = server_module._merge_refreshed_model_catalog(current, refreshed)
+    merged = model_routes._merge_refreshed_model_catalog(current, refreshed)
 
     assert [model["model_id"] for model in merged] == ["verified", "image", "manual"]
     assert merged[0]["verification"] == "verified"
@@ -759,13 +762,13 @@ def test_model_service_connection_makes_catalog_models_available_without_probe(
     async def fail_refresh(**kwargs):
         return [dict(model) for model in kwargs["preset"]["models"]], "stale"
 
-    monkeypatch.setattr(server_module, "_refresh_model_service_models", fail_refresh)
+    monkeypatch.setattr(model_routes, "_refresh_model_service_models", fail_refresh)
 
     async def reject_compatibility_probe(**_kwargs):
         pytest.fail("connecting a service must not run the model compatibility probe")
 
     monkeypatch.setattr(
-        server_module,
+        model_probes,
         "_verify_model_service_compatibility",
         reject_compatibility_probe,
     )
@@ -851,7 +854,7 @@ def test_custom_model_service_detects_adapter_and_allows_manual_models(
             ], "ready"
         return [], "unavailable"
 
-    monkeypatch.setattr(server_module, "_refresh_model_service_models", detect)
+    monkeypatch.setattr(model_routes, "_refresh_model_service_models", detect)
 
     with TestClient(create_app(settings)) as client:
         connected = client.post(
@@ -910,7 +913,7 @@ def test_custom_model_service_reports_invalid_api_key_before_protocol_fallback(
     async def reject(**_kwargs):
         raise server_module.HTTPException(status_code=401, detail="invalid key")
 
-    monkeypatch.setattr(server_module, "_refresh_model_service_models", reject)
+    monkeypatch.setattr(model_routes, "_refresh_model_service_models", reject)
 
     with TestClient(create_app(settings)) as client:
         response = client.post(
@@ -946,7 +949,7 @@ def test_model_service_refresh_and_delete_preserve_no_secret(
         calls += 1
         return [dict(model) for model in kwargs["preset"]["models"]], "ready"
 
-    monkeypatch.setattr(server_module, "_refresh_model_service_models", refresh)
+    monkeypatch.setattr(model_routes, "_refresh_model_service_models", refresh)
 
     with TestClient(create_app(settings)) as client:
         connection = client.post(
@@ -995,13 +998,13 @@ def test_model_service_can_replace_its_api_key(
         seen_base_urls.append(kwargs["base_url"])
         return [dict(model) for model in kwargs["preset"]["models"]], "ready"
 
-    monkeypatch.setattr(server_module, "_refresh_model_service_models", refresh)
+    monkeypatch.setattr(model_routes, "_refresh_model_service_models", refresh)
 
     async def reject_compatibility_probe(**_kwargs):
         pytest.fail("reconnecting a service must not run the model compatibility probe")
 
     monkeypatch.setattr(
-        server_module,
+        model_probes,
         "_verify_model_service_compatibility",
         reject_compatibility_probe,
     )
@@ -1051,8 +1054,8 @@ def test_model_service_list_keeps_inaccessible_connections_recoverable(
     async def refresh(**kwargs):
         return [dict(model) for model in kwargs["preset"]["models"]], "ready"
 
-    monkeypatch.setattr(server_module, "_refresh_model_service_models", refresh)
-    original_get_model_api_key = server_module.get_model_api_key
+    monkeypatch.setattr(model_routes, "_refresh_model_service_models", refresh)
+    original_get_model_api_key = model_catalog.get_model_api_key
 
     with TestClient(create_app(settings)) as client:
         inaccessible = client.post(
@@ -1079,7 +1082,7 @@ def test_model_service_list_keeps_inaccessible_connections_recoverable(
                 credential_reference,
             )
 
-        monkeypatch.setattr(server_module, "get_model_api_key", load_key)
+        monkeypatch.setattr(model_catalog, "get_model_api_key", load_key)
         response = client.get(
             "/v1/model-services",
             headers={"Authorization": "Bearer tok"},
@@ -1105,8 +1108,8 @@ def test_model_service_reconnects_when_old_credential_cannot_be_deleted(
     async def refresh(**kwargs):
         return [dict(model) for model in kwargs["preset"]["models"]], "ready"
 
-    monkeypatch.setattr(server_module, "_refresh_model_service_models", refresh)
-    original_delete_model_api_key = server_module.delete_model_api_key
+    monkeypatch.setattr(model_routes, "_refresh_model_service_models", refresh)
+    original_delete_model_api_key = model_routes.delete_model_api_key
 
     with TestClient(create_app(settings)) as client:
         connection = client.post(
@@ -1114,7 +1117,7 @@ def test_model_service_reconnects_when_old_credential_cannot_be_deleted(
             headers={"Authorization": "Bearer tok"},
             json={"preset_id": "deepseek", "api_key": "old-secret"},
         ).json()
-        old_credential_ref = server_module.credential_ref(connection["id"])
+        old_credential_ref = model_routes.credential_ref(connection["id"])
 
         async def delete_key(
             principal_id: str,
@@ -1129,7 +1132,7 @@ def test_model_service_reconnects_when_old_credential_cannot_be_deleted(
                 credential_reference,
             )
 
-        monkeypatch.setattr(server_module, "delete_model_api_key", delete_key)
+        monkeypatch.setattr(model_routes, "delete_model_api_key", delete_key)
         replaced = client.put(
             f"/v1/model-services/{connection['id']}/credential",
             headers={"Authorization": "Bearer tok"},
@@ -1162,7 +1165,7 @@ def test_model_service_keeps_old_api_key_when_database_replace_fails(
     async def refresh(**kwargs):
         return [dict(model) for model in kwargs["preset"]["models"]], "ready"
 
-    monkeypatch.setattr(server_module, "_refresh_model_service_models", refresh)
+    monkeypatch.setattr(model_routes, "_refresh_model_service_models", refresh)
     app = create_app(settings)
 
     with TestClient(app, raise_server_exceptions=False) as client:
@@ -1209,7 +1212,7 @@ def test_model_service_keeps_old_api_key_when_new_key_cannot_be_verified(
             "ready" if calls == 1 else "stale"
         )
 
-    monkeypatch.setattr(server_module, "_refresh_model_service_models", refresh)
+    monkeypatch.setattr(model_routes, "_refresh_model_service_models", refresh)
 
     with TestClient(create_app(settings)) as client:
         connection = client.post(
@@ -1250,7 +1253,7 @@ def test_model_service_delete_restores_api_key_when_database_delete_fails(
     async def refresh(**kwargs):
         return [dict(model) for model in kwargs["preset"]["models"]], "ready"
 
-    monkeypatch.setattr(server_module, "_refresh_model_service_models", refresh)
+    monkeypatch.setattr(model_routes, "_refresh_model_service_models", refresh)
     app = create_app(settings)
 
     with TestClient(app, raise_server_exceptions=False) as client:
@@ -1373,9 +1376,9 @@ async def test_compatibility_verification_completes_model_tool_model_loop(
                 )
             return AIMessage(content="SHEJANE_MODEL_TOOL_LOOP_OK")
 
-    monkeypatch.setattr(server_module, "_build_byok_chat_model", lambda **_kwargs: ProbeModel())
+    monkeypatch.setattr(model_probes, "_build_byok_chat_model", lambda **_kwargs: ProbeModel())
 
-    await server_module._verify_model_service_compatibility(
+    await model_probes._verify_model_service_compatibility(
         settings=reset_settings_for_tests(),
         base_url="https://gateway.example/v1",
         adapter_id="openai_chat",
@@ -1416,9 +1419,9 @@ async def test_image_understanding_verification_sends_an_inline_image(
             assert any(item.get("type") == image_type for item in content)
             return AIMessage(content="RED")
 
-    monkeypatch.setattr(server_module, "_build_byok_chat_model", lambda **_kwargs: ProbeModel())
+    monkeypatch.setattr(model_probes, "_build_byok_chat_model", lambda **_kwargs: ProbeModel())
 
-    await server_module._verify_model_image_understanding(
+    await model_probes._verify_model_image_understanding(
         settings=reset_settings_for_tests(),
         base_url="https://gateway.example/v1",
         protocol=protocol,
@@ -1446,10 +1449,10 @@ async def test_compatibility_verification_rejects_missing_final_answer(
                 )
             return AIMessage(content="")
 
-    monkeypatch.setattr(server_module, "_build_byok_chat_model", lambda **_kwargs: ProbeModel())
+    monkeypatch.setattr(model_probes, "_build_byok_chat_model", lambda **_kwargs: ProbeModel())
 
     with pytest.raises(server_module.HTTPException) as exc_info:
-        await server_module._verify_model_service_compatibility(
+        await model_probes._verify_model_service_compatibility(
             settings=reset_settings_for_tests(),
             base_url="https://gateway.example/v1",
             adapter_id="openai_chat",
@@ -1491,10 +1494,10 @@ async def test_compatibility_verification_classifies_provider_failures(
         async def ainvoke(self, _messages):
             raise ProviderError("provider rejected request with secret")
 
-    monkeypatch.setattr(server_module, "_build_byok_chat_model", lambda **_kwargs: ProbeModel())
+    monkeypatch.setattr(model_probes, "_build_byok_chat_model", lambda **_kwargs: ProbeModel())
 
     with pytest.raises(server_module.HTTPException) as exc_info:
-        await server_module._verify_model_service_compatibility(
+        await model_probes._verify_model_service_compatibility(
             settings=reset_settings_for_tests(),
             base_url="https://gateway.example/v1",
             adapter_id="openai_chat",
@@ -1520,10 +1523,10 @@ async def test_compatibility_verification_reports_timeout_as_provider_unavailabl
         async def ainvoke(self, _messages):
             raise TimeoutError
 
-    monkeypatch.setattr(server_module, "_build_byok_chat_model", lambda **_kwargs: ProbeModel())
+    monkeypatch.setattr(model_probes, "_build_byok_chat_model", lambda **_kwargs: ProbeModel())
 
     with pytest.raises(server_module.HTTPException) as exc_info:
-        await server_module._verify_model_service_compatibility(
+        await model_probes._verify_model_service_compatibility(
             settings=reset_settings_for_tests(),
             base_url="https://gateway.example/v1",
             adapter_id="openai_chat",
@@ -1625,8 +1628,8 @@ def test_deepseek_v4_verification_does_not_force_tool_choice(
         def __init__(self, **kwargs) -> None:
             super().__init__(transport=httpx.MockTransport(handler), **kwargs)
 
-    monkeypatch.setattr(server_module, "_refresh_model_service_models", discover)
-    monkeypatch.setattr(server_module.httpx, "AsyncClient", PatchedClient)
+    monkeypatch.setattr(model_routes, "_refresh_model_service_models", discover)
+    monkeypatch.setattr(model_catalog.httpx, "AsyncClient", PatchedClient)
 
     with TestClient(create_app(settings)) as client:
         connection = client.post(
@@ -1655,7 +1658,7 @@ def test_glm_tool_stream_is_shared_by_probe_and_agent_requests(monkeypatch) -> N
 
     monkeypatch.setattr(langchain_openai, "ChatOpenAI", FakeChatOpenAI)
 
-    server_module._build_byok_chat_model(
+    model_probes._build_byok_chat_model(
         settings=reset_settings_for_tests(),
         model_binding={
             "adapter_id": "openai_chat",
@@ -1682,7 +1685,7 @@ def test_openai_responses_protocol_uses_responses_api_without_provider_session_s
 
     monkeypatch.setattr(langchain_openai, "ChatOpenAI", FakeChatOpenAI)
 
-    server_module._build_byok_chat_model(
+    model_probes._build_byok_chat_model(
         settings=reset_settings_for_tests(),
         model_binding={
             "adapter_id": "openai_chat",
@@ -1714,7 +1717,7 @@ def test_google_generate_content_protocol_uses_native_google_adapter(monkeypatch
         FakeChatGoogleGenerativeAI,
     )
 
-    server_module._build_byok_chat_model(
+    model_probes._build_byok_chat_model(
         settings=reset_settings_for_tests(),
         model_binding={
             "adapter_id": "google_genai",
@@ -1763,8 +1766,8 @@ def test_manual_compatibility_test_records_result_without_gating_availability(
     async def compatible(**_kwargs):
         return None
 
-    monkeypatch.setattr(server_module, "_refresh_model_service_models", detected)
-    monkeypatch.setattr(server_module, "_verify_model_service_compatibility", compatible)
+    monkeypatch.setattr(model_routes, "_refresh_model_service_models", detected)
+    monkeypatch.setattr(model_probes, "_verify_model_service_compatibility", compatible)
 
     with TestClient(create_app(settings)) as client:
         connection = client.post(
@@ -1834,8 +1837,8 @@ def test_image_generation_model_uses_images_endpoint_and_stays_out_of_agent_cata
         def __init__(self, **kwargs) -> None:
             super().__init__(transport=httpx.MockTransport(handler), **kwargs)
 
-    monkeypatch.setattr(server_module, "_refresh_model_service_models", detected)
-    monkeypatch.setattr(server_module.httpx, "AsyncClient", PatchedClient)
+    monkeypatch.setattr(model_routes, "_refresh_model_service_models", detected)
+    monkeypatch.setattr(model_catalog.httpx, "AsyncClient", PatchedClient)
 
     with TestClient(create_app(settings)) as client:
         connection = client.post(
@@ -1912,10 +1915,10 @@ async def test_image_generation_reports_newapi_missing_channel(
         def __init__(self, **kwargs) -> None:
             super().__init__(transport=httpx.MockTransport(handler), **kwargs)
 
-    monkeypatch.setattr(server_module.httpx, "AsyncClient", PatchedClient)
+    monkeypatch.setattr(model_catalog.httpx, "AsyncClient", PatchedClient)
 
     with pytest.raises(server_module.HTTPException) as exc_info:
-        await server_module._verify_model_image_generation(
+        await model_probes._verify_model_image_generation(
             settings=reset_settings_for_tests(),
             base_url="https://gateway.example/v1",
             api_key="secret",
@@ -1944,8 +1947,8 @@ def test_model_keeps_multiple_verified_capabilities_and_binds_image_generation(
     async def compatible(**_kwargs):
         return None
 
-    monkeypatch.setattr(server_module, "_refresh_model_service_models", detected)
-    monkeypatch.setattr(server_module, "_verify_model_service_capability", compatible)
+    monkeypatch.setattr(model_routes, "_refresh_model_service_models", detected)
+    monkeypatch.setattr(model_routes, "_verify_model_service_capability", compatible)
 
     with TestClient(create_app(settings)) as client:
         connection = client.post(
@@ -2032,12 +2035,12 @@ def test_model_verification_rejects_a_concurrently_reconnected_service(
             connection_id=connection_id,
             credential_ref=str(row["credential_ref"]),
             base_url=str(row["base_url"]),
-            models=server_module._model_connection_models(row),
+            models=model_routes._model_connection_models(row),
             catalog_status=str(row["catalog_status"]),
         )
 
-    monkeypatch.setattr(server_module, "_refresh_model_service_models", detected)
-    monkeypatch.setattr(server_module, "_verify_model_service_capability", reconnect_during_probe)
+    monkeypatch.setattr(model_routes, "_refresh_model_service_models", detected)
+    monkeypatch.setattr(model_routes, "_verify_model_service_capability", reconnect_during_probe)
     app = create_app(settings)
 
     with TestClient(app) as client:
