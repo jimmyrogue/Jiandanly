@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+import queue
 from typing import Any
 from uuid import uuid4
 
@@ -22,14 +24,21 @@ from shejane_runtime.observability import (
 
 
 @pytest.fixture(autouse=True)
-def reset_structlog_state():
+def reset_structlog_state(monkeypatch: Any):
     """Each test gets a fresh structlog config (the module caches setup)."""
     import shejane_runtime.observability as obs
 
+    root_logger = logging.getLogger()
+    original_handlers = list(root_logger.handlers)
+    original_level = root_logger.level
+    monkeypatch.setenv("SHEJANE_DEV_TRACE_SYNC", "1")
     obs._configured = False
     structlog.reset_defaults()
     yield
     obs._configured = False
+    structlog.reset_defaults()
+    root_logger.handlers[:] = original_handlers
+    root_logger.setLevel(original_level)
 
 
 def test_configure_logging_is_idempotent() -> None:
@@ -265,6 +274,7 @@ def test_dev_trace_projects_each_p4_event_only_once(monkeypatch: Any) -> None:
     )
     event = {
         "id": "event-dev-trace-once",
+        "seq": 1,
         "run_id": "run-1",
         "event_type": "assistant.round.committed",
         "payload": {"text": "Visible progress"},
@@ -276,7 +286,7 @@ def test_dev_trace_projects_each_p4_event_only_once(monkeypatch: Any) -> None:
     assert b"".join(written).decode() == "[agent][run-1] assistant: Visible progress\n"
 
 
-def test_dev_trace_ignored_deltas_do_not_evict_printed_event_ids(monkeypatch: Any) -> None:
+def test_dev_trace_ignored_events_do_not_affect_printed_event_ids(monkeypatch: Any) -> None:
     monkeypatch.setenv("SHEJANE_DEV_TRACE", "1")
     monkeypatch.setenv("SHEJANE_DEV_TRACE_FD", "9")
     written: list[bytes] = []
@@ -286,6 +296,7 @@ def test_dev_trace_ignored_deltas_do_not_evict_printed_event_ids(monkeypatch: An
     )
     event = {
         "id": "event-dev-trace-after-deltas",
+        "seq": 2,
         "run_id": "run-1",
         "event_type": "assistant.round.committed",
         "payload": {"text": "Visible progress"},
@@ -295,10 +306,10 @@ def test_dev_trace_ignored_deltas_do_not_evict_printed_event_ids(monkeypatch: An
     for index in range(5_000):
         trace_stream_event(
             {
-                "id": f"ignored-delta-{index}",
+                "id": f"ignored-usage-{index}",
                 "run_id": "run-1",
-                "event_type": "llm.delta",
-                "payload": {"content": "x"},
+                "event_type": "llm.usage",
+                "payload": {"input_tokens": index},
             }
         )
     trace_stream_event(event)
@@ -321,6 +332,139 @@ def test_dev_trace_escapes_terminal_control_characters(monkeypatch: Any) -> None
     assert rendered == (r"[agent][run-control] assistant: line 1\n\x1b]0;owned\x07line 2" + "\n")
     assert "\x1b" not in rendered
     assert "\x07" not in rendered
+
+
+def test_dev_trace_groups_delta_chunks_without_repeating_the_committed_round(
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.setenv("SHEJANE_DEV_TRACE", "1")
+    monkeypatch.setenv("SHEJANE_DEV_TRACE_FD", "9")
+    written: list[bytes] = []
+    monkeypatch.setattr(
+        "shejane_runtime.dev_trace.os.write",
+        lambda _fd, data: written.append(data) or len(data),
+    )
+
+    for event_id, content in (("delta-visible-1", "正在核实"), ("delta-visible-2", "门店状态。")):
+        trace_stream_event(
+            {
+                "id": event_id,
+                "run_id": "run-child",
+                "event_type": "llm.delta",
+                "payload": {"round_id": "round-visible", "content": content},
+            }
+        )
+    trace_stream_event(
+        {
+            "id": "round-visible-committed",
+            "run_id": "run-child",
+            "event_type": "assistant.round.committed",
+            "payload": {
+                "round_id": "round-visible",
+                "text": "正在核实门店状态。",
+                "reasoning_summary": "需要核对当前信息",
+            },
+        }
+    )
+
+    assert b"".join(written).decode() == (
+        "[agent][run-child] assistant: 正在核实门店状态。\n"
+        "[agent][run-child] reasoning: 需要核对当前信息\n"
+    )
+
+
+def test_dev_trace_redacts_credentials_split_across_delta_chunks(monkeypatch: Any) -> None:
+    monkeypatch.setenv("SHEJANE_DEV_TRACE", "1")
+    monkeypatch.setenv("SHEJANE_DEV_TRACE_FD", "9")
+    written: list[bytes] = []
+    monkeypatch.setattr(
+        "shejane_runtime.dev_trace.os.write",
+        lambda _fd, data: written.append(data) or len(data),
+    )
+
+    for event_id, content in (
+        ("split-secret-1", "Using Bearer "),
+        ("split-secret-2", "eyHeader."),
+        ("split-secret-3", "eyPayload.signature"),
+    ):
+        trace_stream_event(
+            {
+                "id": event_id,
+                "run_id": "run-split-secret",
+                "event_type": "llm.delta",
+                "payload": {"round_id": "round-split-secret", "content": content},
+            }
+        )
+    trace_stream_event(
+        {
+            "id": "split-secret-closed",
+            "run_id": "run-split-secret",
+            "event_type": "llm.round.closed",
+            "payload": {"round_id": "round-split-secret"},
+        }
+    )
+
+    rendered = b"".join(written).decode()
+    assert rendered == "[agent][run-split-secret] assistant: Using Bearer [REDACTED]\n"
+    assert "eyHeader" not in rendered
+    assert "eyPayload" not in rendered
+
+
+def test_dev_trace_nonfatal_llm_error_does_not_repeat_committed_text(monkeypatch: Any) -> None:
+    monkeypatch.setenv("SHEJANE_DEV_TRACE", "1")
+    monkeypatch.setenv("SHEJANE_DEV_TRACE_FD", "9")
+    written: list[bytes] = []
+    monkeypatch.setattr(
+        "shejane_runtime.dev_trace.os.write",
+        lambda _fd, data: written.append(data) or len(data),
+    )
+    trace_stream_event(
+        {
+            "id": "recoverable-delta",
+            "run_id": "run-recoverable",
+            "event_type": "llm.delta",
+            "payload": {"round_id": "round-recoverable", "content": "Working."},
+        }
+    )
+    trace_stream_event(
+        {
+            "id": "recoverable-error",
+            "run_id": "run-recoverable",
+            "event_type": "llm.error",
+            "payload": {"error_type": "APIConnectionError"},
+        }
+    )
+    trace_stream_event(
+        {
+            "id": "recoverable-commit",
+            "seq": 8,
+            "run_id": "run-recoverable",
+            "event_type": "assistant.round.committed",
+            "payload": {"round_id": "round-recoverable", "text": "Working."},
+        }
+    )
+
+    rendered = b"".join(written).decode()
+    assert rendered.count("assistant: Working.") == 1
+    assert "llm.error error_type=APIConnectionError" in rendered
+
+
+def test_dev_trace_drops_output_instead_of_blocking_when_writer_queue_is_full(
+    monkeypatch: Any,
+) -> None:
+    class FullQueue:
+        @staticmethod
+        def put_nowait(_item: tuple[int, bytes]) -> None:
+            raise queue.Full
+
+    monkeypatch.delenv("SHEJANE_DEV_TRACE_SYNC", raising=False)
+    monkeypatch.setenv("SHEJANE_DEV_TRACE", "1")
+    monkeypatch.setenv("SHEJANE_DEV_TRACE_FD", "9")
+    monkeypatch.setattr("shejane_runtime.dev_trace._write_queue", FullQueue())
+    monkeypatch.setattr("shejane_runtime.dev_trace._ensure_writer", lambda: None)
+    monkeypatch.setattr("shejane_runtime.dev_trace.os.write", pytest.fail)
+
+    trace_run_event("run-full-queue", "run.started", {})
 
 
 def test_durable_trace_links_redacted_model_tool_checkpoint_and_terminal_spans() -> None:

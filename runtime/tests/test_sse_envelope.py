@@ -156,7 +156,7 @@ def test_each_event_has_envelope_shape(client: TestClient) -> None:
         assert isinstance(event["payload"], dict), event
 
 
-def test_p4_stream_mirrors_the_same_envelopes_to_the_dev_trace(
+def test_producer_and_p4_trace_cover_every_stream_envelope(
     client: TestClient,
     monkeypatch,
 ) -> None:
@@ -176,7 +176,7 @@ def test_p4_stream_mirrors_the_same_envelopes_to_the_dev_trace(
     events, _ = _parse_sse(raw)
 
     assert observed
-    assert [event["id"] for event in observed] == [event["id"] for event in events]
+    assert {event["id"] for event in events} <= {event["id"] for event in observed}
 
 
 def test_run_started_payload_carries_goal(client: TestClient) -> None:

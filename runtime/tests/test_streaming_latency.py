@@ -136,6 +136,43 @@ def test_each_backend_delta_surfaces_as_llm_token(client_with_tokens) -> None:
     assert all(count == len(tokens) for count in round_delta_counts)
 
 
+def test_dev_trace_observes_deltas_without_an_sse_subscriber(
+    client_with_tokens,
+    monkeypatch,
+) -> None:
+    client, tokens = client_with_tokens
+    observed: list[dict] = []
+    monkeypatch.setattr(
+        "shejane_runtime.runs.trace_stream_event",
+        lambda event: observed.append(event),
+    )
+    response = client.post(
+        "/v1/runs",
+        headers={"Authorization": "Bearer tok"},
+        json=run_command("Trace without subscribing"),
+    )
+    run_id = response.json()["id"]
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        run = client.get(
+            f"/v1/runs/{run_id}",
+            headers={"Authorization": "Bearer tok"},
+        ).json()
+        if run.get("status") not in {"queued", "running"}:
+            break
+        time.sleep(0.01)
+
+    deltas_by_round: dict[str, list[str]] = {}
+    for event in observed:
+        if event.get("event_type") != "llm.delta":
+            continue
+        payload = event["payload"]
+        deltas_by_round.setdefault(str(payload.get("round_id")), []).append(payload["content"])
+    assert deltas_by_round
+    assert all(deltas == tokens for deltas in deltas_by_round.values())
+
+
 def test_terminal_event_present(client_with_tokens) -> None:
     client, _ = client_with_tokens
     r = client.post(

@@ -2775,7 +2775,6 @@ class RunCoordinator:
                     replay_index = 0
                     for event in pending_live:
                         if event.get("seq") is None:
-                            trace_stream_event(event)
                             yield event
                             continue
                         wake_seq = int(event["seq"])
@@ -3270,7 +3269,12 @@ class RunCoordinator:
                                 ),
                             )
                             if assistant_round is not None:
-                                await self.store.commit_assistant_round(run_id, assistant_round)
+                                (
+                                    round_event,
+                                    round_created,
+                                ) = await self.store.commit_assistant_round(run_id, assistant_round)
+                                if round_created:
+                                    trace_stream_event(self._stored_event_envelope(round_event))
                                 committed_item_ids = []
                                 if str(assistant_round.get("reasoning_summary") or "").strip():
                                     committed_item_ids.append(
@@ -3726,6 +3730,7 @@ class RunCoordinator:
                     parent_event = candidate
                 event = self._stored_event_envelope(stored_event)
             self._publish_live(run_id, event)
+        trace_stream_event(event)
         if parent_event is not None:
             await self._publish_derived_parent_event(parent_event)
         if wakeup is not None:
@@ -3742,6 +3747,7 @@ class RunCoordinator:
     ) -> None:
         """Persist the authoritative result before notifying live subscribers."""
         parent_event: dict[str, Any] | None = None
+        envelope: dict[str, Any] | None = None
         async with self._stream_publication(run_id):
             event, created = await self.store.commit_run_result(
                 run_id,
@@ -3750,10 +3756,13 @@ class RunCoordinator:
                 payload=payload,
             )
             if created:
-                self._publish_live(run_id, self._stored_event_envelope(event))
+                envelope = self._stored_event_envelope(event)
+                self._publish_live(run_id, envelope)
                 candidate = event.get("_parent_event")
                 if isinstance(candidate, dict):
                     parent_event = candidate
+        if created and envelope is not None:
+            trace_stream_event(envelope)
         if parent_event is not None:
             await self._publish_derived_parent_event(parent_event)
         if not created:
