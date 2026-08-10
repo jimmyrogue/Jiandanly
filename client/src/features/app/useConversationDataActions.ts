@@ -145,6 +145,30 @@ export function useConversationDataActions({
     setNotice(t('app.notice.conversationDeleted', { title: conversation.title }))
   }, [activeIDRef, localData, refreshConversations, runtimeConnection, runtimeThreadIDsRef, setNotice, t])
 
+  const deleteConversationMessage = useCallback(async (messageID: string) => {
+    const conversationID = activeIDRef.current
+    if (!conversationID) return
+    const conversation = await localData.get(conversationID)
+    if (!conversation) return
+    // A streaming send holds its own snapshot and would re-save the message.
+    if (conversation.messages.some((message) => message.status === 'streaming' || message.status === 'pending')) {
+      return
+    }
+    const index = conversation.messages.findIndex((message) => message.id === messageID)
+    if (index < 0) return
+    const target = conversation.messages[index]
+    const removeCount = (
+      target.role === 'user' && conversation.messages[index + 1]?.role === 'assistant'
+    ) ? 2 : 1
+    conversation.messages = [
+      ...conversation.messages.slice(0, index),
+      ...conversation.messages.slice(index + removeCount),
+    ]
+    conversation.updatedAt = new Date().toISOString()
+    await localData.save(conversation)
+    await refreshConversations(conversationID)
+  }, [activeIDRef, localData, refreshConversations])
+
   const exportConversationData = useCallback(async (conversationID: string) => {
     const conversation = await localData.get(conversationID)
     if (!conversation) {
@@ -211,6 +235,7 @@ export function useConversationDataActions({
 
   return {
     deleteConversationData,
+    deleteConversationMessage,
     exportConversationData,
     exportLocalData,
     importLocalData,

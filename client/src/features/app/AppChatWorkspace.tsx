@@ -16,6 +16,7 @@ import { Composer } from '@/features/chat/components/Composer'
 import { PendingApprovalBar } from '@/features/chat/components/PendingApprovalBar'
 import { PendingPlanApprovalBar } from '@/features/chat/components/PendingPlanApprovalBar'
 import { PendingQuestionBar } from '@/features/chat/components/PendingQuestionBar'
+import { isAvailablePlugin } from '@/features/plugins/pluginAvailability'
 import type { ChatMode } from '@/shared/local-data/types'
 import type { Translator } from '@/shared/i18n/i18n'
 import type { RuntimeConnection, RuntimeProbe } from '@/runtime/client'
@@ -251,7 +252,7 @@ export function AppChatWorkspace({ chat, common }: {
             return catalog.skills
           }}
           listMcpServers={runtimeConnection ? async () => { const catalog = await listMcpServers(runtimeConnection as any); return catalog.servers } : undefined}
-          listPlugins={runtimeConnection ? async () => { const plugins = await listLocalPlugins(runtimeConnection as any); return Promise.all(plugins.flatMap((plugin: any) => plugin.enabled && !plugin.retired && plugin.compatibility === 'compatible' ? [getLocalPlugin(plugin.id, runtimeConnection as any)] : [])) } : undefined}
+          listPlugins={runtimeConnection ? async () => { const plugins = await listLocalPlugins(runtimeConnection as any); return Promise.all(plugins.flatMap((plugin: any) => isAvailablePlugin(plugin) ? [getLocalPlugin(plugin.id, runtimeConnection as any)] : [])) } : undefined}
           mode={mode as ChatMode}
           models={models as any}
           onModeChange={changeMode as any}

@@ -32,6 +32,7 @@ import {
   upsertConversation,
 } from './conversationState'
 import { chooseAvailableMode } from './modelSelection'
+import { createConversation } from './runExecution'
 import { conversationStore, conversationStoreActions } from './state/conversationStore'
 import { runtimeStore } from './state/runtimeStore'
 import { workspaceStoreActions } from './state/workspaceStore'
@@ -80,6 +81,9 @@ interface ConversationProjectRuntime {
   scheduleConversationRender: (conversation: Conversation, context: ConversationRenderContext) => void
   syncRuntimeThreadCache: (config: RuntimeConnection) => Promise<Conversation[]>
   setActiveConversationID: (nextActiveID: string | undefined) => void
+  saveActiveConversationWorkspace: (
+    workspace: ConversationWorkspace | undefined,
+  ) => Promise<void>
   startNewConversation: () => void
   selectConversation: (id: string) => void
 }
@@ -398,6 +402,25 @@ export function useConversationProject(context: ConversationProjectContext): Con
   ])
 
   const activeConversation = conversations.find((conversation) => conversation.id === activeID)
+  const saveActiveConversationWorkspace = useCallback(async (
+    workspace: ConversationWorkspace | undefined,
+  ): Promise<void> => {
+    if (!activeID) {
+      workspaceStoreActions.setPendingWorkspace(workspace)
+      return
+    }
+    const timestamp = new Date().toISOString()
+    const conversation = (await localData.get(activeID))
+      ?? createConversation(t('chat.newConversation'), timestamp, t('chat.newConversation'))
+    if (workspace) conversation.workspace = workspace
+    else delete conversation.workspace
+    conversation.updatedAt = timestamp
+    await localData.save(conversation)
+    setActiveConversationID(conversation.id)
+    setConversations((items) => sortConversationsForSidebar(
+      upsertConversation(items, cloneConversation(conversation)),
+    ))
+  }, [activeID, localData, setActiveConversationID, t])
 
   return {
     conversations,
@@ -412,6 +435,7 @@ export function useConversationProject(context: ConversationProjectContext): Con
     scheduleConversationRender,
     syncRuntimeThreadCache,
     setActiveConversationID,
+    saveActiveConversationWorkspace,
     startNewConversation,
     selectConversation,
   }

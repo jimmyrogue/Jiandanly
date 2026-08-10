@@ -2,9 +2,9 @@ import { useCallback, type MutableRefObject, type Dispatch, type SetStateAction 
 import { toast } from 'sonner'
 import { createLocalID } from '@/shared/local-data/localConversations'
 import type { Translator } from '@/shared/i18n/i18n'
-import { mergeAttachments, upsertConversation } from './conversationState'
+import { mergeAttachments } from './conversationState'
 import { runtimeCommandErrorMessage } from './runtimeCommandError'
-import { conversationStore, conversationStoreActions } from './state/conversationStore'
+import { conversationStore } from './state/conversationStore'
 import { runtimeStore } from './state/runtimeStore'
 import { workspaceStoreActions } from './state/workspaceStore'
 import { useStore } from './state/store'
@@ -15,31 +15,18 @@ import type {
 } from '@/shared/local-data/types'
 import type {
   AgentSettings,
-  LocalThreadSnapshot,
-  PendingPluginInstallCommand,
-  PendingPluginModelBindCommand,
-  PendingPluginRemoveCommand,
-  PendingPluginRollbackCommand,
-  PendingPluginStateCommand,
-  PendingPluginUpdateCommand,
-  PendingRuntimeAssetInstallCommand,
   PendingRuntimeCommand,
   PendingRuntimeCommandFailure,
   PendingRunCancelCommand,
   PendingRunInjectCommand,
   RuntimeCommandResult,
   RuntimeConnection,
-  LocalRun,
 } from '@/runtime/client'
 import {
   cancelLocalRunCommand,
-  deleteLocalThread,
-  deliverPendingRuntimeCommands,
-  getLocalThreadSnapshot,
   hasRuntimeAuthorization,
   injectLocalRunInstruction,
   parseRuntimeModelSpec,
-  streamLocalRun,
 } from '@/runtime/client'
 import type { ConversationRenderContext } from './useConversationProject'
 import type { LocalHarnessRunOptions } from './runExecution'
@@ -48,22 +35,11 @@ import {
   type RunDecisionCommandContext,
   type RunDecisionCommandHandlers,
 } from './useRunDecisionCommands'
-
-type PendingPluginCommand =
-  | PendingPluginInstallCommand
-  | PendingRuntimeAssetInstallCommand
-  | PendingPluginModelBindCommand
-  | PendingPluginStateCommand
-  | PendingPluginUpdateCommand
-  | PendingPluginRollbackCommand
-  | PendingPluginRemoveCommand
-
-type ProjectRuntimeThreadCache = (
-  snapshot: LocalThreadSnapshot,
-  existing: Conversation | undefined,
-  config: RuntimeConnection,
-  t: Translator,
-) => Promise<Conversation>
+import {
+  useRuntimeCommandSettlement,
+  type PendingPluginCommand,
+  type ProjectRuntimeThreadCache,
+} from './useRuntimeCommandSettlement'
 
 interface RuntimeCommandContext extends RunDecisionCommandContext {
   draft: string
@@ -95,7 +71,7 @@ interface RuntimeCommandContext extends RunDecisionCommandContext {
   projectRuntimeThreadCache: ProjectRuntimeThreadCache
 }
 
-interface RuntimeCommandHandlers extends RunDecisionCommandHandlers {
+export interface RuntimeCommandHandlers extends RunDecisionCommandHandlers {
   sendMessage: () => Promise<void>
   resendFromUserMessage: (
     userMessageID: string,
@@ -117,10 +93,6 @@ interface RuntimeCommandHandlers extends RunDecisionCommandHandlers {
     failure: PendingRuntimeCommandFailure,
     config: RuntimeConnection,
   ) => Promise<void>
-}
-
-function isPendingPluginCommand(command: PendingRuntimeCommand): command is PendingPluginCommand {
-  return command.type.startsWith('plugin.')
 }
 
 export function useRuntimeCommands(context: RuntimeCommandContext): RuntimeCommandHandlers {
@@ -156,154 +128,22 @@ export function useRuntimeCommands(context: RuntimeCommandContext): RuntimeComma
   const { conversations, activeID } = useStore(conversationStore)
   const activeConversation = conversations.find((conversation) => conversation.id === activeID)
   const decisionHandlers = useRunDecisionCommands(context)
-
-  const settleDeliveredLocalRunCommand = useCallback(async (
-    command: PendingRuntimeCommand,
-    result: RuntimeCommandResult,
-    config: RuntimeConnection,
-  ): Promise<boolean> => {
-    clearRuntimeCommandFailureNotice(command.commandId)
-    if (isPendingPluginCommand(command)) {
-      await localData.deletePendingRuntimeCommand(command.commandId)
-      setPluginCatalogVersion((version) => version + 1)
-      return true
-    }
-    if (
-      command.type === 'question.answer' ||
-      command.type === 'permission.resolve' ||
-      command.type === 'plan.resolve' ||
-      command.type === 'tool.reconcile' ||
-      command.type === 'run.cancel' ||
-      command.type === 'run.inject'
-    ) {
-      await localData.deletePendingRuntimeCommand(command.commandId)
-      const projected = await syncRuntimeThreadCache(config)
-      conversationStoreActions.setConversations((items) => projected.reduce((next, conversation) => upsertConversation(next, conversation), items))
-      return true
-    }
-    const run = result as LocalRun
-    const threadID = command.input.threadId
-    if (threadID) {
-      const nextRuntimeThreadIDs = new Set(runtimeThreadIDsRef.current).add(threadID)
-      storeRuntimeThreadIDs(nextRuntimeThreadIDs)
-      runtimeThreadIDsRef.current = nextRuntimeThreadIDs
-    }
-    const [pending, conversation] = await Promise.all([
-      localData.getPendingRuntimeCommand(command.commandId),
-      threadID ? localData.get(threadID) : Promise.resolve(undefined),
-    ])
-    if (pending?.canceledAt || (threadID && !conversation)) {
-      if (threadID) {
-        await cancelLocalRunCommand(`cancel_${run.id}`, run.id, config)
-        await streamLocalRun(run.id, config, { onDelta: () => undefined, onEvent: () => undefined })
-        await deleteLocalThread(threadID, config)
-        const nextRuntimeThreadIDs = new Set(runtimeThreadIDsRef.current)
-        nextRuntimeThreadIDs.delete(threadID)
-        storeRuntimeThreadIDs(nextRuntimeThreadIDs)
-        runtimeThreadIDsRef.current = nextRuntimeThreadIDs
-      }
-      if (threadID) {
-        await localData.settleCanceledLocalRunCommand(threadID, command.commandId)
-      } else {
-        await localData.deletePendingRuntimeCommand(command.commandId)
-      }
-      return false
-    }
-    await localData.deletePendingRuntimeCommand(command.commandId)
-    return true
-  }, [
-    localData,
-    runtimeThreadIDsRef,
-    conversationStoreActions,
-    setPluginCatalogVersion,
-    clearRuntimeCommandFailureNotice,
-    storeRuntimeThreadIDs,
-    syncRuntimeThreadCache,
-  ])
-
-  const settleRejectedPendingRuntimeCommand = useCallback(async (
-    failure: PendingRuntimeCommandFailure,
-    config: RuntimeConnection,
-  ): Promise<void> => {
-    const { command } = failure
-    if (isPendingPluginCommand(command)) {
-      await localData.deletePendingRuntimeCommand(command.commandId)
-      setPluginCatalogVersion((version) => version + 1)
-      return
-    }
-    if (command.type !== 'run.start' && command.type !== 'run.fork') {
-      const existing = await localData.get(command.input.threadId)
-      let projected: Conversation | undefined
-      try {
-        const snapshot = await getLocalThreadSnapshot(command.input.threadId, config)
-        projected = await projectRuntimeThreadCache(snapshot, existing, config, t)
-      } catch {
-        // A rejected command may refer to a thread that no longer exists.
-      }
-      await localData.settleRejectedRuntimeCommand(command.commandId, projected)
-      if (projected) conversationStoreActions.setConversations((items) => upsertConversation(items, projected))
-      return
-    }
-    const threadID = command.input.threadId
-    const conversation = threadID ? await localData.get(threadID) : undefined
-    const assistantID = command.input.assistantMessageId
-    const message = conversation?.messages.find((item) => item.id === assistantID)
-    if (conversation && message) {
-      message.status = 'error'
-      message.agentEvents = [
-        ...(message.agentEvents ?? []),
-        { type: 'ui.command_rejected', label: runtimeCommandErrorMessage(failure.error, t) },
-      ]
-      conversation.updatedAt = new Date().toISOString()
-    }
-    await localData.settleRejectedRuntimeCommand(command.commandId, conversation)
-    if (conversation) conversationStoreActions.setConversations((items) => upsertConversation(items, conversation))
-  }, [
+  const {
+    settleDeliveredLocalRunCommand,
+    settleRejectedPendingRuntimeCommand,
+    submitPluginCommand,
+  } = useRuntimeCommandSettlement({
     localData,
     projectRuntimeThreadCache,
-    conversationStoreActions,
-    setPluginCatalogVersion,
-    t,
-  ])
-
-  const submitPluginCommand = useCallback(async (
-    command: PendingPluginCommand,
-  ): Promise<RuntimeCommandResult> => {
-    if (!hasRuntimeAuthorization(runtimeConnection)) {
-      throw new Error(t('app.notice.runtimeDisconnected'))
-    }
-    const config = runtimeConnection
-    await localData.savePendingRuntimeCommand(command)
-    let result: RuntimeCommandResult | undefined
-    const report = await deliverPendingRuntimeCommands(
-      [command],
-      config,
-      async (_deliveredCommand, deliveredResult) => {
-        result = deliveredResult
-        await localData.deletePendingRuntimeCommand(command.commandId)
-        setPluginCatalogVersion((version) => version + 1)
-      },
-    )
-    const failure = report.failures[0]
-    if (failure) {
-      const commandErrorMessage = runtimeCommandErrorMessage(failure.error, t)
-      suppressRuntimeCommandFailureNotice(command.commandId, commandErrorMessage)
-      if (failure.retryable) {
-        workspaceStoreActions.setPendingCommandDeliveryVersion((version) => version + 1)
-      } else {
-        await localData.deletePendingRuntimeCommand(command.commandId)
-      }
-      throw failure.error
-    }
-    if (!result) throw new Error('plugin command completed without a receipt')
-    return result
-  }, [
-    localData,
     runtimeConnection,
+    runtimeThreadIDsRef,
     setPluginCatalogVersion,
+    storeRuntimeThreadIDs,
+    syncRuntimeThreadCache,
     suppressRuntimeCommandFailureNotice,
+    clearRuntimeCommandFailureNotice,
     t,
-  ])
+  })
 
   const sendMessage = useCallback(async () => {
     const content = draft
