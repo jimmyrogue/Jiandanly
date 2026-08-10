@@ -1,14 +1,8 @@
-import { useCallback } from 'react'
+import { useCallback, useMemo } from 'react'
 import { toast } from 'sonner'
 import { conversationForQuestionAnswer } from '@/features/chat/pendingQuestion'
-import type { Translator } from '@/shared/i18n/i18n'
-import type { LocalConversationStore } from '@/shared/local-data/localConversations'
-import type { ChatMessage, Conversation, LocalFileRef } from '@/shared/local-data/types'
+import type { Conversation } from '@/shared/local-data/types'
 import {
-  answerLocalQuestionCommand,
-  reconcileLocalToolCommand,
-  resolveLocalPermissionCommand,
-  resolveLocalPlanCommand,
   type LocalPermissionScope,
   type LocalPlanApprovalDecision,
   type LocalToolReconciliationDecision,
@@ -18,34 +12,15 @@ import {
   type PendingToolReconcileCommand,
 } from '@/runtime/client'
 import { cloneConversation } from '../conversationState'
-import { runtimeCommandErrorMessage } from './runtimeCommandError'
 import { conversationStore } from '../state/conversationStore'
 import { runtimeStore } from '../state/runtimeStore'
 import { useStore } from '../state/store'
-import { workspaceStoreActions } from '../state/workspaceStore'
-import type { ConversationRenderContext } from '../useConversationProject'
+import {
+  executeDecisionCommand,
+  type RunDecisionCommandContext,
+} from './decisionCommandExecution'
 
-type NoticeOptions = Omit<NonNullable<Parameters<typeof toast.message>[1]>, 'id'>
-type RuntimeLocalMessageStreamer = typeof import('./runStreaming').streamLocalMessage
-
-export interface RunDecisionCommandContext {
-  localData: LocalConversationStore
-  t: Translator
-  setNotice: (message: string, options?: NoticeOptions) => void
-  createConversationRenderContext: () => ConversationRenderContext
-  refreshConversationsAfterStream: (
-    conversationID: string,
-    context: ConversationRenderContext,
-  ) => Promise<void>
-  scheduleConversationRender: (
-    conversation: Conversation,
-    context: ConversationRenderContext,
-  ) => void
-  suppressRuntimeCommandFailureNotice: (commandId: string, message: string) => void
-  openLocalDocument: (ref: LocalFileRef) => void
-  streamLocalMessage: RuntimeLocalMessageStreamer
-  finalizeLocalRunStatus: (message: ChatMessage) => void
-}
+export type { RunDecisionCommandContext } from './decisionCommandExecution'
 
 export interface RunDecisionCommandHandlers {
   handlePermissionDecisionOnce: (
@@ -88,6 +63,32 @@ export function useRunDecisionCommands(
     streamLocalMessage,
     finalizeLocalRunStatus,
   } = context
+  const executionContext = useMemo<RunDecisionCommandContext>(
+    () => ({
+      localData,
+      t,
+      setNotice,
+      createConversationRenderContext,
+      refreshConversationsAfterStream,
+      scheduleConversationRender,
+      suppressRuntimeCommandFailureNotice,
+      openLocalDocument,
+      streamLocalMessage,
+      finalizeLocalRunStatus,
+    }),
+    [
+      createConversationRenderContext,
+      finalizeLocalRunStatus,
+      localData,
+      openLocalDocument,
+      refreshConversationsAfterStream,
+      scheduleConversationRender,
+      setNotice,
+      streamLocalMessage,
+      suppressRuntimeCommandFailureNotice,
+      t,
+    ],
+  )
   const { connection: runtimeConnection } = useStore(runtimeStore)
   const { conversations, activeID } = useStore(conversationStore)
 
@@ -120,10 +121,10 @@ export function useRunDecisionCommands(
         setNotice(t('app.notice.missingLocalTask'))
         return false
       }
+      const runID = message.runId
 
       setNotice('')
       const contentBeforeDecision = message.content
-      let commandAccepted = false
       message.status = 'streaming'
       const renderContext = createConversationRenderContext()
       message.agentEvents = [
@@ -141,41 +142,37 @@ export function useRunDecisionCommands(
         },
       ]
       scheduleConversationRender(conversation, renderContext)
-      let command: PendingPermissionResolveCommand | undefined
-      try {
-        const existing = (await localData.listPendingRuntimeCommands()).find(
-          (command): command is PendingPermissionResolveCommand =>
-            command.type === 'permission.resolve' && command.input.permissionId === requestID,
-        )
-        command = existing ?? {
-          type: 'permission.resolve' as const,
-          commandId: `resolve_${requestID}`,
-          createdAt: new Date().toISOString(),
-          input: {
-            permissionId: requestID,
-            decision,
-            scope,
-            editedAction,
-            runId: message.runId,
-            threadId: conversation.id,
-          },
-        }
-        if (!existing) await localData.savePendingRuntimeCommand(command)
-        try {
-          await resolveLocalPermissionCommand(
-            command.commandId,
-            command.input.permissionId,
-            command.input.decision,
-            { scope: command.input.scope, editedAction: command.input.editedAction },
-            runtimeConnection,
+      return executeDecisionCommand({
+        context: executionContext,
+        runtimeConnection,
+        conversation,
+        message,
+        runId: runID,
+        renderContext,
+        contentBeforeDecision,
+        waitingStatus: 'waiting_permission',
+        loadCommand: async () => {
+          const existing = (await localData.listPendingRuntimeCommands()).find(
+            (command): command is PendingPermissionResolveCommand =>
+              command.type === 'permission.resolve' && command.input.permissionId === requestID,
           )
-          commandAccepted = true
-          await localData.deletePendingRuntimeCommand(command.commandId)
-        } catch (error) {
-          workspaceStoreActions.setPendingCommandDeliveryVersion((version) => version + 1)
-          throw error
-        }
-        toast.success(
+          const command: PendingPermissionResolveCommand = existing ?? {
+            type: 'permission.resolve' as const,
+            commandId: `resolve_${requestID}`,
+            createdAt: new Date().toISOString(),
+            input: {
+              permissionId: requestID,
+              decision,
+              scope,
+              editedAction,
+              runId: runID,
+              threadId: conversation.id,
+            },
+          }
+          if (!existing) await localData.savePendingRuntimeCommand(command)
+          return command
+        },
+        onAccepted: (command) => toast.success(
           command.input.decision === 'approve' || command.input.decision === 'edit'
             ? t(
                 command.input.scope === 'run'
@@ -184,22 +181,8 @@ export function useRunDecisionCommands(
               )
             : t('app.notice.permissionDenied'),
           { id: 'permission-decision', duration: 2000 },
-        )
-        await streamLocalMessage(
-          message.runId,
-          runtimeConnection,
-          conversation,
-          message,
-          t,
-          openLocalDocument,
-          () => scheduleConversationRender(conversation, renderContext),
-        )
-        finalizeLocalRunStatus(message)
-        scheduleConversationRender(conversation, renderContext)
-      } catch (error) {
-        message.status = commandAccepted ? 'streaming' : 'waiting_permission'
-        if (!commandAccepted) {
-          message.content = contentBeforeDecision
+        ),
+        onRejected: () => {
           message.agentEvents = (message.agentEvents ?? []).filter(
             (event) =>
               !(
@@ -207,32 +190,17 @@ export function useRunDecisionCommands(
                 event.permissionRequestId === requestID
               ),
           )
-        }
-        const commandErrorMessage = runtimeCommandErrorMessage(error, t)
-        if (command?.commandId) {
-          suppressRuntimeCommandFailureNotice(command.commandId, commandErrorMessage)
-        }
-        setNotice(commandErrorMessage)
-        scheduleConversationRender(conversation, renderContext)
-      } finally {
-        conversation.updatedAt = new Date().toISOString()
-        await localData.save(conversation)
-        await refreshConversationsAfterStream(conversation.id, renderContext)
-      }
-      return commandAccepted
+        },
+      })
     },
     [
+      executionContext,
       conversations,
       createConversationRenderContext,
-      finalizeLocalRunStatus,
       localData,
-      openLocalDocument,
-      refreshConversationsAfterStream,
       runtimeConnection,
       scheduleConversationRender,
       setNotice,
-      streamLocalMessage,
-      suppressRuntimeCommandFailureNotice,
       t,
     ],
   )
@@ -253,80 +221,48 @@ export function useRunDecisionCommands(
         setNotice(t('app.notice.missingLocalTask'))
         return
       }
+      const runID = message.runId
       setNotice('')
       const contentBeforeDecision = message.content
-      let commandAccepted = false
       message.status = 'streaming'
       const renderContext = createConversationRenderContext()
-      let command: PendingToolReconcileCommand | undefined
-      try {
-        const existing = (await localData.listPendingRuntimeCommands()).find(
-          (command): command is PendingToolReconcileCommand =>
-            command.type === 'tool.reconcile' && command.input.operationId === requestID,
-        )
-        command = existing ?? {
-          type: 'tool.reconcile' as const,
-          commandId: `reconcile_${requestID}`,
-          createdAt: new Date().toISOString(),
-          input: {
-            operationId: requestID,
-            decision,
-            runId: message.runId,
-            threadId: conversation.id,
-          },
-        }
-        if (!existing) await localData.savePendingRuntimeCommand(command)
-        try {
-          await reconcileLocalToolCommand(
-            command.commandId,
-            command.input.operationId,
-            command.input.decision,
-            runtimeConnection,
+      await executeDecisionCommand({
+        context: executionContext,
+        runtimeConnection,
+        conversation,
+        message,
+        runId: runID,
+        renderContext,
+        contentBeforeDecision,
+        waitingStatus: 'waiting_permission',
+        loadCommand: async () => {
+          const existing = (await localData.listPendingRuntimeCommands()).find(
+            (command): command is PendingToolReconcileCommand =>
+              command.type === 'tool.reconcile' && command.input.operationId === requestID,
           )
-          commandAccepted = true
-          await localData.deletePendingRuntimeCommand(command.commandId)
-        } catch (error) {
-          workspaceStoreActions.setPendingCommandDeliveryVersion((version) => version + 1)
-          throw error
-        }
-        await streamLocalMessage(
-          message.runId,
-          runtimeConnection,
-          conversation,
-          message,
-          t,
-          openLocalDocument,
-          () => scheduleConversationRender(conversation, renderContext),
-        )
-        finalizeLocalRunStatus(message)
-        scheduleConversationRender(conversation, renderContext)
-      } catch (error) {
-        message.status = commandAccepted ? 'streaming' : 'waiting_permission'
-        if (!commandAccepted) message.content = contentBeforeDecision
-        const commandErrorMessage = runtimeCommandErrorMessage(error, t)
-        if (command?.commandId) {
-          suppressRuntimeCommandFailureNotice(command.commandId, commandErrorMessage)
-        }
-        setNotice(commandErrorMessage)
-        scheduleConversationRender(conversation, renderContext)
-      } finally {
-        conversation.updatedAt = new Date().toISOString()
-        await localData.save(conversation)
-        await refreshConversationsAfterStream(conversation.id, renderContext)
-      }
+          const command: PendingToolReconcileCommand = existing ?? {
+            type: 'tool.reconcile' as const,
+            commandId: `reconcile_${requestID}`,
+            createdAt: new Date().toISOString(),
+            input: {
+              operationId: requestID,
+              decision,
+              runId: runID,
+              threadId: conversation.id,
+            },
+          }
+          if (!existing) await localData.savePendingRuntimeCommand(command)
+          return command
+        },
+      })
     },
     [
       activeID,
+      executionContext,
       createConversationRenderContext,
-      finalizeLocalRunStatus,
       localData,
-      openLocalDocument,
-      refreshConversationsAfterStream,
       runtimeConnection,
-      scheduleConversationRender,
       setNotice,
-      streamLocalMessage,
-      suppressRuntimeCommandFailureNotice,
       t,
     ],
   )
@@ -358,81 +294,49 @@ export function useRunDecisionCommands(
         setNotice(t('app.notice.missingLocalTask'))
         return
       }
+      const runID = message.runId
 
       setNotice('')
       const contentBeforeAnswer = message.content
-      let commandAccepted = false
       message.status = 'streaming'
       const renderContext = createConversationRenderContext()
-      let command: PendingQuestionAnswerCommand | undefined
-      try {
-        const existing = (await localData.listPendingRuntimeCommands()).find(
-          (command): command is PendingQuestionAnswerCommand =>
-            command.type === 'question.answer' && command.input.questionId === requestID,
-        )
-        command = existing ?? {
-          type: 'question.answer' as const,
-          commandId: `answer_${requestID}`,
-          createdAt: new Date().toISOString(),
-          input: {
-            questionId: requestID,
-            answers,
-            runId: message.runId,
-            threadId: conversation.id,
-          },
-        }
-        if (!existing) await localData.savePendingRuntimeCommand(command)
-        try {
-          await answerLocalQuestionCommand(
-            command.commandId,
-            command.input.questionId,
-            command.input.answers,
-            runtimeConnection,
+      await executeDecisionCommand({
+        context: executionContext,
+        runtimeConnection,
+        conversation,
+        message,
+        runId: runID,
+        renderContext,
+        contentBeforeDecision: contentBeforeAnswer,
+        waitingStatus: 'waiting_input',
+        loadCommand: async () => {
+          const existing = (await localData.listPendingRuntimeCommands()).find(
+            (command): command is PendingQuestionAnswerCommand =>
+              command.type === 'question.answer' && command.input.questionId === requestID,
           )
-          commandAccepted = true
-          await localData.deletePendingRuntimeCommand(command.commandId)
-        } catch (error) {
-          workspaceStoreActions.setPendingCommandDeliveryVersion((version) => version + 1)
-          throw error
-        }
-        await streamLocalMessage(
-          message.runId,
-          runtimeConnection,
-          conversation,
-          message,
-          t,
-          openLocalDocument,
-          () => scheduleConversationRender(conversation, renderContext),
-        )
-        finalizeLocalRunStatus(message)
-        scheduleConversationRender(conversation, renderContext)
-      } catch (error) {
-        message.status = commandAccepted ? 'streaming' : 'waiting_input'
-        if (!commandAccepted) message.content = contentBeforeAnswer
-        const commandErrorMessage = runtimeCommandErrorMessage(error, t)
-        if (command?.commandId) {
-          suppressRuntimeCommandFailureNotice(command.commandId, commandErrorMessage)
-        }
-        setNotice(commandErrorMessage)
-        scheduleConversationRender(conversation, renderContext)
-      } finally {
-        conversation.updatedAt = new Date().toISOString()
-        await localData.save(conversation)
-        await refreshConversationsAfterStream(conversation.id, renderContext)
-      }
+          const command: PendingQuestionAnswerCommand = existing ?? {
+            type: 'question.answer' as const,
+            commandId: `answer_${requestID}`,
+            createdAt: new Date().toISOString(),
+            input: {
+              questionId: requestID,
+              answers,
+              runId: runID,
+              threadId: conversation.id,
+            },
+          }
+          if (!existing) await localData.savePendingRuntimeCommand(command)
+          return command
+        },
+      })
     },
     [
+      executionContext,
       conversations,
       createConversationRenderContext,
-      finalizeLocalRunStatus,
       localData,
-      openLocalDocument,
-      refreshConversationsAfterStream,
       runtimeConnection,
-      scheduleConversationRender,
       setNotice,
-      streamLocalMessage,
-      suppressRuntimeCommandFailureNotice,
       t,
     ],
   )
@@ -454,90 +358,59 @@ export function useRunDecisionCommands(
         setNotice(t('app.notice.missingLocalTask'))
         return
       }
+      const runID = message.runId
 
       setNotice('')
       const contentBeforeDecision = message.content
-      let commandAccepted = false
       message.status = 'streaming'
       const renderContext = createConversationRenderContext()
-      let command: PendingPlanResolveCommand | undefined
-      try {
-        const existing = (await localData.listPendingRuntimeCommands()).find(
-          (command): command is PendingPlanResolveCommand =>
-            command.type === 'plan.resolve' && command.input.approvalId === requestID,
-        )
-        command = existing ?? {
-          type: 'plan.resolve' as const,
-          commandId: `resolve_plan_${requestID}`,
-          createdAt: new Date().toISOString(),
-          input: {
-            approvalId: requestID,
-            decision,
-            instructions: instructions?.trim() || undefined,
-            runId: message.runId,
-            threadId: conversation.id,
-          },
-        }
-        if (!existing) await localData.savePendingRuntimeCommand(command)
-        try {
-          await resolveLocalPlanCommand(
-            command.commandId,
-            command.input.approvalId,
-            command.input.decision,
-            command.input.instructions,
-            runtimeConnection,
+      await executeDecisionCommand({
+        context: executionContext,
+        runtimeConnection,
+        conversation,
+        message,
+        runId: runID,
+        renderContext,
+        contentBeforeDecision,
+        waitingStatus: 'waiting_input',
+        loadCommand: async () => {
+          const existing = (await localData.listPendingRuntimeCommands()).find(
+            (command): command is PendingPlanResolveCommand =>
+              command.type === 'plan.resolve' && command.input.approvalId === requestID,
           )
-          commandAccepted = true
-          await localData.deletePendingRuntimeCommand(command.commandId)
-        } catch (error) {
-          workspaceStoreActions.setPendingCommandDeliveryVersion((version) => version + 1)
-          throw error
-        }
-        const noticeKey =
-          command.input.decision === 'approve'
-            ? 'app.notice.planApproved'
-            : command.input.decision === 'modify'
-              ? 'app.notice.planModified'
-              : 'app.notice.planRejected'
-        toast.success(t(noticeKey), { id: 'plan-approval-decision', duration: 2000 })
-        await streamLocalMessage(
-          message.runId,
-          runtimeConnection,
-          conversation,
-          message,
-          t,
-          openLocalDocument,
-          () => scheduleConversationRender(conversation, renderContext),
-        )
-        finalizeLocalRunStatus(message)
-        scheduleConversationRender(conversation, renderContext)
-      } catch (error) {
-        message.status = commandAccepted ? 'streaming' : 'waiting_input'
-        if (!commandAccepted) message.content = contentBeforeDecision
-        const commandErrorMessage = runtimeCommandErrorMessage(error, t)
-        if (command?.commandId) {
-          suppressRuntimeCommandFailureNotice(command.commandId, commandErrorMessage)
-        }
-        setNotice(commandErrorMessage)
-        scheduleConversationRender(conversation, renderContext)
-      } finally {
-        conversation.updatedAt = new Date().toISOString()
-        await localData.save(conversation)
-        await refreshConversationsAfterStream(conversation.id, renderContext)
-      }
+          const command: PendingPlanResolveCommand = existing ?? {
+            type: 'plan.resolve' as const,
+            commandId: `resolve_plan_${requestID}`,
+            createdAt: new Date().toISOString(),
+            input: {
+              approvalId: requestID,
+              decision,
+              instructions: instructions?.trim() || undefined,
+              runId: runID,
+              threadId: conversation.id,
+            },
+          }
+          if (!existing) await localData.savePendingRuntimeCommand(command)
+          return command
+        },
+        onAccepted: (command) => {
+          const noticeKey =
+            command.input.decision === 'approve'
+              ? 'app.notice.planApproved'
+              : command.input.decision === 'modify'
+                ? 'app.notice.planModified'
+                : 'app.notice.planRejected'
+          toast.success(t(noticeKey), { id: 'plan-approval-decision', duration: 2000 })
+        },
+      })
     },
     [
       activeID,
+      executionContext,
       createConversationRenderContext,
-      finalizeLocalRunStatus,
       localData,
-      openLocalDocument,
-      refreshConversationsAfterStream,
       runtimeConnection,
-      scheduleConversationRender,
       setNotice,
-      streamLocalMessage,
-      suppressRuntimeCommandFailureNotice,
       t,
     ],
   )
