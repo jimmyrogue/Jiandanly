@@ -16,6 +16,44 @@ from .errors import WaitDecisionConflictError, WorkspaceAdmissionError
 
 
 class RunWaitCommandStore(SqliteDatabase):
+    async def _resume_resolved_wait_uncommitted(
+        self,
+        conn: aiosqlite.Connection,
+        *,
+        record: aiosqlite.Row,
+        wait_cycle_id: str,
+    ) -> bool:
+        run_id = str(record["run_id"])
+        resume_payload = await self._wait_cycle_resume_payload_uncommitted(
+            conn,
+            run_id=run_id,
+            wait_cycle_id=wait_cycle_id,
+        )
+        resumed = record["run_status"] in {"queued", "running", "completed", "failed"}
+        if (
+            record["run_status"] in {"waiting_permission", "waiting_input"}
+            and resume_payload is not None
+        ):
+            active_job = await (
+                await conn.execute(
+                    "SELECT * FROM local_run_jobs WHERE run_id = ? "
+                    "AND status IN ('pending', 'leased')",
+                    (run_id,),
+                )
+            ).fetchone()
+            if active_job is None:
+                job = self._new_run_job_record(
+                    run_id=run_id,
+                    kind="resume",
+                    input_payload=self._run_job_input(dict(record)),
+                    resume_payload=resume_payload,
+                )
+                await self._insert_run_job(conn, job)
+            elif active_job["kind"] != "resume":
+                raise WaitDecisionConflictError("run already has a different active job")
+            resumed = True
+        return resumed
+
     async def request_question_answer_command(
         self,
         *,
@@ -106,39 +144,11 @@ class RunWaitCommandStore(SqliteDatabase):
                         "question was already resolved with different content"
                     )
 
-                resume_payload = await self._wait_cycle_resume_payload_uncommitted(
+                resumed = await self._resume_resolved_wait_uncommitted(
                     conn,
-                    run_id=run_id,
+                    record=record,
                     wait_cycle_id=str(record["wait_cycle_id"]),
                 )
-                resumed = record["run_status"] in {
-                    "queued",
-                    "running",
-                    "completed",
-                    "failed",
-                }
-                if (
-                    record["run_status"] in {"waiting_permission", "waiting_input"}
-                    and resume_payload is not None
-                ):
-                    active_job = await (
-                        await conn.execute(
-                            "SELECT * FROM local_run_jobs WHERE run_id = ? "
-                            "AND status IN ('pending', 'leased')",
-                            (run_id,),
-                        )
-                    ).fetchone()
-                    if active_job is None:
-                        job = self._new_run_job_record(
-                            run_id=run_id,
-                            kind="resume",
-                            input_payload=self._run_job_input(dict(record)),
-                            resume_payload=resume_payload,
-                        )
-                        await self._insert_run_job(conn, job)
-                    elif active_job["kind"] != "resume":
-                        raise WaitDecisionConflictError("run already has a different active job")
-                    resumed = True
 
                 receipt = {
                     "type": "question.answer",
@@ -148,19 +158,15 @@ class RunWaitCommandStore(SqliteDatabase):
                     "answered": True,
                     "resumed": resumed,
                 }
-                await conn.execute(
-                    "INSERT INTO local_commands "
-                    "(principal_id, id, command_type, client_message_id, payload_json, "
-                    "response_json, run_id, created_at) "
-                    "VALUES (?, ?, 'question.answer', '', ?, ?, ?, ?)",
-                    (
-                        principal_id,
-                        command_id,
-                        payload_json,
-                        _encode_payload(receipt),
-                        run_id,
-                        _now(),
-                    ),
+                await self._record_command_receipt_uncommitted(
+                    conn,
+                    principal_id=principal_id,
+                    command_id=command_id,
+                    command_type="question.answer",
+                    payload_json=payload_json,
+                    receipt=receipt,
+                    created_at=_now(),
+                    run_id=run_id,
                 )
                 await conn.commit()
                 return receipt, True
@@ -303,39 +309,11 @@ class RunWaitCommandStore(SqliteDatabase):
                         "permission was already resolved with a different decision"
                     )
 
-                resume_payload = await self._wait_cycle_resume_payload_uncommitted(
+                resumed = await self._resume_resolved_wait_uncommitted(
                     conn,
-                    run_id=run_id,
+                    record=record,
                     wait_cycle_id=str(record["wait_cycle_id"]),
                 )
-                resumed = record["run_status"] in {
-                    "queued",
-                    "running",
-                    "completed",
-                    "failed",
-                }
-                if (
-                    record["run_status"] in {"waiting_permission", "waiting_input"}
-                    and resume_payload is not None
-                ):
-                    active_job = await (
-                        await conn.execute(
-                            "SELECT * FROM local_run_jobs WHERE run_id = ? "
-                            "AND status IN ('pending', 'leased')",
-                            (run_id,),
-                        )
-                    ).fetchone()
-                    if active_job is None:
-                        job = self._new_run_job_record(
-                            run_id=run_id,
-                            kind="resume",
-                            input_payload=self._run_job_input(dict(record)),
-                            resume_payload=resume_payload,
-                        )
-                        await self._insert_run_job(conn, job)
-                    elif active_job["kind"] != "resume":
-                        raise WaitDecisionConflictError("run already has a different active job")
-                    resumed = True
 
                 receipt = {
                     "type": "permission.resolve",
@@ -347,19 +325,15 @@ class RunWaitCommandStore(SqliteDatabase):
                     "scope": scope,
                     "resumed": resumed,
                 }
-                await conn.execute(
-                    "INSERT INTO local_commands "
-                    "(principal_id, id, command_type, client_message_id, payload_json, "
-                    "response_json, run_id, created_at) "
-                    "VALUES (?, ?, 'permission.resolve', '', ?, ?, ?, ?)",
-                    (
-                        principal_id,
-                        command_id,
-                        payload_json,
-                        _encode_payload(receipt),
-                        run_id,
-                        _now(),
-                    ),
+                await self._record_command_receipt_uncommitted(
+                    conn,
+                    principal_id=principal_id,
+                    command_id=command_id,
+                    command_type="permission.resolve",
+                    payload_json=payload_json,
+                    receipt=receipt,
+                    created_at=_now(),
+                    run_id=run_id,
                 )
                 await conn.commit()
                 return receipt, True
@@ -476,39 +450,11 @@ class RunWaitCommandStore(SqliteDatabase):
                         "plan approval was already resolved with a different decision"
                     )
 
-                resume_payload = await self._wait_cycle_resume_payload_uncommitted(
+                resumed = await self._resume_resolved_wait_uncommitted(
                     conn,
-                    run_id=run_id,
+                    record=record,
                     wait_cycle_id=str(record["wait_cycle_id"]),
                 )
-                resumed = record["run_status"] in {
-                    "queued",
-                    "running",
-                    "completed",
-                    "failed",
-                }
-                if (
-                    record["run_status"] in {"waiting_permission", "waiting_input"}
-                    and resume_payload is not None
-                ):
-                    active_job = await (
-                        await conn.execute(
-                            "SELECT * FROM local_run_jobs WHERE run_id = ? "
-                            "AND status IN ('pending', 'leased')",
-                            (run_id,),
-                        )
-                    ).fetchone()
-                    if active_job is None:
-                        job = self._new_run_job_record(
-                            run_id=run_id,
-                            kind="resume",
-                            input_payload=self._run_job_input(dict(record)),
-                            resume_payload=resume_payload,
-                        )
-                        await self._insert_run_job(conn, job)
-                    elif active_job["kind"] != "resume":
-                        raise WaitDecisionConflictError("run already has a different active job")
-                    resumed = True
 
                 receipt = {
                     "type": "plan.resolve",
@@ -520,19 +466,15 @@ class RunWaitCommandStore(SqliteDatabase):
                     "instructions": instructions,
                     "resumed": resumed,
                 }
-                await conn.execute(
-                    "INSERT INTO local_commands "
-                    "(principal_id, id, command_type, client_message_id, payload_json, "
-                    "response_json, run_id, created_at) "
-                    "VALUES (?, ?, 'plan.resolve', '', ?, ?, ?, ?)",
-                    (
-                        principal_id,
-                        command_id,
-                        payload_json,
-                        _encode_payload(receipt),
-                        run_id,
-                        _now(),
-                    ),
+                await self._record_command_receipt_uncommitted(
+                    conn,
+                    principal_id=principal_id,
+                    command_id=command_id,
+                    command_type="plan.resolve",
+                    payload_json=payload_json,
+                    receipt=receipt,
+                    created_at=_now(),
+                    run_id=run_id,
                 )
                 await conn.commit()
                 return receipt, True
@@ -630,39 +572,11 @@ class RunWaitCommandStore(SqliteDatabase):
                         created_at=now,
                     )
 
-                resume_payload = await self._wait_cycle_resume_payload_uncommitted(
+                resumed = await self._resume_resolved_wait_uncommitted(
                     conn,
-                    run_id=run_id,
+                    record=record,
                     wait_cycle_id=str(updated["wait_cycle_id"]),
                 )
-                resumed = record["run_status"] in {
-                    "queued",
-                    "running",
-                    "completed",
-                    "failed",
-                }
-                if (
-                    record["run_status"] in {"waiting_permission", "waiting_input"}
-                    and resume_payload is not None
-                ):
-                    active_job = await (
-                        await conn.execute(
-                            "SELECT * FROM local_run_jobs WHERE run_id = ? "
-                            "AND status IN ('pending', 'leased')",
-                            (run_id,),
-                        )
-                    ).fetchone()
-                    if active_job is None:
-                        job = self._new_run_job_record(
-                            run_id=run_id,
-                            kind="resume",
-                            input_payload=self._run_job_input(dict(record)),
-                            resume_payload=resume_payload,
-                        )
-                        await self._insert_run_job(conn, job)
-                    elif active_job["kind"] != "resume":
-                        raise WaitDecisionConflictError("run already has a different active job")
-                    resumed = True
 
                 receipt = {
                     "type": "tool.reconcile",
@@ -673,19 +587,15 @@ class RunWaitCommandStore(SqliteDatabase):
                     "decision": decision,
                     "resumed": resumed,
                 }
-                await conn.execute(
-                    "INSERT INTO local_commands "
-                    "(principal_id, id, command_type, client_message_id, payload_json, "
-                    "response_json, run_id, created_at) "
-                    "VALUES (?, ?, 'tool.reconcile', '', ?, ?, ?, ?)",
-                    (
-                        principal_id,
-                        command_id,
-                        payload_json,
-                        _encode_payload(receipt),
-                        run_id,
-                        now,
-                    ),
+                await self._record_command_receipt_uncommitted(
+                    conn,
+                    principal_id=principal_id,
+                    command_id=command_id,
+                    command_type="tool.reconcile",
+                    payload_json=payload_json,
+                    receipt=receipt,
+                    created_at=now,
+                    run_id=run_id,
                 )
                 await conn.commit()
                 return receipt, True

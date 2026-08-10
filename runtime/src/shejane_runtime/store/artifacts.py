@@ -50,7 +50,7 @@ class ArtifactConflictError(RuntimeError):
     retryable = False
 
 
-def _file_identity(path: Path) -> tuple[int, str]:
+def file_identity(path: Path) -> tuple[int, str]:
     digest = hashlib.sha256()
     size = 0
     with path.open("rb") as stream:
@@ -294,7 +294,7 @@ class ArtifactStore(SqliteDatabase):
             if destination.exists():
                 if destination.is_symlink() or not destination.is_file():
                     raise conflict_error(f"{label} store entry is invalid")
-                existing_size, existing_digest = _file_identity(destination)
+                existing_size, existing_digest = file_identity(destination)
                 if existing_size != size or existing_digest != actual_sha256:
                     raise conflict_error(f"{label} store entry is corrupt")
                 temporary.unlink()

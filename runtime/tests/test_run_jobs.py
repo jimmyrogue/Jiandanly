@@ -919,6 +919,42 @@ async def test_stop_cancels_attempts_before_waiting_for_cleanup(tmp_path: Path) 
         await store.close()
 
 
+async def test_model_connection_mutation_cancels_matching_active_run(tmp_path: Path) -> None:
+    store = await LocalStore.open(tmp_path / "local.db")
+    coordinator = RunCoordinator(
+        store=store,
+        checkpointer=None,  # type: ignore[arg-type]
+        settings=Settings(SHEJANE_FAKE_LLM=True),
+    )
+    task = asyncio.create_task(asyncio.Event().wait())
+    try:
+        run = await _accepted_run(store, "cmd_model_connection_mutation")
+        coordinator._tasks[run["id"]] = task
+        coordinator._settings_overrides[run["id"]] = {
+            "_model_binding": {"connection_id": "connection-1"}
+        }
+
+        async def cancel_run(run_id: str) -> bool:
+            assert run_id == run["id"]
+            task.cancel()
+            return True
+
+        coordinator.cancel_run = cancel_run  # type: ignore[method-assign]
+
+        assert (
+            await coordinator.cancel_model_connection_runs(
+                principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+                connection_id="connection-1",
+            )
+            == 1
+        )
+        assert task.cancelled()
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await store.close()
+
+
 async def test_waiting_run_accepts_resume_before_previous_task_bookkeeping_finishes(
     tmp_path: Path,
 ) -> None:
