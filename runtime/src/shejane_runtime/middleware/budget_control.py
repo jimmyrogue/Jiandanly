@@ -13,7 +13,7 @@ from langgraph.types import Command
 
 from ..agent.context_builder import RuntimeContext
 from ..llm.ledger import MODEL_RETRY_ATTEMPTS
-from .tool_execution import READ_ONLY_TOOLS
+from .tool_execution_identity import READ_ONLY_TOOLS
 
 _RECENT_TOOL_CALL_WINDOW = 12
 _SYNCHRONOUS_DELEGATION_TOOLS = frozenset({"task", "team.run"})

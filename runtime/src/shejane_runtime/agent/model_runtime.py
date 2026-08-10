@@ -7,6 +7,7 @@ import json
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlparse
@@ -17,6 +18,9 @@ from langchain_core.messages import HumanMessage
 from PIL import Image, UnidentifiedImageError
 
 from ..config import Settings
+from ..llm.ledger import LedgerChatModel
+from ..llm.runtime import RuntimeModelProxy
+from ..middleware.budget_control import finalization_attempt_reserve
 from ..middleware.outbound_policy import sanitize_outbound_text
 from ..model_credentials import CredentialStoreError, get_model_api_key
 from ..model_profiles import apply_known_model_profile_defaults
@@ -28,6 +32,23 @@ log = logging.getLogger("shejane_runtime.agent.model_runtime")
 _VISION_MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024
 _VISION_MAX_IMAGE_PIXELS = 40_000_000
 _VISION_MEDIA_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+_APPROVAL_REVIEW_MAX_CALLS = 20
+_CLARIFICATION_REVIEW_MAX_CALLS = 4
+_COMPLETION_REVIEW_MAX_CALLS = 4
+_TITLE_GENERATION_MAX_CALLS = 1
+_SUMMARIZATION_MAX_CALLS = 4
+_SUMMARIZATION_MAX_OUTPUT_TOKENS = 1_024
+
+
+@dataclass(frozen=True, slots=True)
+class _RunModelBundle:
+    model: Any
+    approval: Any
+    clarification: Any
+    completion: Any
+    title: Any
+    definition: RuntimeModelProxy
+    subagent: RuntimeModelProxy
 
 
 class RuntimeModelMiddleware(AgentMiddleware):
@@ -165,6 +186,71 @@ def _build_byok_chat_model(
             }
             if responses
             else {}
+        ),
+    )
+
+
+def _build_run_model_bundle(
+    *,
+    settings: Settings,
+    store: LocalStore,
+    run_id: str,
+    mode: str,
+    model_binding: dict[str, Any] | None,
+    model_api_key: str | None,
+    execution_attempt_id: str | None,
+    resource_stack: AsyncExitStack | None,
+    hard_limit: int,
+    final_reserve: int,
+    build_chat_model: Callable[..., Any] = _build_chat_model,
+) -> _RunModelBundle:
+    provider = build_chat_model(
+        settings,
+        run_id,
+        mode,
+        model_binding=model_binding,
+        model_api_key=model_api_key,
+    )
+    _register_model_cleanup(provider, resource_stack)
+    model = (
+        LedgerChatModel(
+            delegate=provider,
+            store=store,
+            run_id=run_id,
+            execution_attempt_id=execution_attempt_id,
+            model_name=mode,
+            max_calls=hard_limit,
+            profile=getattr(provider, "profile", None),
+        )
+        if execution_attempt_id is not None
+        else provider
+    )
+
+    def purpose_model(purpose: str, max_calls: int) -> Any:
+        return (
+            model.model_copy(update={"call_purpose": purpose, "max_calls": max_calls})
+            if isinstance(model, LedgerChatModel)
+            else model
+        )
+
+    return _RunModelBundle(
+        model=model,
+        approval=purpose_model("approval_review", _APPROVAL_REVIEW_MAX_CALLS),
+        clarification=purpose_model("clarification_review", _CLARIFICATION_REVIEW_MAX_CALLS),
+        completion=purpose_model("completion_review", _COMPLETION_REVIEW_MAX_CALLS),
+        title=purpose_model("title_generation", _TITLE_GENERATION_MAX_CALLS),
+        definition=RuntimeModelProxy(
+            profile=getattr(model, "profile", None),
+            call_purpose="summarization",
+            max_model_calls=_SUMMARIZATION_MAX_CALLS,
+            max_output_tokens=_SUMMARIZATION_MAX_OUTPUT_TOKENS,
+        ),
+        subagent=RuntimeModelProxy(
+            profile=getattr(model, "profile", None),
+            max_model_calls=max(
+                1,
+                hard_limit - finalization_attempt_reserve(hard_limit, final_reserve),
+            ),
         ),
     )
 
