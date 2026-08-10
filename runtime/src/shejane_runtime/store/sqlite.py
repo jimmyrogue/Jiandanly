@@ -11,6 +11,8 @@ from pathlib import Path
 
 import aiosqlite
 
+from .agent_messages import MAX_AGENT_MAILBOX_PENDING as MAX_AGENT_MAILBOX_PENDING
+from .agent_messages import AgentMessageStore
 from .artifacts import MAX_ARTIFACT_BYTES as MAX_ARTIFACT_BYTES
 from .artifacts import MAX_BLOB_ARTIFACT_BYTES as MAX_BLOB_ARTIFACT_BYTES
 from .artifacts import MAX_PRINCIPAL_ARTIFACT_BYTES as MAX_PRINCIPAL_ARTIFACT_BYTES
@@ -23,7 +25,6 @@ from .artifacts import ArtifactQuotaError as ArtifactQuotaError
 from .artifacts import ArtifactStore
 from .artifacts import RunInputQuotaError as RunInputQuotaError
 from .artifacts import RunInputSnapshotError as RunInputSnapshotError
-from .collaboration import MAX_AGENT_MAILBOX_PENDING as MAX_AGENT_MAILBOX_PENDING
 from .collaboration import (
     MAX_DURABLE_CHILD_DEPENDENCIES as MAX_DURABLE_CHILD_DEPENDENCIES,
 )
@@ -67,6 +68,7 @@ from .plugins import PluginStore
 from .run_commands import RunCommandStore
 from .run_jobs import RunJobStore
 from .run_state import RunStateStore
+from .run_wait_commands import RunWaitCommandStore
 from .schedules import ScheduledRunStore
 from .schema import SCHEMA
 from .tool_receipts import ToolReceiptStore
@@ -77,10 +79,12 @@ from .workspaces import WorkspaceStore
 class LocalStore(
     RunStateStore,
     RunCommandStore,
+    RunWaitCommandStore,
     RunJobStore,
     PluginStore,
     WaitStore,
     CollaborationStore,
+    AgentMessageStore,
     ToolReceiptStore,
     WorkspaceStore,
     ConfigurationStore,

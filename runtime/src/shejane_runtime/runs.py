@@ -61,7 +61,6 @@ from .model_profiles import (
 from .observability import build_callbacks
 from .plugins.catalog import PluginCatalog
 from .plugins.identity import plugin_action_tool_version
-from .presentation import project_run_presentation
 from .progress_ledger import build_handoff_snapshot
 from .run_configuration import (
     RUNTIME_PROTOCOL_VERSION,
@@ -86,6 +85,7 @@ from .run_errors import (
     RunNotFoundError,
     RunOutcome,
 )
+from .run_event_stream import RunEventStream
 from .run_inputs import (
     _attachment_admission_error,
     _attachment_bindings,
@@ -131,8 +131,6 @@ from .tools.memory import extract_memory_write_facts
 from .tools.runtime import bind_runtime_tools
 
 log = logging.getLogger("shejane_runtime.runs")
-
-_LIVE_EVENT_QUEUE_SIZE = 256
 
 # The idle dispatch branch runs a few times a second; sandboxes only become
 # reapable when a lease expires, so sweeping every poll would be pure overhead.
@@ -275,9 +273,10 @@ class RunCoordinator:
         self._tasks: dict[str, asyncio.Task[Any]] = {}
         self._terminal_callback_tasks: set[asyncio.Task[None]] = set()
         self._wakeups: dict[str, asyncio.Event] = {}
-        self._live_subscribers: dict[str, set[asyncio.Queue[dict[str, Any]]]] = {}
-        self._stream_locks: dict[str, asyncio.Lock] = {}
-        self._stream_lock_users: dict[str, int] = {}
+        self._event_stream = RunEventStream(
+            store,
+            run_is_active=lambda run_id: run_id in self._tasks,
+        )
         self._goals: dict[str, str] = {}
         self._user_inputs: dict[str, str] = {}
         self._workspaces: dict[str, str | None] = {}
@@ -1696,7 +1695,7 @@ class RunCoordinator:
                 wakeup.set()
                 if self._tasks.get(run_id) is owner_task:
                     self._tasks.pop(run_id, None)
-                self._discard_stream_state_if_idle(run_id)
+                self._event_stream.discard_if_idle(run_id)
                 if self._wakeups.get(run_id) is wakeup:
                     self._wakeups.pop(run_id, None)
                 self._goals.pop(run_id, None)
@@ -2098,8 +2097,11 @@ class RunCoordinator:
         )
         spawn_event = child.pop("_spawn_event", None)
         if isinstance(spawn_event, dict):
-            async with self._stream_publication(parent_run_id):
-                self._publish_live(parent_run_id, self._stored_event_envelope(spawn_event))
+            async with self._event_stream.publication(parent_run_id):
+                self._event_stream.publish_live(
+                    parent_run_id,
+                    self._event_stream.stored_event_envelope(spawn_event),
+                )
         if created:
             self._job_wakeup.set()
         return (await self.store.child_runs_for_parent(parent_run_id, [str(child["id"])]))[0]
@@ -2286,91 +2288,8 @@ class RunCoordinator:
         Temporary model output has no durable sequence and only reaches
         subscribers that are connected while it is produced.
         """
-        live_events: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=_LIVE_EVENT_QUEUE_SIZE)
-        registered = False
-        try:
-            async with self._stream_publication(run_id):
-                self._live_subscribers.setdefault(run_id, set()).add(live_events)
-                registered = True
-                events = await self.store.events_since(run_id, after_seq=after_seq)
-            for event, envelope in zip(
-                events, await self._stream_event_envelopes(events), strict=True
-            ):
-                trace_stream_event(envelope)
-                yield envelope
-                after_seq = int(event["seq"])
-
-            while True:
-                pending_live: list[dict[str, Any]] = []
-                try:
-                    pending_live.append(await asyncio.wait_for(live_events.get(), timeout=0.5))
-                    while not live_events.empty():
-                        pending_live.append(live_events.get_nowait())
-                    durable_wake_seqs = [
-                        int(event["seq"]) for event in pending_live if event.get("seq") is not None
-                    ]
-                    replay: list[dict[str, Any]] = []
-                    envelopes: list[dict[str, Any]] = []
-                    if durable_wake_seqs:
-                        # Durable queue entries are wakeups, not payloads. One
-                        # range read recovers gaps and avoids N full projections
-                        # when several writes arrive before the consumer wakes.
-                        wake_seq = max(durable_wake_seqs)
-                        events = await self.store.events_since(run_id, after_seq=after_seq)
-                        replay = [
-                            stored_event
-                            for stored_event in events
-                            if int(stored_event["seq"]) <= wake_seq
-                        ]
-                        envelopes = await self._stream_event_envelopes(replay)
-                    replay_index = 0
-                    for event in pending_live:
-                        if event.get("seq") is None:
-                            yield event
-                            continue
-                        wake_seq = int(event["seq"])
-                        while (
-                            replay_index < len(replay)
-                            and int(replay[replay_index]["seq"]) <= wake_seq
-                        ):
-                            trace_stream_event(envelopes[replay_index])
-                            yield envelopes[replay_index]
-                            after_seq = int(replay[replay_index]["seq"])
-                            replay_index += 1
-                except TimeoutError:
-                    pass
-
-                # Durable polling recovers events published by another process
-                # and any persistent notification dropped by a full live queue.
-                async with self._stream_publication(run_id):
-                    if not live_events.empty():
-                        continue
-                    events = await self.store.events_since(run_id, after_seq=after_seq)
-                for event, envelope in zip(
-                    events,
-                    await self._stream_event_envelopes(events),
-                    strict=True,
-                ):
-                    trace_stream_event(envelope)
-                    yield envelope
-                    after_seq = int(event["seq"])
-
-                run = await self.store.get_run(run_id)
-                if run is None:
-                    return
-                active_job = await self.store.get_active_run_job(run_id)
-                if not live_events.empty():
-                    continue
-                if run.get("status") not in {"queued", "running"} and active_job is None:
-                    return
-        finally:
-            if registered:
-                async with self._stream_publication(run_id):
-                    subscribers = self._live_subscribers.get(run_id)
-                    if subscribers is not None:
-                        subscribers.discard(live_events)
-                        if not subscribers:
-                            self._live_subscribers.pop(run_id, None)
+        async for event in self._event_stream.stream(run_id, after_seq=after_seq):
+            yield event
 
     # ---- driver ----
 
@@ -2825,7 +2744,9 @@ class RunCoordinator:
                                     round_created,
                                 ) = await self.store.commit_assistant_round(run_id, assistant_round)
                                 if round_created:
-                                    trace_stream_event(self._stored_event_envelope(round_event))
+                                    trace_stream_event(
+                                        self._event_stream.stored_event_envelope(round_event)
+                                    )
                                 committed_item_ids = []
                                 if str(assistant_round.get("reasoning_summary") or "").strip():
                                     committed_item_ids.append(
@@ -3252,7 +3173,7 @@ class RunCoordinator:
     ) -> None:
         """Publish transient output or persist an authoritative event."""
         parent_event: dict[str, Any] | None = None
-        async with self._stream_publication(run_id):
+        async with self._event_stream.publication(run_id):
             if event_type in TRANSIENT_RUN_EVENT_TYPES:
                 event = {
                     "id": f"transient_{uuid.uuid4().hex}",
@@ -3279,8 +3200,8 @@ class RunCoordinator:
                 candidate = stored_event.get("_parent_event")
                 if isinstance(candidate, dict):
                     parent_event = candidate
-                event = self._stored_event_envelope(stored_event)
-            self._publish_live(run_id, event)
+                event = self._event_stream.stored_event_envelope(stored_event)
+            self._event_stream.publish_live(run_id, event)
         trace_stream_event(event)
         if parent_event is not None:
             await self._publish_derived_parent_event(parent_event)
@@ -3299,7 +3220,7 @@ class RunCoordinator:
         """Persist the authoritative result before notifying live subscribers."""
         parent_event: dict[str, Any] | None = None
         envelope: dict[str, Any] | None = None
-        async with self._stream_publication(run_id):
+        async with self._event_stream.publication(run_id):
             event, created = await self.store.commit_run_result(
                 run_id,
                 status=status,
@@ -3307,8 +3228,8 @@ class RunCoordinator:
                 payload=payload,
             )
             if created:
-                envelope = self._stored_event_envelope(event)
-                self._publish_live(run_id, envelope)
+                envelope = self._event_stream.stored_event_envelope(event)
+                self._event_stream.publish_live(run_id, envelope)
                 candidate = event.get("_parent_event")
                 if isinstance(candidate, dict):
                     parent_event = candidate
@@ -3344,8 +3265,11 @@ class RunCoordinator:
 
     async def _publish_derived_parent_event(self, event: dict[str, Any]) -> None:
         parent_run_id = str(event["run_id"])
-        async with self._stream_publication(parent_run_id):
-            self._publish_live(parent_run_id, self._stored_event_envelope(event))
+        async with self._event_stream.publication(parent_run_id):
+            self._event_stream.publish_live(
+                parent_run_id,
+                self._event_stream.stored_event_envelope(event),
+            )
         wakeup = self._wakeups.get(parent_run_id)
         if wakeup is not None:
             wakeup.set()
@@ -3369,144 +3293,3 @@ class RunCoordinator:
                 status,
                 type(exc).__name__,
             )
-
-    @staticmethod
-    def _stored_event_envelope(event: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "id": event["id"],
-            "run_id": event["run_id"],
-            "seq": event["seq"],
-            "event_type": event["event_type"],
-            "payload": json.loads(event["payload_json"] or "{}"),
-            "created_at": event["created_at"],
-        }
-
-    async def _stream_event_envelope(self, event: dict[str, Any]) -> dict[str, Any]:
-        return (await self._stream_event_envelopes([event]))[0]
-
-    async def _stream_event_envelopes(
-        self,
-        events: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        """Project one replay batch with a single consistent facts read."""
-        envelopes = [self._stored_event_envelope(event) for event in events]
-        relevant_types = {
-            "assistant.round.committed",
-            "tool.requested",
-            "tool.completed",
-            "tool.failed",
-            "tool.canceled",
-            "subagent.spawned",
-            "subagent.started",
-            "subagent.waiting",
-            "subagent.completed",
-            "subagent.failed",
-            "subagent.canceled",
-            "subagent.outcome_unknown",
-            "permission.required",
-            "permission.resolved",
-            "question.asked",
-            "question.answered",
-            "plan.approval_required",
-            "plan.resolved",
-            "tool.reconciliation_required",
-            "tool.reconciliation_resolved",
-            "artifact.created",
-            "run.completed",
-            "run.failed",
-            "run.canceled",
-            "run.cleanup_required",
-        }
-        if not events or not any(event["event_type"] in relevant_types for event in events):
-            return envelopes
-        facts = await self.store.get_run_presentation_facts(str(events[0]["run_id"]))
-        if facts is None:
-            return envelopes
-        decoded_events = []
-        for source_event in facts["events"]:
-            try:
-                payload = json.loads(source_event.get("payload_json") or "{}")
-            except (json.JSONDecodeError, TypeError):
-                payload = {}
-            decoded_events.append(
-                {
-                    **source_event,
-                    "payload": payload if isinstance(payload, dict) else {},
-                }
-            )
-        snapshot = project_run_presentation(
-            run=facts["run"],
-            assistant_item=facts["assistant_item"],
-            events=decoded_events,
-            tool_receipts=facts["tool_receipts"],
-            wait_candidates=facts["wait_candidates"],
-            artifacts=facts["artifacts"],
-            event_high_watermark=int(facts["event_high_watermark"]),
-        )
-        terminal_types = {
-            "run.completed",
-            "run.failed",
-            "run.canceled",
-            "run.cleanup_required",
-        }
-        for event, envelope in zip(events, envelopes, strict=True):
-            if event["event_type"] not in relevant_types:
-                continue
-            seq = int(event["seq"])
-            items = [
-                candidate
-                for candidate in snapshot["items"]
-                if candidate["revision"] == seq or candidate["order"]["event_seq"] == seq
-            ]
-            primary_item = items[-1] if items else None
-            if event["event_type"] in terminal_types:
-                ids = {item["id"] for item in items}
-                items.extend(
-                    item
-                    for item in snapshot["items"]
-                    if item["id"] not in ids
-                    and item["kind"] in {"tool", "subagent", "verification"}
-                )
-            if not items:
-                continue
-            changes = [{"kind": "item.upsert", "item": item} for item in items]
-            # Keep the singular field for Clients released during the schema rollout.
-            envelope["presentation_change"] = {
-                "kind": "item.upsert",
-                "item": primary_item or items[-1],
-            }
-            if len(changes) > 1:
-                envelope["presentation_changes"] = changes
-        return envelopes
-
-    def _publish_live(self, run_id: str, event: dict[str, Any]) -> None:
-        for subscriber in tuple(self._live_subscribers.get(run_id, ())):
-            try:
-                subscriber.put_nowait(event)
-            except asyncio.QueueFull:
-                # Temporary output is allowed to drop under backpressure;
-                # durable events are recovered by the database poll above.
-                pass
-
-    @asynccontextmanager
-    async def _stream_publication(self, run_id: str) -> AsyncIterator[None]:
-        lock = self._stream_locks.setdefault(run_id, asyncio.Lock())
-        self._stream_lock_users[run_id] = self._stream_lock_users.get(run_id, 0) + 1
-        try:
-            async with lock:
-                yield
-        finally:
-            users = self._stream_lock_users.get(run_id, 1) - 1
-            if users > 0:
-                self._stream_lock_users[run_id] = users
-            else:
-                self._stream_lock_users.pop(run_id, None)
-            self._discard_stream_state_if_idle(run_id)
-
-    def _discard_stream_state_if_idle(self, run_id: str) -> None:
-        if (
-            self._stream_lock_users.get(run_id, 0) == 0
-            and not self._live_subscribers.get(run_id)
-            and run_id not in self._tasks
-        ):
-            self._stream_locks.pop(run_id, None)

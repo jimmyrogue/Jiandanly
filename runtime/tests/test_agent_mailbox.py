@@ -274,7 +274,7 @@ async def test_mailbox_rejects_self_foreign_root_and_backpressure(
             title="foreign",
             content="not part of this collaboration root",
         )
-        monkeypatch.setattr("shejane_runtime.store.collaboration.MAX_AGENT_MAILBOX_PENDING", 1)
+        monkeypatch.setattr("shejane_runtime.store.agent_messages.MAX_AGENT_MAILBOX_PENDING", 1)
         with store.bind_execution_lease(
             job_id=str(first_job["id"]),
             run_id=str(first["id"]),

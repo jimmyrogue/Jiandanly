@@ -540,8 +540,8 @@ async def test_stream_registration_failure_removes_its_subscriber(tmp_path: Path
         stream = coordinator.stream(run["id"])
         with pytest.raises(RuntimeError, match="injected replay failure"):
             await anext(stream)
-        assert run["id"] not in coordinator._live_subscribers
-        assert run["id"] not in coordinator._stream_locks
+        assert run["id"] not in coordinator._event_stream._subscribers
+        assert run["id"] not in coordinator._event_stream._publication_locks
     finally:
         await store.close()
 

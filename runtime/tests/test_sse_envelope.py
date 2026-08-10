@@ -453,7 +453,7 @@ async def test_terminal_replay_projects_completed_receipt_without_a_tool_event(
     store = FactsStore()
     coordinator = RunCoordinator(store, None)  # type: ignore[arg-type]
 
-    envelopes = await coordinator._stream_event_envelopes(events)
+    envelopes = await coordinator._event_stream.event_envelopes(events)
 
     assert store.calls == 1
     terminal_changes = envelopes[1].get("presentation_changes") or [

@@ -41,7 +41,7 @@ import { useStore } from './state/store'
 // accept the same option shape that App-level callers already use.
 type NoticeOptions = Omit<NonNullable<Parameters<typeof toast.message>[1]>, 'id'>
 
-type ConversationRenderContext = {
+export type ConversationRenderContext = {
   navigationVersionAtStart: number
 }
 

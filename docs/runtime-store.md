@@ -18,12 +18,14 @@ Runtime SQLite 是 P3 接纳后的执行真相：命令回执、Run、Job 租约
 |---|---|
 | `database.py` | SQLite 连接配置、共享连接生命周期、租约绑定与 fenced 写事务 |
 | `schema.py` / `migrations.py` | 新数据库完整 schema / 旧数据库兼容迁移 |
-| `run_commands.py` | 不可变命令回执、Run 接纳、取消、恢复决定与注入命令 |
+| `run_commands.py` | 不可变命令回执、Run 接纳、取消与注入命令 |
+| `run_wait_commands.py` | question、permission、plan 与 tool reconciliation 的不可变恢复决定 |
 | `run_jobs.py` | Job 入队、领取、续租、过期恢复、隔离与清理确认 |
 | `run_state.py` | Run/Thread、graph head、结果提交、事件日志与 steering |
 | `waits.py` | plan、permission、question 与 tool reconciliation 的持久等待状态 |
 | `tool_receipts.py` | P10 Tool Receipt、重放和 outcome-unknown 投影 |
-| `collaboration.py` | durable child Run、依赖/资源声明与 Agent mailbox |
+| `collaboration.py` | durable child Run、依赖/资源声明与 root collaboration snapshot |
+| `agent_messages.py` | 同一 collaboration root 内的 Agent mailbox、额度、投递与确认 |
 | `artifacts.py` | Artifact、Run input 正文、配额与内容生命周期 |
 | `plugins.py` | plugin package、installation、binding 与生命周期命令 |
 | `configuration.py` | Runtime settings、MCP catalog、model connections/bindings |

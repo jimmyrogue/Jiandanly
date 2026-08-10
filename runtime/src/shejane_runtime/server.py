@@ -15,7 +15,6 @@ import json
 import logging
 import os
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from typing import Any, Literal
@@ -41,7 +40,6 @@ from .api_schemas import (
     CancelRunCommandReceipt,
     CancelRunResponse,
     CreateRunRequest,
-    CreateScheduledRunRequest,
     ForkRunRequest,
     InjectRunInstructionRequest,
     InjectRunInstructionResponse,
@@ -49,10 +47,8 @@ from .api_schemas import (
     ListChildRunsResponse,
     ListRunEventsResponse,
     ListRunsResponse,
-    ListScheduledRunsResponse,
     LocalCollaborationSnapshot,
     LocalRun,
-    LocalScheduledRun,
     PermissionResolution,
     PlanApprovalResolution,
     PlanResolveCommand,
@@ -112,10 +108,9 @@ from .runs import (
     CheckpointNotFoundError,
     RunCoordinator,
     RunNotFoundError,
-    freeze_run_settings,
-    sanitize_run_metadata,
 )
 from .runtime_routes import _apply_runtime_settings, runtime_router
+from .schedule_routes import schedule_router
 from .scheduler import ScheduledRunDispatcher
 from .shejane_authorization import (
     OFFICIAL_CLOUD_ORIGIN,
@@ -167,19 +162,6 @@ def _fixed_runtime_asset_sources(settings: Settings) -> dict[str, Path | str]:
 
 
 _TERMINAL_RUN_STATUSES = {"completed", "failed", "canceled", "cleanup_required"}
-
-
-def _normalize_schedule_time(raw: str) -> str:
-    value = raw.strip()
-    if not value:
-        raise HTTPException(status_code=400, detail="run_at required")
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="run_at must be an ISO timestamp") from exc
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC).isoformat()
 
 
 @asynccontextmanager
@@ -838,69 +820,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 detail={"code": exc.code, "message": str(exc)},
             ) from exc
 
-    @app.get("/v1/schedules", response_model=ListScheduledRunsResponse)
-    async def list_schedules(
-        request: Request,
-        status: str | None = Query(default=None),
-        notify_pending: bool = Query(default=False),
-    ) -> dict[str, Any]:
-        store: LocalStore = app.state.store
-        schedules = await store.list_scheduled_runs_for_principal(
-            principal_id=request.state.principal_id,
-            status=status,
-            notify_pending=notify_pending,
-        )
-        return {"schedules": schedules}
-
-    @app.post("/v1/schedules", response_model=LocalScheduledRun)
-    async def create_schedule(request: Request, body: CreateScheduledRunRequest) -> dict[str, Any]:
-        goal = body.goal.strip()
-        if not goal:
-            raise HTTPException(status_code=400, detail="goal required")
-        store: LocalStore = app.state.store
-        principal_id = request.state.principal_id
-        workspace_path = (
-            await _normalized_path(body.workspace_path) if body.workspace_path is not None else None
-        )
-        try:
-            return await store.create_scheduled_run(
-                principal_id=principal_id,
-                goal=goal,
-                run_at=_normalize_schedule_time(body.run_at),
-                workspace_path=workspace_path,
-                model=body.model.strip(),
-                history=body.history or [],
-                settings=freeze_run_settings(
-                    app.state.settings,
-                    {**(body.settings or {}), "permission_mode": body.permission_mode},
-                ),
-                metadata=sanitize_run_metadata(body.metadata),
-            )
-        except WorkspaceAdmissionError as exc:
-            status_code = 409 if "no longer available" in str(exc) else 403
-            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
-
-    @app.delete("/v1/schedules/{schedule_id}", response_model=LocalScheduledRun)
-    async def cancel_schedule(request: Request, schedule_id: str) -> dict[str, Any]:
-        store: LocalStore = app.state.store
-        schedule = await store.cancel_scheduled_run(
-            principal_id=request.state.principal_id,
-            schedule_id=schedule_id,
-        )
-        if schedule is None:
-            raise HTTPException(status_code=404, detail="schedule not found")
-        return schedule
-
-    @app.post("/v1/schedules/{schedule_id}/notified", response_model=LocalScheduledRun)
-    async def mark_schedule_notified(request: Request, schedule_id: str) -> dict[str, Any]:
-        store: LocalStore = app.state.store
-        schedule = await store.mark_scheduled_run_notified(
-            principal_id=request.state.principal_id,
-            schedule_id=schedule_id,
-        )
-        if schedule is None:
-            raise HTTPException(status_code=404, detail="schedule not found")
-        return schedule
+    app.include_router(schedule_router)
 
     @app.post("/v1/runs/{run_id}/fork", response_model=LocalRun)
     async def fork_run(request: Request, run_id: str, body: ForkRunRequest) -> dict[str, Any]:
