@@ -23,7 +23,7 @@ def test_atomic_text_write_preserves_original_when_replace_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from shejane_runtime.server import _write_text_atomic
+    from shejane_runtime.catalog_routes import _write_text_atomic
 
     path = tmp_path / "SKILL.md"
     path.write_text("original\n", encoding="utf-8")
@@ -203,7 +203,7 @@ def test_skill_loader_accepts_allowed_tools_yaml_list(tmp_path: Path) -> None:
 
 
 def test_list_skill_files_walks_all_roots(tmp_path: Path, monkeypatch) -> None:
-    from shejane_runtime.server import _list_skill_files
+    from shejane_runtime.catalog_routes import _list_skill_files
 
     shejane = tmp_path / ".shejane" / "skills"
     claude = tmp_path / ".claude" / "skills"
@@ -231,7 +231,7 @@ def test_list_skill_files_walks_all_roots(tmp_path: Path, monkeypatch) -> None:
 def test_list_skill_files_requires_SKILL_md(tmp_path: Path, monkeypatch) -> None:
     """A subdirectory without SKILL.md is silently ignored — that's the
     Anthropic Agent Skills convention."""
-    from shejane_runtime.server import _list_skill_files
+    from shejane_runtime.catalog_routes import _list_skill_files
 
     shejane = tmp_path / ".shejane" / "skills"
     shejane.mkdir(parents=True)
@@ -255,7 +255,7 @@ def test_list_skill_files_dedupes_across_roots(tmp_path: Path, monkeypatch) -> N
     """When the same skill name appears in both shejane and claude
     dirs, shejane wins (first-source-wins). Without dedupe, the UI
     would show two identically-named entries and confuse the user."""
-    from shejane_runtime.server import _list_skill_files
+    from shejane_runtime.catalog_routes import _list_skill_files
 
     shejane = tmp_path / ".shejane" / "skills"
     claude = tmp_path / ".claude" / "skills"
@@ -276,7 +276,7 @@ def test_list_skill_files_dedupes_across_roots(tmp_path: Path, monkeypatch) -> N
 def test_list_skill_files_skips_underscore_and_dot_dirs(tmp_path: Path, monkeypatch) -> None:
     """Internal/private subdirs (starts with _ or .) are skipped — they
     typically hold tests, fixtures, or git internals, not real skills."""
-    from shejane_runtime.server import _list_skill_files
+    from shejane_runtime.catalog_routes import _list_skill_files
 
     shejane = tmp_path / ".shejane" / "skills"
     shejane.mkdir(parents=True)

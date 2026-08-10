@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Toaster } from '@/components/ui/sonner'
-import type { ModelOption } from './features/chat/components/ModeSelector'
 import { deriveAgentHistory } from './features/chat/conversationHistory'
 import {
   beginRecoveryAction,
@@ -15,7 +14,6 @@ import {
   type RecoveryTarget,
 } from './features/chat/recovery'
 import { parseSkillDraft } from './features/chat/skillDraft'
-import { advancedSettingsFromRuntime, advancedSettingsPatchToRuntime } from './features/settings/runtimeSettings'
 import { findConversationPendingApproval } from './features/chat/pendingApproval'
 import { findConversationPendingPlanApproval } from './features/chat/pendingPlanApproval'
 import { findConversationPendingQuestion } from './features/chat/pendingQuestion'
@@ -24,12 +22,11 @@ import { useRuntimeCommands } from './features/app/useRuntimeCommands'
 import { useRuntimeDelivery } from './features/app/useRuntimeDelivery'
 import {
   loadRuntimeThreadIDs,
-  readAgentSettings,
   readChatMode,
   storeRuntimeThreadIDs,
-  writeAgentSettings,
   writeChatMode,
 } from './features/app/appStorage'
+import { useRuntimeModelSettings } from './features/app/useRuntimeModelSettings'
 import { useSidebarLayout } from './features/app/useSidebarLayout'
 import { AppShell } from './features/app/AppShell'
 import {
@@ -38,9 +35,8 @@ import {
   sortConversationsForSidebar,
   upsertConversation,
 } from './features/app/conversationState'
-import { chooseAvailableMode } from './features/app/modelSelection'
 import { runtimeCommandErrorMessage } from './features/app/runtimeCommandError'
-import { runtimeStore, runtimeStoreActions } from './features/app/state/runtimeStore'
+import { runtimeStoreActions } from './features/app/state/runtimeStore'
 import { workspaceStore, workspaceStoreActions } from './features/app/state/workspaceStore'
 import { useStore } from './features/app/state/store'
 import { I18nProvider } from './shared/i18n/I18nProvider'
@@ -64,7 +60,6 @@ import {
   fetchWorkspaceFile,
   fetchRunInput,
   getLocalRunDiagnostics,
-  getRuntimeSettings,
   getLocalThreadSnapshot,
   getRuntimeConnection,
   hasRuntimeAuthorization,
@@ -79,8 +74,6 @@ import {
   listInstalledSkills,
   listLocalPlugins,
   listLocalRuns,
-  listLocalRuntimeModels,
-  listModelCapabilityBindings,
   listModelServices,
   listLocalSchedules,
   listMcpServers,
@@ -90,12 +83,9 @@ import {
   prepareLocalFixedRuntimeAsset,
   removeLocalFixedRuntimeAsset,
   probeRuntime,
-  refreshModelService,
-  setModelCapabilityBinding,
   updateLocalSkill,
   updateLocalThread,
   updateMcpServer,
-  updateRuntimeSettings,
   type AgentSettings,
   type CreateLocalRunInput,
   type FixedRuntimeAssetPluginID,
@@ -215,35 +205,34 @@ function useAppContentViewModel() {
     sidebarMotion,
     sidebarWidth,
   } = useSidebarLayout()
+  const {
+    agentSettings,
+    changeAgentSettings,
+    changeImageMode,
+    imageMode,
+    imageModels,
+    mode,
+    models,
+    refreshCurrentModel,
+    runtime,
+    runtimeConnection,
+    runtimeSettingsConfig,
+    setMode,
+  } = useRuntimeModelSettings({ t, setNotice })
 
   const [submittedPermissionRequestIDs, setSubmittedPermissionRequestIDs] = useState<ReadonlySet<string>>(
     () => new Set(),
   )
   const [draft, setDraft] = useState('')
-  // Visible selection. The first available model seeds the cross-conversation default.
-  const [mode, setMode] = useState<ChatMode>(readChatMode)
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('auto')
   const [isSending, setIsSending] = useState(false)
   const [pendingDeleteMessageID, setPendingDeleteMessageID] = useState<string>()
   const [pendingDiagnosticsRunID, setPendingDiagnosticsRunID] = useState<string>()
-  const [agentSettings, setAgentSettings] = useState<Required<AgentSettings>>(readAgentSettings)
   const [mainView, setMainView] = useState<'chat' | 'plugins' | 'settings'>('chat')
   const [pluginsTab, setPluginsTab] = useState<PluginsHubTab>('plugins')
   const [keyboardHelpOpen, setKeyboardHelpOpen] = useState(false)
   const [modelRequiredOpen, setModelRequiredOpen] = useState(false)
   const [modelServiceAddRequested, setModelServiceAddRequested] = useState(false)
-  // Runtime-owned session state: health probe, connection, model catalog,
-  // and the projected advanced settings marker. Shared with the feature
-  // hooks, which subscribe to the same store instead of receiving props.
-  const {
-    runtime,
-    connection: runtimeConnection,
-    models,
-    imageMode,
-    imageModels,
-    catalogVersion: modelCatalogVersion,
-    settingsConfig: runtimeSettingsConfig,
-  } = useStore(runtimeStore)
   const listInstalledSkillsForView = useCallback(
     () => runtimeConnection
       ? listInstalledSkills(runtimeConnection)
@@ -275,10 +264,6 @@ function useAppContentViewModel() {
   } = useStore(workspaceStore)
   const [pluginCatalogVersion, setPluginCatalogVersion] = useState(0)
   const scheduledNotificationIDs = useRef(new Set<string>())
-  const runtimeSettingsWriteRef = useRef<Promise<void> | null>(null)
-  if (runtimeSettingsWriteRef.current === null) {
-    runtimeSettingsWriteRef.current = Promise.resolve()
-  }
   const [artifactPreview, setArtifactPreview] = useState<LocalArtifact | null>(null)
   const [activeDocument, setActiveDocument] = useState<OpenDocument | null>(null)
   // Bumped on `doc.changed` (Phase 2 territory) to force the renderer to
@@ -411,171 +396,6 @@ function useAppContentViewModel() {
     if (action === 'save') await downloadLocalFile(ref)
     if (action === 'reveal') await revealLocalFile(ref)
   }
-
-  function changeAgentSettings(next: Required<AgentSettings>) {
-    const normalized = { ...next, skills: 'on' as const, mcp: 'on' as const }
-    const runtimePatch = advancedSettingsPatchToRuntime(agentSettings.advanced, normalized.advanced)
-    const runtimeSettingsReady = runtimeSettingsConfig === runtimeConnection && Boolean(runtime?.online)
-    setAgentSettings(normalized)
-    writeAgentSettings(normalized)
-    if (!runtimeConnection || !runtimeSettingsReady || Object.keys(runtimePatch).length === 0) return
-
-    const config = runtimeConnection
-    runtimeSettingsWriteRef.current = runtimeSettingsWriteRef.current!
-      .catch(() => undefined)
-      .then(async () => {
-        const settings = await updateRuntimeSettings(
-          runtimePatch,
-          config,
-        )
-        if (runtimeStore.getState().connection === config) {
-          setAgentSettings((current) => ({
-            ...current,
-            advanced: advancedSettingsFromRuntime(settings),
-          }))
-        }
-      })
-      .catch(async (error) => {
-        setNotice(error instanceof Error ? error.message : String(error))
-        try {
-          const settings = await getRuntimeSettings(config)
-          if (runtimeStore.getState().connection === config) {
-            setAgentSettings((current) => ({
-              ...current,
-              advanced: advancedSettingsFromRuntime(settings),
-            }))
-            runtimeStoreActions.setSettingsConfig(config)
-          }
-        } catch {
-          if (runtimeStore.getState().connection === config) {
-            runtimeStoreActions.setSettingsConfig(null)
-          }
-        }
-      })
-  }
-
-  // Runtime owns the complete BYOK model catalog.
-  useEffect(() => {
-    if (!runtimeConnection) {
-      runtimeStoreActions.setModels([])
-      runtimeStoreActions.setImageMode(undefined)
-      runtimeStoreActions.setImageModels([])
-      return
-    }
-    let cancelled = false
-    void listLocalRuntimeModels(runtimeConnection).then(async (localCatalog) => {
-      if (cancelled) return
-      const catalog: ModelOption[] = localCatalog.flatMap((model) => {
-        const spec = parseRuntimeModelSpec(model.spec)
-        if (!model.available || !spec) return []
-        return [{
-          id: spec,
-          label: model.display_name,
-          imageInputs: Boolean(model.image_inputs),
-          description: t('settings.modelServices.localDescription'),
-          vendor: model.service_name,
-          vendor_info: t('settings.modelServices.localVendorInfo'),
-          recommended: model.recommended,
-        }]
-      })
-      const savedMode = readChatMode()
-      const defaultMode = chooseAvailableMode(catalog, savedMode)
-      runtimeStoreActions.setModels(catalog)
-      if (defaultMode && defaultMode !== savedMode) writeChatMode(defaultMode)
-      setMode((current) => chooseAvailableMode(catalog, current, defaultMode))
-
-      try {
-        const [capabilityBindings, modelServices] = await Promise.all([
-          listModelCapabilityBindings(runtimeConnection),
-          listModelServices(runtimeConnection),
-        ])
-        if (cancelled) return
-        const configuredConnections = new Set(
-          modelServices.filter((service) => service.credential_configured).map((service) => service.id),
-        )
-        const imageCatalog: ModelOption[] = localCatalog.flatMap((model) => {
-          const spec = parseRuntimeModelSpec(model.spec)
-          const imageCapability = model.capabilities.find(
-            (capability) => capability.capability === 'image_generation'
-              && capability.verification === 'verified',
-          )
-          if (!spec || !imageCapability || !configuredConnections.has(model.connection_id)) return []
-          return [{
-            id: spec,
-            label: model.display_name,
-            imageInputs: false,
-            description: t('composer.mode.imageGeneration'),
-            vendor: model.service_name,
-            vendor_info: t('settings.modelServices.localVendorInfo'),
-            recommended: model.recommended,
-          }]
-        })
-        const imageBinding = capabilityBindings.find(
-          (binding) => binding.capability === 'image_generation' && binding.status === 'ready',
-        )
-        const boundImageMode = imageBinding
-          ? parseRuntimeModelSpec(imageBinding.model_spec)
-          : undefined
-        runtimeStoreActions.setImageModels(imageCatalog)
-        runtimeStoreActions.setImageMode(
-          boundImageMode && imageCatalog.some((model) => model.id === boundImageMode)
-            ? boundImageMode
-            : undefined,
-        )
-      } catch {
-        if (!cancelled) {
-          runtimeStoreActions.setImageModels([])
-          runtimeStoreActions.setImageMode(undefined)
-        }
-      }
-    }).catch(() => {
-      runtimeStoreActions.setModels([])
-      runtimeStoreActions.setImageModels([])
-      runtimeStoreActions.setImageMode(undefined)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [runtimeConnection, modelCatalogVersion, t])
-
-  async function changeImageMode(next: ChatMode): Promise<void> {
-    if (!runtimeConnection) return
-    setNotice('')
-    try {
-      const binding = await setModelCapabilityBinding(
-        'image_generation',
-        { model_spec: next },
-        runtimeConnection,
-      )
-      runtimeStoreActions.setImageMode(parseRuntimeModelSpec(binding.model_spec))
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : String(error))
-    }
-  }
-
-  // Runtime owns advanced defaults. Client only projects them into the form;
-  // localStorage is intentionally not a competing source of truth.
-  useEffect(() => {
-    runtimeStoreActions.setSettingsConfig(null)
-    if (!runtime?.online || !runtimeConnection || !hasRuntimeAuthorization(runtimeConnection)) return
-    let cancelled = false
-    void getRuntimeSettings(runtimeConnection)
-      .then((settings) => {
-        if (!cancelled) {
-          setAgentSettings((current) => ({
-            ...current,
-            advanced: advancedSettingsFromRuntime(settings),
-          }))
-          runtimeStoreActions.setSettingsConfig(runtimeConnection)
-        }
-      })
-      .catch((error) => {
-        if (!cancelled) setNotice(error instanceof Error ? error.message : String(error))
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [runtime?.online, runtimeConnection])
 
   /** Global app shortcuts. Bypass browser/OS defaults only for app-level
    *  actions that are already visible in the shell. */
@@ -1804,20 +1624,6 @@ function useAppContentViewModel() {
     link.click()
     URL.revokeObjectURL(url)
     setNotice(t('app.notice.localDataExported'))
-  }
-
-  async function refreshCurrentModel() {
-    const selected = parseRuntimeModelSpec(mode)
-    const connectionID = selected?.split(':', 3)[1]
-    if (!runtimeConnection || !connectionID) return
-    try {
-      const services = await listModelServices(runtimeConnection)
-      if (!services.some((service) => service.id === connectionID)) return
-      await refreshModelService(connectionID, runtimeConnection)
-      runtimeStoreActions.bumpCatalogVersion()
-    } catch {
-      // Cached models remain visible; settings exposes the actionable error.
-    }
   }
 
   // The renderer is always hosted by Electron; Runtime is its only execution backend.

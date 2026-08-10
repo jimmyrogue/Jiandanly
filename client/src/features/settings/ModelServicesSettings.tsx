@@ -10,31 +10,21 @@ import {
   IconLoader2,
   IconPlus,
   IconRefresh,
-  IconSearch,
   IconTrash,
 } from '@tabler/icons-react'
 import {
-  addModelServiceModel,
   connectModelService,
   deleteModelService,
-  getCentralDiagnostics,
   getSheJaneAuthorization,
-  listModelCapabilityBindings,
-  listModelServicePresets,
-  listModelServices,
   reconnectModelService,
   refreshModelService,
   RuntimeHTTPError,
-  setModelCapabilityBinding,
   startSheJaneAuthorization,
   updateCentralDiagnostics,
   verifyModelServiceModel,
-  type CentralDiagnosticsStatus,
-  type ModelCapabilityBinding,
   type ModelServiceConnection,
   type ModelServicePreset,
   type RuntimeConnection,
-  type VerifyModelServiceModelRequest,
 } from '@/runtime/client'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -63,66 +53,13 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useI18n } from '@/shared/i18n/i18n'
+import { ModelCompatibilityDialog } from './ModelCompatibilityDialog'
+import { defaultModelProtocol } from './modelServiceModels'
+import { useModelServiceCatalog } from './useModelServiceCatalog'
+import { useModelServiceOperation } from './useModelServiceOperation'
 
 type ConnectionFieldErrors = Partial<Record<'apiKey' | 'baseURL' | 'name', string>>
-type ModelCapabilityName = VerifyModelServiceModelRequest['capability']
-type ModelProtocol = VerifyModelServiceModelRequest['protocol']
 type ModelTestState = 'testing' | 'verified' | 'failed'
-
-type ModelServiceOperationState = {
-  key: string
-  nextRun: number
-  completionRevision: number
-  activeRun?: number
-  owner?: symbol
-  label: string
-  listeners: Set<(label: string, completionRevision: number, owner?: symbol) => void>
-}
-
-const modelServiceOperations = new Map<string, ModelServiceOperationState>()
-
-function runtimeOperationKey(config: RuntimeConnection | null | undefined) {
-  if (!config) return ''
-  return `${config.baseURL}\u0000${config.session ?? config.token ?? ''}`
-}
-
-function operationStateFor(key: string) {
-  if (!key) return undefined
-  let state = modelServiceOperations.get(key)
-  if (!state) {
-    state = { key, nextRun: 0, completionRevision: 0, label: '', listeners: new Set() }
-    modelServiceOperations.set(key, state)
-  }
-  return state
-}
-
-function publishOperation(state: ModelServiceOperationState) {
-  for (const listener of state.listeners) {
-    listener(state.label, state.completionRevision, state.owner)
-  }
-  if (state.activeRun === undefined && state.listeners.size === 0) {
-    queueMicrotask(() => {
-      if (
-        state.activeRun === undefined
-        && state.listeners.size === 0
-        && modelServiceOperations.get(state.key) === state
-      ) modelServiceOperations.delete(state.key)
-    })
-  }
-}
-
-function defaultModelProtocol(
-  service: ModelServiceConnection,
-  capability: ModelCapabilityName,
-): ModelProtocol {
-  if (capability === 'image_generation') return 'openai_images_generations'
-  if (capability === 'image_editing') return 'openai_images_edits'
-  if (service.adapter_id === 'google_genai') return 'google_generate_content'
-  if (service.preset_id === 'openai') return 'openai_responses'
-  return service.adapter_id === 'anthropic_messages'
-    ? 'anthropic_messages'
-    : 'openai_chat_completions'
-}
 
 function isValidServiceURL(value: string) {
   try {
@@ -131,13 +68,6 @@ function isValidServiceURL(value: string) {
   } catch {
     return false
   }
-}
-
-function capabilityTranslationKey(capability: ModelCapabilityName) {
-  if (capability === 'agent_chat') return 'settings.modelServices.purpose.agentChat'
-  if (capability === 'image_understanding') return 'settings.modelServices.purpose.imageUnderstanding'
-  if (capability === 'image_generation') return 'settings.modelServices.purpose.imageGeneration'
-  return 'settings.modelServices.purpose.imageEditing'
 }
 
 export function ModelServicesSettings({
@@ -152,10 +82,25 @@ export function ModelServicesSettings({
   onChanged?: () => void
 }) {
   const { t } = useI18n()
-  const [presets, setPresets] = useState<ModelServicePreset[]>([])
-  const [services, setServices] = useState<ModelServiceConnection[]>([])
-  const [bindings, setBindings] = useState<ModelCapabilityBinding[]>([])
-  const [diagnostics, setDiagnostics] = useState<CentralDiagnosticsStatus>()
+  const [error, setError] = useState('')
+  const {
+    bindings,
+    diagnostics,
+    load,
+    presets,
+    services,
+    setDiagnostics,
+  } = useModelServiceCatalog(config)
+  const reloadAfterExternalCompletion = useCallback(() => {
+    void load().catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))
+  }, [load])
+  const {
+    active: operationActive,
+    begin: beginOperation,
+    busy,
+    finish: finishOperation,
+    update: updateOperation,
+  } = useModelServiceOperation(config, reloadAfterExternalCompletion)
   const [adding, setAdding] = useState(false)
   const [selected, setSelected] = useState<ModelServicePreset>()
   const [reconnecting, setReconnecting] = useState<ModelServiceConnection>()
@@ -165,22 +110,11 @@ export function ModelServicesSettings({
   const [baseURL, setBaseURL] = useState('')
   const [adapterID, setAdapterID] = useState<ModelServiceConnection['adapter_id']>()
   const [showAdvanced, setShowAdvanced] = useState(false)
-  const [manualModels, setManualModels] = useState<Record<string, string>>({})
-  const [modelCapabilities, setModelCapabilities] = useState<Record<string, ModelCapabilityName>>({})
-  const [modelProtocols, setModelProtocols] = useState<Record<string, ModelProtocol>>({})
   const [viewingService, setViewingService] = useState<ModelServiceConnection>()
   const [managingService, setManagingService] = useState<ModelServiceConnection>()
-  const [modelSearch, setModelSearch] = useState('')
-  const [selectedModels, setSelectedModels] = useState<Record<string, boolean>>({})
-  const [modelTestStates, setModelTestStates] = useState<Record<string, ModelTestState>>({})
   const [connectionTestStates, setConnectionTestStates] = useState<Record<string, ModelTestState>>({})
-  const operationState = operationStateFor(runtimeOperationKey(config))
-  const [busy, setBusy] = useState(() => operationState?.label ?? '')
-  const [error, setError] = useState('')
   const [fieldErrors, setFieldErrors] = useState<ConnectionFieldErrors>({})
   const authorizationRun = useRef(0)
-  const operationOwner = useRef(Symbol('model-service-settings'))
-  const observedCompletionRevision = useRef(operationState?.completionRevision ?? 0)
   const defaultBaseURL = reconnecting?.base_url
     ?? selected?.regions.find((item) => item.id === region)?.base_url
     ?? selected?.regions.find((item) => item.default)?.base_url
@@ -195,82 +129,12 @@ export function ModelServicesSettings({
     })
   }
 
-  const beginOperation = (label: string) => {
-    if (!operationState || operationState.activeRun !== undefined) return undefined
-    const run = ++operationState.nextRun
-    operationState.activeRun = run
-    operationState.owner = operationOwner.current
-    operationState.label = label
-    publishOperation(operationState)
-    return run
-  }
-
-  const updateOperation = (run: number, label: string) => {
-    if (!operationState || operationState.activeRun !== run) return
-    operationState.label = label
-    publishOperation(operationState)
-  }
-
-  const finishOperation = (run: number) => {
-    if (!operationState || operationState.activeRun !== run) return
-    operationState.activeRun = undefined
-    operationState.label = ''
-    operationState.completionRevision += 1
-    publishOperation(operationState)
-    operationState.owner = undefined
-  }
-
-  const load = useCallback(async () => {
-    if (!config) {
-      setPresets([])
-      setServices([])
-      setBindings([])
-      setDiagnostics(undefined)
-      return []
-    }
-    const [nextPresets, nextServices, nextBindings] = await Promise.all([
-      listModelServicePresets(config),
-      listModelServices(config),
-      listModelCapabilityBindings(config),
-    ])
-    setPresets(nextPresets)
-    setServices(nextServices)
-    setBindings(nextBindings)
-    try {
-      setDiagnostics(await getCentralDiagnostics(config))
-    } catch {
-      setDiagnostics(undefined)
-    }
-    return nextServices
-  }, [config])
-
   useEffect(() => {
     void load().catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))
   }, [load])
 
-  useEffect(() => {
-    if (!operationState) {
-      setBusy('')
-      return
-    }
-    observedCompletionRevision.current = operationState.completionRevision
-    const listener = (label: string, completionRevision: number, owner?: symbol) => {
-      setBusy(label)
-      if (completionRevision === observedCompletionRevision.current) return
-      observedCompletionRevision.current = completionRevision
-      if (owner === operationOwner.current) return
-      void load().catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))
-    }
-    operationState.listeners.add(listener)
-    setBusy(operationState.label)
-    return () => {
-      operationState.listeners.delete(listener)
-      publishOperation(operationState)
-    }
-  }, [load, operationState])
-
   const openAddDialog = () => {
-    if (operationState?.activeRun !== undefined) return
+    if (operationActive) return
     setAdding(true)
     setSelected(undefined)
     setReconnecting(undefined)
@@ -360,7 +224,7 @@ export function ModelServicesSettings({
   }
 
   const openPreset = (preset: ModelServicePreset) => {
-    if (operationState?.activeRun !== undefined) return
+    if (operationActive) return
     const defaultRegion = preset.regions.find((item) => item.default) ?? preset.regions[0]
     setReconnecting(undefined)
     setSelected(preset)
@@ -378,7 +242,7 @@ export function ModelServicesSettings({
   }
 
   const openReconnect = (service: ModelServiceConnection) => {
-    if (operationState?.activeRun !== undefined) return
+    if (operationActive) return
     setAdding(false)
     setSelected(undefined)
     setReconnecting(service)
@@ -504,110 +368,6 @@ export function ModelServicesSettings({
     }
   }
 
-  const addManualModel = async (service: ModelServiceConnection) => {
-    const modelID = manualModels[service.id]?.trim()
-    if (!config || !modelID) return
-    const operation = beginOperation(service.id)
-    if (operation === undefined) return
-    setError('')
-    try {
-      const addedModel = await addModelServiceModel(service.id, { model_id: modelID }, config)
-      setManualModels((current) => ({ ...current, [service.id]: '' }))
-      const nextServices = await load()
-      setManagingService(
-        nextServices.find((item) => item.id === service.id)
-        ?? (addedModel ? { ...service, models: [...service.models, addedModel] } : service),
-      )
-      onChanged?.()
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason))
-    } finally {
-      finishOperation(operation)
-    }
-  }
-
-  const verifySelectedModels = async () => {
-    if (!config || !managingService) return
-    const models = managingService.models.filter((model) => selectedModels[model.model_id])
-    if (models.length === 0) return
-    const operation = beginOperation(`verify:${managingService.id}`)
-    if (operation === undefined) return
-    const readyBindings = new Set(
-      bindings.filter((binding) => binding.status === 'ready').map((binding) => binding.capability),
-    )
-    const failures: string[] = []
-    setError('')
-    for (const model of models) {
-      const key = `${managingService.id}:${model.model_id}`
-      const capability = modelCapabilities[key] ?? model.capabilities?.[0]?.capability ?? 'agent_chat'
-      const selectedCapability = (model.capabilities ?? []).find(
-        (item) => item.capability === capability,
-      )
-      const protocol = modelProtocols[key]
-        ?? selectedCapability?.protocol
-        ?? defaultModelProtocol(managingService, capability)
-      setModelTestStates((current) => ({ ...current, [model.model_id]: 'testing' }))
-      try {
-        await verifyModelServiceModel(
-          managingService.id,
-          model.model_id,
-          { capability, protocol },
-          config,
-        )
-        if (
-          (capability === 'image_generation' || capability === 'image_editing')
-          && !readyBindings.has(capability)
-        ) {
-          await setModelCapabilityBinding(
-            capability,
-            { model_spec: `local:${managingService.id}:${model.model_id}` },
-            config,
-          )
-          readyBindings.add(capability)
-        }
-        setModelTestStates((current) => ({ ...current, [model.model_id]: 'verified' }))
-      } catch (reason) {
-        failures.push(reason instanceof Error ? reason.message : String(reason))
-        setModelTestStates((current) => ({ ...current, [model.model_id]: 'failed' }))
-      }
-    }
-    try {
-      const nextServices = await load()
-      setManagingService(nextServices.find((item) => item.id === managingService.id) ?? managingService)
-      if (failures.length === 0) setSelectedModels({})
-      else setError(failures[0])
-      onChanged?.()
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason))
-    } finally {
-      finishOperation(operation)
-    }
-  }
-
-  const makeDefault = async (
-    service: ModelServiceConnection,
-    modelID: string,
-    capability: ModelCapabilityBinding['capability'],
-  ) => {
-    if (!config) return
-    const operation = beginOperation(service.id)
-    if (operation === undefined) return
-    setError('')
-    try {
-      await setModelCapabilityBinding(
-        capability,
-        { model_spec: `local:${service.id}:${modelID}` },
-        config,
-      )
-      await load()
-      onChanged?.()
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason))
-    } finally {
-      finishOperation(operation)
-    }
-  }
-
   const dialogPreset = selected
     ?? presets.find((preset) => preset.id === reconnecting?.preset_id)
   const officialPresets = presets.filter((preset) => preset.id !== 'custom')
@@ -615,8 +375,8 @@ export function ModelServicesSettings({
 
   const backToPicker = () => {
     if (
-      operationState?.activeRun !== undefined
-      && !operationState.label.startsWith('authorize')
+      operationActive
+      && !busy.startsWith('authorize')
     ) return
     setSelected(undefined)
     setAPIKey('')
@@ -628,9 +388,6 @@ export function ModelServicesSettings({
 
   const openModelPicker = (service: ModelServiceConnection) => {
     setManagingService(service)
-    setModelSearch('')
-    setSelectedModels({})
-    setModelTestStates({})
     setError('')
   }
 
@@ -682,23 +439,6 @@ export function ModelServicesSettings({
     }
   }
 
-  const filteredModels = managingService?.models.filter((model) => {
-    const query = modelSearch.trim().toLocaleLowerCase()
-    return !query
-      || model.model_id.toLocaleLowerCase().includes(query)
-      || model.display_name.toLocaleLowerCase().includes(query)
-  }) ?? []
-  const selectedModelCount = managingService?.models.filter(
-    (model) => selectedModels[model.model_id],
-  ).length ?? 0
-  const selectedImageCapability = managingService?.models.some((model) => {
-    if (!selectedModels[model.model_id]) return false
-    const capability = modelCapabilities[`${managingService.id}:${model.model_id}`]
-      ?? model.capabilities?.[0]?.capability
-      ?? 'agent_chat'
-    return capability === 'image_generation' || capability === 'image_editing'
-  }) ?? false
-  const modelPickerBusy = Boolean(managingService && busy === `verify:${managingService.id}`)
   const viewingModels = viewingService?.models ?? []
 
   return (
@@ -1138,271 +878,21 @@ export function ModelServicesSettings({
         </DialogContent>
       </Dialog>
 
-      <Dialog
-        open={Boolean(managingService)}
-        onOpenChange={(open) => {
-          if (!open && !modelPickerBusy) {
+      {managingService && (
+        <ModelCompatibilityDialog
+          key={managingService.id}
+          bindings={bindings}
+          config={config}
+          initialService={managingService}
+          load={load}
+          onChanged={onChanged}
+          onClose={() => {
             setManagingService(undefined)
-            setModelSearch('')
-            setSelectedModels({})
-            setModelTestStates({})
             setError('')
-          }
-        }}
-      >
-        <DialogContent className="settings-model-picker-dialog sm:max-w-[680px]">
-          {managingService && (
-            <>
-              <DialogHeader className="settings-model-picker-header">
-                <div>
-                  <DialogTitle>{t('settings.modelServices.modelPickerTitle')}</DialogTitle>
-                  <DialogDescription>
-                    {t('settings.modelServices.modelPickerDescription', { name: managingService.name })}
-                  </DialogDescription>
-                </div>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label={t('settings.modelServices.refresh')}
-                  disabled={busy === `refresh:${managingService.id}` || modelPickerBusy}
-                  onClick={() => void refresh(managingService)}
-                >
-                  <IconRefresh className={busy === `refresh:${managingService.id}` ? 'animate-spin' : undefined} />
-                </Button>
-              </DialogHeader>
-
-              <div className="settings-model-picker-search">
-                <IconSearch size={16} aria-hidden="true" />
-                <Input
-                  type="search"
-                  role="searchbox"
-                  value={modelSearch}
-                  aria-label={t('settings.modelServices.filterModels')}
-                  placeholder={t('settings.modelServices.filterModels')}
-                  onChange={(event) => setModelSearch(event.target.value)}
-                />
-              </div>
-
-              <div className="settings-model-picker-meta">
-                <span>{t('settings.modelServices.modelCount', { count: managingService.models.length })}</span>
-                <span>{t('settings.modelServices.selectedCount', { count: selectedModelCount })}</span>
-              </div>
-
-              <div className="settings-model-picker-list">
-                {filteredModels.length === 0 ? (
-                  <div className="settings-model-picker-empty">
-                    {t('settings.modelServices.noMatchingModels')}
-                  </div>
-                ) : filteredModels.map((model) => {
-                  const key = `${managingService.id}:${model.model_id}`
-                  const selectedForTest = Boolean(selectedModels[model.model_id])
-                  const capability = modelCapabilities[key]
-                    ?? model.capabilities?.[0]?.capability
-                    ?? 'agent_chat'
-                  const selectedCapability = (model.capabilities ?? []).find(
-                    (item) => item.capability === capability,
-                  )
-                  const protocol = modelProtocols[key]
-                    ?? selectedCapability?.protocol
-                    ?? defaultModelProtocol(managingService, capability)
-                  const verifiedCapabilities = (model.capabilities ?? []).filter(
-                    (item) => item.verification === 'verified',
-                  )
-                  const testState = modelTestStates[model.model_id]
-                  return (
-                    <div
-                      className={`settings-model-picker-row${selectedForTest ? ' selected' : ''}`}
-                      key={model.model_id}
-                    >
-                      <label className="settings-model-picker-row-head">
-                        <input
-                          type="checkbox"
-                          checked={selectedForTest}
-                          aria-label={t('settings.modelServices.selectModel', { name: model.display_name })}
-                          disabled={modelPickerBusy}
-                          onChange={(event) => setSelectedModels((current) => ({
-                            ...current,
-                            [model.model_id]: event.target.checked,
-                          }))}
-                        />
-                        <span className="settings-model-picker-name">
-                          <strong>{model.display_name}</strong>
-                          {model.model_id !== model.display_name && <small>{model.model_id}</small>}
-                        </span>
-                        <span className={`settings-model-picker-result${testState ? ` ${testState}` : ''}`}>
-                          {testState === 'testing' ? (
-                            <><IconLoader2 className="animate-spin" size={14} aria-hidden="true" />{t('settings.modelServices.testing')}</>
-                          ) : testState === 'verified' ? (
-                            <><IconCheck size={14} aria-hidden="true" />{t('settings.modelServices.modelVerified')}</>
-                          ) : testState === 'failed' ? t('settings.modelServices.modelFailed')
-                            : verifiedCapabilities.length > 0 ? t('settings.modelServices.modelVerified') : null}
-                        </span>
-                      </label>
-
-                      {verifiedCapabilities.length > 0 && (
-                        <div className="settings-model-picker-enabled">
-                          <span>
-                            {t('settings.modelServices.enabledCapabilities', {
-                              capabilities: verifiedCapabilities
-                                .map((item) => t(capabilityTranslationKey(item.capability)))
-                                .join('、'),
-                            })}
-                          </span>
-                          {verifiedCapabilities.map((item) => {
-                            const bindable = item.capability === 'image_generation'
-                              || item.capability === 'image_editing'
-                            if (!bindable) return null
-                            const binding = bindings.find((candidate) => candidate.capability === item.capability)
-                            const selectedByDefault = binding?.status === 'ready'
-                              && binding.connection_id === managingService.id
-                              && binding.model_id === model.model_id
-                            return selectedByDefault ? (
-                              <span key={item.capability}>{t('settings.modelServices.defaultCapability')}</span>
-                            ) : (
-                              <button
-                                type="button"
-                                key={item.capability}
-                                disabled={modelPickerBusy}
-                                onClick={() => void makeDefault(
-                                  managingService,
-                                  model.model_id,
-                                  item.capability as ModelCapabilityBinding['capability'],
-                                )}
-                              >
-                                {t('settings.modelServices.setDefaultCapability')}
-                              </button>
-                            )
-                          })}
-                        </div>
-                      )}
-
-                      {selectedForTest && (
-                        <div className="settings-model-picker-config">
-                          <div className="settings-model-picker-field">
-                            <span>{t('settings.modelServices.use')}</span>
-                            <Select
-                              value={capability}
-                              onValueChange={(value) => {
-                                const nextCapability = value as ModelCapabilityName
-                                setModelCapabilities((current) => ({ ...current, [key]: nextCapability }))
-                                setModelProtocols((current) => ({
-                                  ...current,
-                                  [key]: defaultModelProtocol(managingService, nextCapability),
-                                }))
-                              }}
-                            >
-                              <SelectTrigger aria-label={t('settings.modelServices.purposeAria', { name: model.display_name })}>
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectGroup>
-                                  <SelectItem value="agent_chat">{t('settings.modelServices.purpose.agentChat')}</SelectItem>
-                                  <SelectItem value="image_understanding">{t('settings.modelServices.purpose.imageUnderstanding')}</SelectItem>
-                                  <SelectItem value="image_generation">{t('settings.modelServices.purpose.imageGeneration')}</SelectItem>
-                                  <SelectItem value="image_editing">{t('settings.modelServices.purpose.imageEditing')}</SelectItem>
-                                </SelectGroup>
-                              </SelectContent>
-                            </Select>
-                          </div>
-                          <details className="settings-model-picker-advanced">
-                            <summary>{t('settings.modelServices.advanced')}</summary>
-                            <div className="settings-model-picker-field">
-                              <span>{t('settings.modelServices.protocol')}</span>
-                              <Select
-                                value={protocol}
-                                onValueChange={(value) => setModelProtocols((current) => ({
-                                  ...current,
-                                  [key]: value as ModelProtocol,
-                                }))}
-                              >
-                                <SelectTrigger aria-label={t('settings.modelServices.protocolAria', { name: model.display_name })}>
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectGroup>
-                                    {capability === 'image_generation' ? (
-                                      <SelectItem value="openai_images_generations">OpenAI Images</SelectItem>
-                                    ) : capability === 'image_editing' ? (
-                                      <SelectItem value="openai_images_edits">OpenAI Image Edits</SelectItem>
-                                    ) : (
-                                      <>
-                                        <SelectItem value="openai_chat_completions">OpenAI Chat</SelectItem>
-                                        <SelectItem value="openai_responses">OpenAI Responses</SelectItem>
-                                        <SelectItem value="anthropic_messages">Anthropic Messages</SelectItem>
-                                        <SelectItem value="google_generate_content">Google GenerateContent</SelectItem>
-                                      </>
-                                    )}
-                                  </SelectGroup>
-                                </SelectContent>
-                              </Select>
-                            </div>
-                          </details>
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
-
-              {managingService.preset_id === 'custom' && (
-                <details className="settings-model-picker-manual">
-                  <summary>{t('settings.modelServices.addManualModel')}</summary>
-                  <div>
-                    <Input
-                      value={manualModels[managingService.id] ?? ''}
-                      aria-label={t('settings.modelServices.modelId')}
-                      placeholder={t('settings.modelServices.modelId')}
-                      onChange={(event) => setManualModels((current) => ({
-                        ...current,
-                        [managingService.id]: event.target.value,
-                      }))}
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      disabled={!manualModels[managingService.id]?.trim() || busy === managingService.id}
-                      onClick={() => void addManualModel(managingService)}
-                    >
-                      {t('settings.modelServices.addModel')}
-                    </Button>
-                  </div>
-                </details>
-              )}
-
-              {error && <div className="settings-model-service-error" role="alert">{error}</div>}
-
-              <div className="settings-model-picker-footer">
-                <div>
-                  <strong>{t('settings.modelServices.selectedCount', { count: selectedModelCount })}</strong>
-                  {selectedImageCapability && <small>{t('settings.modelServices.imageCostHint')}</small>}
-                </div>
-                <div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={modelPickerBusy}
-                    onClick={() => setManagingService(undefined)}
-                  >
-                    {t('common.cancel')}
-                  </Button>
-                  <Button
-                    type="button"
-                    disabled={selectedModelCount === 0 || modelPickerBusy}
-                    aria-busy={modelPickerBusy}
-                    onClick={() => void verifySelectedModels()}
-                  >
-                    {modelPickerBusy && <IconLoader2 className="animate-spin" aria-hidden="true" />}
-                    {t(modelPickerBusy
-                      ? 'settings.modelServices.testingSelected'
-                      : 'settings.modelServices.testSelected', { count: selectedModelCount })}
-                  </Button>
-                </div>
-              </div>
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
+          }}
+          operation={{ begin: beginOperation, busy, finish: finishOperation }}
+        />
+      )}
     </section>
   )
 }

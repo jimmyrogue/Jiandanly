@@ -16,8 +16,6 @@ import json
 import logging
 import os
 import re
-import shutil
-import tempfile
 import uuid
 from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import UTC, datetime
@@ -27,7 +25,6 @@ from typing import Any, Literal
 from urllib.parse import urljoin, urlparse
 
 import httpx
-import yaml
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -91,11 +88,6 @@ from .api_schemas import (
     LocalThreadSnapshot,
     LocalWorkspaceAuthorization,
     LocalWorkspaceDiagnosis,
-    McpServerCatalog,
-    McpServerDeleteResponse,
-    McpServerInfo,
-    McpServerWriteRequest,
-    McpServerWriteResponse,
     ModelCapabilityBinding,
     ModelServiceConnection,
     ModelServiceModel,
@@ -137,10 +129,6 @@ from .api_schemas import (
     SetModelCapabilityBindingRequest,
     SheJaneAuthorizationStartResponse,
     SheJaneAuthorizationStatusResponse,
-    SkillDeleteResponse,
-    SkillFile,
-    SkillWriteRequest,
-    SkillWriteResponse,
     ToolReconcileCommand,
     ToolReconcileCommandReceipt,
     ToolReconciliationResolution,
@@ -151,6 +139,7 @@ from .api_schemas import (
 )
 from .auth import LOCAL_OWNER_PRINCIPAL_ID, PairingTokenAuthMiddleware
 from .build_info import runtime_build_identity
+from .catalog_routes import catalog_router
 from .central_diagnostics import (
     CentralDiagnosticsConfigurationError,
     CentralDiagnosticsManager,
@@ -1347,120 +1336,6 @@ async def _complete_shejane_authorization(
     return response.model_dump()
 
 
-def _list_skill_files() -> list[dict[str, str]]:
-    """Lightweight skill catalog for the HTTP layer — independent of any
-    running agent. Walks every roots `_resolve_skills_dirs` returns and
-    finds skills in the Anthropic / skills.sh format: each skill is a
-    directory containing `SKILL.md` with YAML frontmatter. Returns
-    `{name, title, description, path, source}` where `source` is the
-    last component of the root (`shejane`, `claude`, …) so the UI can
-    group entries by provenance.
-
-    Skill *invocation* (loading full content into prompts) happens via
-    deepagents SkillsMiddleware inside a run; this endpoint just answers
-    "what's available?". Only the SKILL.md directory format is listed
-    because deepagents only loads that format — a flat `.md` would show
-    up here but never reach the model.
-    """
-    from .agent.builder import _resolve_skills_dirs
-
-    out: list[dict[str, str]] = []
-    seen_names: set[str] = set()
-    for root in _resolve_skills_dirs():
-        # `source` is the parent's name stripped of any leading dot, so
-        # `~/.shejane/skills/` reports `shejane`, `~/.claude/skills/`
-        # reports `claude`, and a custom env override like
-        # `/abs/foo/skills/` reports `foo`. This is what the renderer
-        # groups by — `root.name` itself is always literally "skills"
-        # so it's useless as a label.
-        source = (root.parent.name or root.name).lstrip(".")
-        for entry in sorted(root.iterdir()):
-            if not entry.is_dir() or entry.name.startswith(("_", ".")):
-                continue
-            skill_md = entry / "SKILL.md"
-            if not skill_md.is_file():
-                continue
-            try:
-                text = skill_md.read_text(encoding="utf-8")
-            except OSError:
-                continue
-            # Use frontmatter `name` over directory name when present;
-            # fall back to dir name. Dedupe across roots — first source
-            # wins, matching deepagents' "later sources override earlier"
-            # convention in reverse (we list shejane first so it's the
-            # canonical name when both roots have the same skill).
-            title, description = _parse_frontmatter_minimal(text)
-            display_name = entry.name
-            if display_name in seen_names:
-                continue
-            seen_names.add(display_name)
-            out.append(
-                {
-                    "name": display_name,
-                    "title": title or display_name,
-                    "description": description,
-                    "path": str(skill_md),
-                    "source": source,
-                    "root_path": str(root),
-                }
-            )
-    return out
-
-
-def _parse_frontmatter_minimal(text: str) -> tuple[str, str]:
-    """Extract display metadata from Skill YAML frontmatter."""
-    match = re.match(r"^---\s*\n(.*?)\n---\s*(?:\n|$)", text, re.DOTALL)
-    if match is None:
-        return "", ""
-    try:
-        metadata = yaml.safe_load(match.group(1))
-    except yaml.YAMLError:
-        return "", ""
-    if not isinstance(metadata, dict):
-        return "", ""
-    title = metadata.get("title") or metadata.get("name") or ""
-    description = metadata.get("description") or ""
-    return str(title), str(description)
-
-
-_SAFE_CATALOG_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
-
-
-def _safe_catalog_name(raw: str | None) -> str:
-    name = (raw or "").strip()
-    if not _SAFE_CATALOG_NAME_RE.fullmatch(name):
-        raise HTTPException(
-            status_code=400,
-            detail="name must start with a letter or number and contain only letters, numbers, '.', '_' or '-'",
-        )
-    return name
-
-
-def _write_json_atomic(path: Path, value: dict[str, Any]) -> None:
-    _write_text_atomic(
-        path,
-        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-    )
-
-
-def _write_text_atomic(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        dir=path.parent,
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
 def _normalize_schedule_time(raw: str) -> str:
     value = raw.strip()
     if not value:
@@ -1566,162 +1441,6 @@ async def _authorized_workspace_path(
     if workspace_error is not None:
         raise HTTPException(status_code=409, detail=workspace_error)
     return resolved
-
-
-def _shejane_mcp_config_path() -> Path:
-    return Path.home() / ".shejane" / "mcp-servers.json"
-
-
-def _read_shejane_mcp_config() -> dict[str, Any]:
-    path = _shejane_mcp_config_path()
-    if not path.exists():
-        return {"mcpServers": {}}
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise HTTPException(
-            status_code=400, detail=f"shejane MCP config is not readable JSON: {exc}"
-        ) from exc
-    if not isinstance(raw, dict):
-        return {"mcpServers": {}}
-    servers = raw.get("mcpServers")
-    if isinstance(servers, dict):
-        return raw
-    if all(isinstance(v, dict) and ("command" in v or "url" in v) for v in raw.values()):
-        return {"mcpServers": raw}
-    raw["mcpServers"] = {}
-    return raw
-
-
-def _mcp_info_from_config(name: str, config: dict[str, Any]) -> McpServerInfo:
-    path = _shejane_mcp_config_path()
-    return McpServerInfo(
-        name=name,
-        transport=str(config.get("transport") or "stdio"),
-        source="shejane",
-        source_path=str(path),
-        command=config.get("command") if isinstance(config.get("command"), str) else None,
-        args=[str(arg) for arg in config.get("args", []) or []],
-        url=config.get("url") if isinstance(config.get("url"), str) else None,
-        env_keys=sorted(str(key) for key in (config.get("env") or {}).keys()),
-        cwd=config.get("cwd") if isinstance(config.get("cwd"), str) else None,
-    )
-
-
-def _personal_skills_root() -> Path:
-    root = Path.home() / ".shejane" / "skills"
-    root.mkdir(parents=True, exist_ok=True)
-    return root
-
-
-def _skill_md_path(name: str) -> Path:
-    root = _personal_skills_root().resolve()
-    skill_dir = (root / name).resolve()
-    if root not in skill_dir.parents:
-        raise HTTPException(status_code=400, detail="skill path escapes personal skills root")
-    return skill_dir / "SKILL.md"
-
-
-def _default_skill_content(name: str, description: str) -> str:
-    lines = ["---", f"name: {name}"]
-    description = description.strip()
-    if description:
-        lines.append(f"description: {description}")
-    lines.extend(["---", "", f"# {name}", ""])
-    if description:
-        lines.append(description)
-        lines.append("")
-    return "\n".join(lines)
-
-
-def _skill_file_from_path(name: str, path: Path) -> SkillFile:
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="skill not found")
-    try:
-        content = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"failed to read skill: {exc}") from exc
-    _, description = _parse_frontmatter_minimal(content)
-    return SkillFile(
-        name=name,
-        description=description,
-        path=str(path),
-        root_path=str(_personal_skills_root()),
-        content=content,
-    )
-
-
-def _write_mcp_server(
-    route_name: str | None, request: McpServerWriteRequest
-) -> McpServerWriteResponse:
-    from .tools.mcp import _normalize_entry
-
-    name = _safe_catalog_name(route_name or request.name)
-    raw: dict[str, Any] = {
-        "transport": request.transport,
-    }
-    if request.command is not None:
-        raw["command"] = request.command
-    if request.args:
-        raw["args"] = request.args
-    if request.url is not None:
-        raw["url"] = request.url
-    if request.env:
-        raw["env"] = request.env
-    if request.cwd is not None:
-        raw["cwd"] = request.cwd
-
-    normalized = _normalize_entry(name, raw)
-    if normalized is None:
-        raise HTTPException(status_code=400, detail="MCP server must include command or url")
-
-    config = _read_shejane_mcp_config()
-    servers = config.setdefault("mcpServers", {})
-    if not isinstance(servers, dict):
-        servers = {}
-        config["mcpServers"] = servers
-    servers[name] = normalized
-    _write_json_atomic(_shejane_mcp_config_path(), config)
-    return McpServerWriteResponse(server=_mcp_info_from_config(name, normalized))
-
-
-def _write_local_skill(route_name: str | None, request: SkillWriteRequest) -> SkillWriteResponse:
-    name = _safe_catalog_name(route_name or request.name)
-    path = _skill_md_path(name)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    content = request.content
-    if content is None:
-        content = _default_skill_content(name, request.description)
-    content = _normalize_local_skill_content(name, request.description, content)
-    try:
-        _write_text_atomic(path, content)
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"failed to write skill: {exc}") from exc
-    return SkillWriteResponse(skill=_skill_file_from_path(name, path))
-
-
-def _normalize_local_skill_content(name: str, description: str, content: str) -> str:
-    match = re.match(r"^---\s*\n(.*?)\n---\s*(?:\n|$)", content, re.DOTALL)
-    body = content
-    metadata: dict[str, Any] = {}
-    if match is not None:
-        try:
-            parsed = yaml.safe_load(match.group(1))
-        except yaml.YAMLError as exc:
-            raise HTTPException(status_code=422, detail="invalid Skill YAML frontmatter") from exc
-        if parsed is not None and not isinstance(parsed, dict):
-            raise HTTPException(status_code=422, detail="Skill frontmatter must be an object")
-        metadata = dict(parsed or {})
-        body = content[match.end() :]
-    metadata["name"] = name
-    requested_description = description.strip()
-    if requested_description:
-        metadata["description"] = requested_description
-    elif not str(metadata.get("description") or "").strip():
-        metadata["description"] = name
-    header = yaml.safe_dump(metadata, allow_unicode=True, sort_keys=False).rstrip()
-    body = body.lstrip("\n")
-    return f"---\n{header}\n---\n{body}".rstrip() + "\n"
 
 
 @asynccontextmanager
@@ -4625,118 +4344,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     break
         return {"cleared": True, "deleted_count": deleted}
 
-    @app.get("/v1/mcp-servers", response_model=McpServerCatalog)
-    async def list_mcp_servers() -> McpServerCatalog:
-        """List MCP Servers explicitly owned by this Runtime."""
-        from .config import get_settings
-        from .tools.mcp import _candidate_source_files, discover_servers
-
-        settings = get_settings()
-        discovered = discover_servers(settings.data_dir)
-        statuses = app.state.mcp_catalog.server_statuses()
-        sources_scanned: list[str] = ["env"]
-        for src in _candidate_source_files(settings.data_dir):
-            if src.source not in sources_scanned:
-                sources_scanned.append(src.source)
-        servers = []
-        for srv in discovered:
-            status = statuses.get(srv.name, {})
-            servers.append(
-                McpServerInfo(
-                    name=srv.name,
-                    transport=srv.config.get("transport", "stdio"),
-                    source=srv.source,
-                    source_path=srv.source_path,
-                    command=srv.config.get("command"),
-                    args=list(srv.config.get("args", []) or []),
-                    url=srv.config.get("url"),
-                    # Never leak env *values* — only the keys, so the UI
-                    # can show "needs API_KEY, TAVILY_KEY" without exposing
-                    # secrets that were copy-pasted in.
-                    env_keys=sorted(list((srv.config.get("env") or {}).keys())),
-                    cwd=srv.config.get("cwd"),
-                    status=status.get("status", "idle"),
-                    tool_count=int(status.get("tool_count", 0)),
-                    error_type=status.get("error_type"),
-                )
-            )
-        return McpServerCatalog(servers=servers, sources_scanned=sources_scanned)
-
-    @app.post("/v1/mcp-servers", response_model=McpServerWriteResponse)
-    async def create_mcp_server(request: McpServerWriteRequest) -> McpServerWriteResponse:
-        response = _write_mcp_server(request.name, request)
-        await app.state.mcp_catalog.invalidate(response.server.name)
-        app.state.mcp_catalog.request_refresh()
-        return response
-
-    @app.put("/v1/mcp-servers/{server_name}", response_model=McpServerWriteResponse)
-    async def update_mcp_server(
-        server_name: str, request: McpServerWriteRequest
-    ) -> McpServerWriteResponse:
-        response = _write_mcp_server(server_name, request)
-        await app.state.mcp_catalog.invalidate(response.server.name)
-        app.state.mcp_catalog.request_refresh()
-        return response
-
-    @app.delete("/v1/mcp-servers/{server_name}", response_model=McpServerDeleteResponse)
-    async def delete_mcp_server(server_name: str) -> McpServerDeleteResponse:
-        name = _safe_catalog_name(server_name)
-        config = _read_shejane_mcp_config()
-        servers = config.setdefault("mcpServers", {})
-        if isinstance(servers, dict):
-            servers.pop(name, None)
-        _write_json_atomic(_shejane_mcp_config_path(), config)
-        await app.state.mcp_catalog.invalidate(name)
-        await app.state.store.delete_mcp_catalog(name)
-        return McpServerDeleteResponse(name=name)
-
-    @app.get("/v1/skills")
-    async def list_local_skills() -> dict[str, Any]:
-        """Catalog of every SKILL.md the runtime can see across all
-        configured skill roots (`~/.shejane/skills/`, `~/.claude/skills/`,
-        or `SHEJANE_RUNTIME_SKILLS_PATH` overrides). Skills are managed
-        out-of-band — the user drops directories into a root themselves
-        (or installs via the skills.sh CLI into `~/.claude/skills/`) and
-        the runtime picks them up on next scan.
-
-        Also surfaces the roots themselves under `roots` so the UI can
-        render section headers (e.g. "Personal" for shejane) even when
-        a root is empty — otherwise the user has no idea where to drop
-        their SKILL.md directories.
-        """
-        from .agent.builder import _resolve_skills_dirs
-
-        roots = [
-            {
-                "source": (d.parent.name or d.name).lstrip("."),
-                "path": str(d),
-            }
-            for d in _resolve_skills_dirs()
-        ]
-        return {"skills": _list_skill_files(), "roots": roots}
-
-    @app.post("/v1/skills", response_model=SkillWriteResponse)
-    async def create_local_skill(request: SkillWriteRequest) -> SkillWriteResponse:
-        return _write_local_skill(request.name, request)
-
-    @app.get("/v1/skills/{skill_name}", response_model=SkillFile)
-    async def get_local_skill(skill_name: str) -> SkillFile:
-        name = _safe_catalog_name(skill_name)
-        return _skill_file_from_path(name, _skill_md_path(name))
-
-    @app.put("/v1/skills/{skill_name}", response_model=SkillWriteResponse)
-    async def update_local_skill(skill_name: str, request: SkillWriteRequest) -> SkillWriteResponse:
-        return _write_local_skill(skill_name, request)
-
-    @app.delete("/v1/skills/{skill_name}", response_model=SkillDeleteResponse)
-    async def delete_local_skill(skill_name: str) -> SkillDeleteResponse:
-        name = _safe_catalog_name(skill_name)
-        path = _skill_md_path(name)
-        if not path.exists():
-            raise HTTPException(status_code=404, detail="skill not found")
-        shutil.rmtree(path.parent)
-        return SkillDeleteResponse(name=name)
-
+    app.include_router(catalog_router)
     return app
 
 

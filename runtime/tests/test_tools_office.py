@@ -851,7 +851,7 @@ def test_atomic_write_keeps_target_intact_on_verification_failure(
 ) -> None:
     """If verification fails after the tmp write, the target keeps its
     previous (last-successful) content and no tmp file is left behind."""
-    from shejane_runtime.tools import office as office_module
+    from shejane_runtime.tools import office_common
 
     p = _make_docx(tmp_path)
     # First do a real edit so .edited.docx exists with known content.
@@ -865,7 +865,7 @@ def test_atomic_write_keeps_target_intact_on_verification_failure(
     def _boom(path: str, kind: str) -> None:
         raise RuntimeError("simulated corruption")
 
-    monkeypatch.setattr(office_module, "_verify_file", _boom)
+    monkeypatch.setattr(office_common, "verify_file", _boom)
 
     r2 = office_find_replace.func(path=str(p), find="Executive", replace="Top-line")
     assert r2["ok"] == "false"
@@ -1097,7 +1097,7 @@ def test_pptx_atomic_rollback_on_verify_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Force-verify-fail on a pptx write → target keeps last-good state."""
-    from shejane_runtime.tools import office as office_module
+    from shejane_runtime.tools import office_common
 
     p = tmp_path / "deck.pptx"
     office_create_pptx.func(path=str(p), title="A")
@@ -1108,8 +1108,8 @@ def test_pptx_atomic_rollback_on_verify_failure(
     sha_known_good = _sha256(target)
 
     monkeypatch.setattr(
-        office_module,
-        "_verify_file",
+        office_common,
+        "verify_file",
         lambda path, kind: (_ for _ in ()).throw(RuntimeError("boom")),
     )
     r2 = office_add_slide.func(path=str(p), title="C")

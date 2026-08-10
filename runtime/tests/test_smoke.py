@@ -646,7 +646,7 @@ def test_skill_catalog_lists_skill_md_directories(monkeypatch: Any, tmp_path: Pa
     beta_dir.mkdir()
     (beta_dir / "SKILL.md").write_text("# Beta", encoding="utf-8")
 
-    from shejane_runtime.server import _list_skill_files
+    from shejane_runtime.catalog_routes import _list_skill_files
 
     skills = _list_skill_files()
     names = {s["name"] for s in skills}
@@ -660,7 +660,7 @@ def test_skill_catalog_lists_skill_md_directories(monkeypatch: Any, tmp_path: Pa
 
 def test_skill_catalog_returns_empty_when_dir_missing(monkeypatch: Any, tmp_path: Path) -> None:
     monkeypatch.setenv("SHEJANE_RUNTIME_SKILLS_PATH", str(tmp_path / "nope"))
-    from shejane_runtime.server import _list_skill_files
+    from shejane_runtime.catalog_routes import _list_skill_files
 
     assert _list_skill_files() == []
 
