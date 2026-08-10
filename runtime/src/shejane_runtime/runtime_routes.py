@@ -22,7 +22,7 @@ from .central_diagnostics import (
 )
 from .config import Settings
 from .model_credentials import CredentialStoreError, get_model_api_key
-from .runs import RUNTIME_PROTOCOL_VERSION, runtime_capabilities
+from .run_configuration import RUNTIME_PROTOCOL_VERSION, runtime_capabilities
 from .store.sqlite import LocalStore
 
 runtime_router = APIRouter()

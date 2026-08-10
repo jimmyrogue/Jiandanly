@@ -8,7 +8,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from .runs import RUNTIME_PROTOCOL_VERSION, sanitize_run_metadata
+from .run_configuration import RUNTIME_PROTOCOL_VERSION, sanitize_run_metadata
 from .store.sqlite import LocalStore
 
 log = logging.getLogger("shejane_runtime.scheduler")

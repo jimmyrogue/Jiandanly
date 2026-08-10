@@ -9,7 +9,7 @@ from reaching the run loop.
 from __future__ import annotations
 
 from shejane_runtime.config import Settings
-from shejane_runtime.runs import _apply_advanced_overrides, freeze_run_settings
+from shejane_runtime.run_configuration import _apply_advanced_overrides, freeze_run_settings
 
 
 def _base() -> Settings:

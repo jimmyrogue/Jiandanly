@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from typing import Any
 from urllib.parse import urlparse
 
@@ -42,7 +43,124 @@ class RunModelBindings:
             self._connection_locks[key] = lock
         return lock
 
-    async def _local_model_binding_locked(
+    async def binding(
+        self,
+        principal_id: str,
+        requested_model: str,
+    ) -> tuple[dict[str, Any], RunAdmissionError | None]:
+        if self.settings.fake_llm:
+            return {
+                "adapter_id": "fake",
+                "credential_ref": None,
+                "requested_model": requested_model,
+                "required_capabilities": ["streaming", "tool_calling"],
+            }, None
+        if requested_model.startswith("local:"):
+            parts = requested_model.split(":", 2)
+            if len(parts) != 3 or not parts[1] or not parts[2]:
+                return {}, RunAdmissionError(
+                    "model_spec_invalid",
+                    "local model spec must be local:<connection>:<model>",
+                )
+            connection_id, model_id = parts[1], parts[2]
+            async with self.connection_lock(principal_id, connection_id):
+                return await self.local_binding_locked(
+                    principal_id=principal_id,
+                    connection_id=connection_id,
+                    model_id=model_id,
+                    requested_model=requested_model,
+                    required_capabilities=("streaming", "tool_calling"),
+                )
+        return {}, RunAdmissionError(
+            "model_service_missing",
+            "select a Runtime BYOK model before starting a run",
+        )
+
+    @asynccontextmanager
+    async def admission(
+        self,
+        principal_id: str,
+        requested_model: str,
+        required_capabilities: tuple[str, ...] = ("streaming", "tool_calling"),
+        *,
+        binding: Callable[[str, str], Awaitable[tuple[dict[str, Any], RunAdmissionError | None]]]
+        | None = None,
+        local_binding_locked: Callable[
+            ..., Awaitable[tuple[dict[str, Any], RunAdmissionError | None]]
+        ]
+        | None = None,
+    ) -> AsyncIterator[tuple[dict[str, Any], RunAdmissionError | None]]:
+        """Keep a model connection stable until its Run is durably admitted."""
+        if self.settings.fake_llm:
+            yield (
+                {
+                    "adapter_id": "fake",
+                    "credential_ref": None,
+                    "requested_model": requested_model,
+                    "profile": {capability: True for capability in required_capabilities},
+                    "required_capabilities": list(required_capabilities),
+                },
+                None,
+            )
+            return
+        if not requested_model.startswith("local:"):
+            resolve_binding = binding or self.binding
+            yield await resolve_binding(principal_id, requested_model)
+            return
+        parts = requested_model.split(":", 2)
+        if len(parts) != 3 or not parts[1] or not parts[2]:
+            yield (
+                {},
+                RunAdmissionError(
+                    "model_spec_invalid",
+                    "local model spec must be local:<connection>:<model>",
+                ),
+            )
+            return
+        connection_id, model_id = parts[1], parts[2]
+        async with self.connection_lock(principal_id, connection_id):
+            resolver = local_binding_locked or self.local_binding_locked
+            yield await resolver(
+                principal_id=principal_id,
+                connection_id=connection_id,
+                model_id=model_id,
+                requested_model=requested_model,
+                required_capabilities=required_capabilities,
+            )
+
+    async def binding_error(
+        self,
+        principal_id: str,
+        settings_snapshot: dict[str, Any],
+    ) -> tuple[str | None, str | None]:
+        if "_snapshot_version" not in settings_snapshot:
+            return None, None
+        if settings_snapshot.get("_snapshot_version") != 1:
+            return "run settings snapshot version is unsupported", None
+        binding = settings_snapshot.get("_model_binding")
+        if not isinstance(binding, dict):
+            return "run model binding snapshot is missing", None
+        if binding.get("adapter_id") == "fake":
+            return (
+                (None, None) if self.settings.fake_llm else ("fake model service is disabled", None)
+            )
+        if binding.get("adapter_id") in {
+            "openai_chat",
+            "anthropic_messages",
+            "google_genai",
+        }:
+            connection_id = binding.get("connection_id")
+            if not isinstance(connection_id, str):
+                return "run model credential reference is invalid", None
+            async with self.connection_lock(principal_id, connection_id):
+                return await self.binding_error_locked(
+                    principal_id=principal_id,
+                    connection_id=connection_id,
+                    binding=binding,
+                )
+        return "run model adapter is no longer supported", None
+
+    async def local_binding_locked(
         self,
         *,
         principal_id: str,
@@ -134,7 +252,7 @@ class RunModelBindings:
             ),
         }, None
 
-    async def _capability_binding_snapshots(
+    async def capability_binding_snapshots(
         self,
         *,
         principal_id: str,
@@ -222,7 +340,7 @@ class RunModelBindings:
             )
         return snapshots, None
 
-    async def _skill_binding_error(self, settings_snapshot: dict[str, Any]) -> str | None:
+    async def skill_binding_error(self, settings_snapshot: dict[str, Any]) -> str | None:
         # Runs accepted before Skill fingerprints existed remain resumable.
         if settings_snapshot.get("skills") != "on":
             return None
@@ -237,7 +355,7 @@ class RunModelBindings:
             return "Skill configuration changed after Run admission"
         return None
 
-    async def _model_binding_error_locked(
+    async def binding_error_locked(
         self,
         *,
         principal_id: str,

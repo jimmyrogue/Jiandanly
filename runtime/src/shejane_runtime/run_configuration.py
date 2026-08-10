@@ -2,14 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from .agent.builder import (
-    _agent_model_call_final_reserve,
-    _agent_model_call_limit,
-    _agent_soft_model_call_limit_for_complexity,
-)
 from .config import Settings, clamp_run_budget
 from .middleware.tool_visibility import execution_policy_for_task
 
+SIMPLE_MODEL_CALL_LIMIT = 12
+COMPLEX_MODEL_CALL_SOFT_LIMIT = 24
 RUNTIME_PROTOCOL_VERSION = 1
 RUNTIME_CAPABILITIES = frozenset(
     {
@@ -28,6 +25,31 @@ RUNTIME_CAPABILITIES = frozenset(
         "hitl",
     }
 )
+
+
+def _agent_model_call_limit(configured_limit: int, task_goal: str | None) -> int:
+    del task_goal
+    return max(1, int(configured_limit))
+
+
+def _agent_soft_model_call_limit(configured_limit: int, task_goal: str | None) -> int:
+    policy = execution_policy_for_task(task_goal)
+    return _agent_soft_model_call_limit_for_complexity(
+        configured_limit,
+        str(policy["complexity"]),
+    )
+
+
+def _agent_soft_model_call_limit_for_complexity(
+    configured_limit: int,
+    complexity: str,
+) -> int:
+    baseline = SIMPLE_MODEL_CALL_LIMIT if complexity == "simple" else COMPLEX_MODEL_CALL_SOFT_LIMIT
+    return max(1, min(int(configured_limit), baseline))
+
+
+def _agent_model_call_final_reserve(hard_limit: int) -> int:
+    return min(2, max(1, hard_limit))
 
 
 def _execution_policy_snapshot(
