@@ -78,7 +78,7 @@ The first reliability gate is now in place:
 - deterministic Agent outcomes gate CI and Client releases, while `make eval` records real-provider trajectories and baseline deltas;
 - Runtime diagnostics v2 export build identity, effective execution policy, model retry attempts, Receipt lineage, and a redacted `run → model → tool/subagent → checkpoint → terminal` trace from durable records.
 
-Current work now focuses on tighter Runtime state ownership and production plugin/package release evidence. Auditable semantic memory, structured outputs, and recurring schedules remain later work.
+Current work now focuses on tighter Runtime state ownership and production plugin/package release evidence. Auditable semantic memory, user-facing structured-output contracts, and recurring schedules remain later work; internal approval and completion reviewers already use strict provider JSON Schema when an official Responses connection supports it.
 
 Recurring schedules, remote clients, fresh-context handoffs, and realtime voice remain later work. See the full [roadmap](./docs/roadmap.md) and the [current Agent Harness capability audit](./docs/agent-harness-capabilities-latest-2026-07-26.md).
 

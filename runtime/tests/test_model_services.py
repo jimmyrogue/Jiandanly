@@ -1738,7 +1738,11 @@ def test_openai_responses_protocol_uses_responses_api_without_provider_session_s
     assert captured["use_responses_api"] is True
     assert captured["use_previous_response_id"] is False
     assert captured["output_version"] == "v1"
-    assert captured["include"] == ["web_search_call.action.sources"]
+    assert captured["store"] is False
+    assert captured["include"] == [
+        "reasoning.encrypted_content",
+        "web_search_call.action.sources",
+    ]
 
 
 def test_deepseek_responses_does_not_send_unsupported_include(monkeypatch) -> None:
@@ -1766,6 +1770,7 @@ def test_deepseek_responses_does_not_send_unsupported_include(monkeypatch) -> No
     )
 
     assert "include" not in captured
+    assert "store" not in captured
 
 
 @pytest.mark.parametrize(

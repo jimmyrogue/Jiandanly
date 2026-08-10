@@ -213,10 +213,14 @@ def _build_byok_chat_model(
             "use_previous_response_id": False,
             "output_version": "v1",
         }
-        if model_binding.get("preset_id") == "openai" and _hosted_tools_for_model_binding(
-            model_binding
+        if (
+            model_binding.get("preset_id") == "openai"
+            and urlparse(base_url).hostname == "api.openai.com"
         ):
-            responses_options["include"] = ["web_search_call.action.sources"]
+            responses_options["store"] = False
+            responses_options["include"] = ["reasoning.encrypted_content"]
+            if _hosted_tools_for_model_binding(model_binding):
+                responses_options["include"].append("web_search_call.action.sources")
     return ChatOpenAI(
         model=str(model_binding["model_id"]),
         base_url=base_url,
@@ -266,6 +270,22 @@ def _build_run_model_bundle(
             max_calls=hard_limit,
             profile=getattr(provider, "profile", None),
             hosted_tools=_hosted_tools_for_model_binding(model_binding),
+            supports_json_schema_output=bool(
+                model_binding
+                and model_binding.get("protocol") == "openai_responses"
+                and (
+                    (
+                        model_binding.get("preset_id") == "openai"
+                        and urlparse(str(model_binding.get("base_url") or "")).hostname
+                        == "api.openai.com"
+                    )
+                    or (
+                        model_binding.get("preset_id") == "deepseek"
+                        and urlparse(str(model_binding.get("base_url") or "")).hostname
+                        == "api.deepseek.com"
+                    )
+                )
+            ),
         )
         if execution_attempt_id is not None
         else provider

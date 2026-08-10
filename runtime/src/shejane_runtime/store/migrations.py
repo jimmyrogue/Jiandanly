@@ -243,6 +243,7 @@ async def _ensure_columns(conn: aiosqlite.Connection) -> None:
     await _ensure_model_call_purpose_column(conn)
     await _ensure_model_call_parent_operation_column(conn)
     await _ensure_model_call_retry_columns(conn)
+    await _ensure_model_call_usage_column(conn)
     await _ensure_wait_candidates(conn)
     await _ensure_artifact_storage_columns(conn)
     transient_placeholders = ",".join("?" for _ in TRANSIENT_RUN_EVENT_TYPES)
@@ -539,6 +540,15 @@ async def _ensure_model_call_retry_columns(conn: aiosqlite.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_local_model_calls_logical "
         "ON local_model_calls(run_id, logical_call_id, retry_attempt)"
     )
+
+
+async def _ensure_model_call_usage_column(conn: aiosqlite.Connection) -> None:
+    cursor = await conn.execute("PRAGMA table_info(local_model_calls)")
+    columns = {row[1] for row in await cursor.fetchall()}
+    if "usage_json" not in columns:
+        await conn.execute(
+            "ALTER TABLE local_model_calls ADD COLUMN usage_json TEXT NOT NULL DEFAULT '{}'"
+        )
 
 
 async def _ensure_tool_receipt_namespace(conn: aiosqlite.Connection) -> None:

@@ -288,6 +288,7 @@ CREATE TABLE IF NOT EXISTS local_model_calls (
     provider_request_id TEXT,
     input_tokens INTEGER,
     output_tokens INTEGER,
+    usage_json TEXT NOT NULL DEFAULT '{}',
     error_code TEXT,
     created_at TEXT NOT NULL,
     first_output_at TEXT,

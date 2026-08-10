@@ -201,19 +201,21 @@ class ModelCallStore(SqliteDatabase):
         provider_request_id: str | None,
         input_tokens: int | None,
         output_tokens: int | None,
+        usage: dict[str, Any] | None = None,
     ) -> None:
         usage_known = input_tokens is not None or output_tokens is not None
         status = "completed" if usage_known else "completed_unmetered"
         async with self.run_write_transaction(run_id) as conn:
             cursor = await conn.execute(
                 "UPDATE local_model_calls SET status = ?, provider_request_id = ?, "
-                "input_tokens = ?, output_tokens = ?, completed_at = ? "
+                "input_tokens = ?, output_tokens = ?, usage_json = ?, completed_at = ? "
                 "WHERE id = ? AND run_id = ? AND status IN ('reserved', 'streaming')",
                 (
                     status,
                     provider_request_id,
                     input_tokens,
                     output_tokens,
+                    json.dumps(usage or {}, ensure_ascii=False, sort_keys=True),
                     _now(),
                     call_id,
                     run_id,
@@ -230,14 +232,28 @@ class ModelCallStore(SqliteDatabase):
         outcome_unknown: bool,
         error_code: str | None = None,
         provider_request_id: str | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        usage: dict[str, Any] | None = None,
     ) -> None:
         status = "outcome_unknown" if outcome_unknown else "failed"
         async with self.run_write_transaction(run_id) as conn:
             cursor = await conn.execute(
                 "UPDATE local_model_calls SET status = ?, error_code = ?, "
-                "provider_request_id = ?, completed_at = ? "
+                "provider_request_id = ?, input_tokens = ?, output_tokens = ?, "
+                "usage_json = ?, completed_at = ? "
                 "WHERE id = ? AND run_id = ? AND status IN ('reserved', 'streaming')",
-                (status, error_code, provider_request_id, _now(), call_id, run_id),
+                (
+                    status,
+                    error_code,
+                    provider_request_id,
+                    input_tokens,
+                    output_tokens,
+                    json.dumps(usage or {}, ensure_ascii=False, sort_keys=True),
+                    _now(),
+                    call_id,
+                    run_id,
+                ),
             )
             if cursor.rowcount != 1:
                 raise RuntimeError(f"model call {call_id} cannot be failed")

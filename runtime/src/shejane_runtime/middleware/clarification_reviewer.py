@@ -8,8 +8,30 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from .reviewer_output import invoke_json_review
+
 _MAX_TRANSCRIPT_MESSAGES = 16
 _MAX_MESSAGE_CHARS = 4_000
+_RESPONSE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "decisions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "tool_call_id": {"type": "string"},
+                    "decision": {"type": "string", "enum": ["allow", "repair"]},
+                    "reason": {"type": "string"},
+                },
+                "required": ["tool_call_id", "decision", "reason"],
+            },
+        }
+    },
+    "required": ["decisions"],
+}
 
 
 class ClarificationReviewUnavailable(RuntimeError):
@@ -57,8 +79,12 @@ async def review_clarification_batch(
     ]
     try:
         async with asyncio.timeout(max(0.1, timeout_seconds)):
-            response = await model.ainvoke(review_messages)
-        parsed = _parse_json_object(_message_text(getattr(response, "content", "")))
+            parsed = await invoke_json_review(
+                model,
+                review_messages,
+                schema_name="clarification_review",
+                schema=_RESPONSE_SCHEMA,
+            )
     except asyncio.CancelledError:
         raise
     except TimeoutError as exc:
@@ -128,15 +154,3 @@ def _message_text(content: Any) -> str:
             str(item.get("text") or "") if isinstance(item, dict) else str(item) for item in content
         )
     return str(content)
-
-
-def _parse_json_object(text: str) -> dict[str, Any]:
-    value = text.strip()
-    if value.startswith("```json") and value.endswith("```"):
-        value = value[len("```json") : -len("```")].strip()
-    elif value.startswith("```") and value.endswith("```"):
-        value = value[len("```") : -len("```")].strip()
-    parsed = json.loads(value)
-    if not isinstance(parsed, dict):
-        raise ValueError("clarification reviewer response must be a JSON object")
-    return parsed

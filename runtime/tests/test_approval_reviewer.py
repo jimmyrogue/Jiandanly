@@ -10,9 +10,11 @@ class FakeApprovalModel:
     def __init__(self, content: str) -> None:
         self.content = content
         self.messages: list[Any] = []
+        self.kwargs: dict[str, Any] = {}
 
-    async def ainvoke(self, messages: list[Any], **_kwargs: Any) -> AIMessage:
+    async def ainvoke(self, messages: list[Any], **kwargs: Any) -> AIMessage:
         self.messages = messages
+        self.kwargs = kwargs
         return AIMessage(content=self.content)
 
 
@@ -43,6 +45,28 @@ async def test_reviewer_returns_one_bounded_decision_per_operation() -> None:
     reviewer_prompt = str(model.messages[0].content)
     assert "goal-relevant read-only" in reviewer_prompt
     assert "Do not ask merely because an action accesses the public internet" in reviewer_prompt
+
+
+@pytest.mark.asyncio
+async def test_reviewer_requests_strict_json_schema_when_provider_supports_it() -> None:
+    from shejane_runtime.middleware.approval_reviewer import review_approval_batch
+
+    model = FakeApprovalModel(
+        '{"decisions":[{"operation_id":"op-1","decision":"allow","reason":"safe"}]}'
+    )
+    model.supports_json_schema_output = True
+
+    await review_approval_batch(
+        model=model,
+        task_goal="Inspect the file",
+        actions=[{"operation_id": "op-1", "tool_name": "read", "arguments": {}}],
+        timeout_seconds=1,
+    )
+
+    response_format = model.kwargs["response_format"]
+    assert response_format["type"] == "json_schema"
+    assert response_format["json_schema"]["strict"] is True
+    assert response_format["json_schema"]["schema"]["additionalProperties"] is False
 
 
 @pytest.mark.asyncio

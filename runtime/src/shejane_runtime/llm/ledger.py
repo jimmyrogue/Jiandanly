@@ -9,7 +9,7 @@ from a client SSE connection.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Callable, Iterator, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -52,6 +52,16 @@ class ModelContextProfileMissing(RuntimeError):
     retryable = False
 
 
+class ModelResponseIncomplete(RuntimeError):
+    code = "model_response_incomplete"
+    recoverable = False
+    retryable = False
+
+    def __init__(self, reason: str, *, request_id: str | None = None) -> None:
+        super().__init__(f"provider returned an incomplete response ({reason})")
+        self.request_id = request_id
+
+
 MODEL_RETRY_ATTEMPTS = 2
 
 
@@ -65,6 +75,7 @@ class LedgerChatModel(BaseChatModel):
     model_name: str
     max_calls: int
     call_purpose: str = "agent"
+    supports_json_schema_output: bool = False
     tool_schema_tokens: int = 0
     bound_tools: tuple[Any, ...] = Field(default_factory=tuple, exclude=True)
     hosted_tools: tuple[dict[str, Any], ...] = Field(default_factory=tuple, exclude=True)
@@ -152,6 +163,7 @@ class LedgerChatModel(BaseChatModel):
             )
             logical_call_id = str(receipt["logical_call_id"])
             output_started = False
+            usage: dict[str, Any] = {}
             try:
                 message = _rewrite_tool_names(
                     await provider_model.ainvoke(
@@ -162,6 +174,9 @@ class LedgerChatModel(BaseChatModel):
                     ),
                     aliases,
                 )
+                usage = _usage_from_message(message)
+                if incomplete := _incomplete_response_error(message):
+                    raise incomplete
                 message = _with_model_call_id(message, str(receipt["id"]))
                 if _has_visible_output(message):
                     await self.store.mark_model_call_output(
@@ -169,13 +184,13 @@ class LedgerChatModel(BaseChatModel):
                         call_id=receipt["id"],
                     )
                     output_started = True
-                usage = _usage_from_message(message)
                 await self.store.settle_model_call(
                     run_id=self.run_id,
                     call_id=receipt["id"],
                     provider_request_id=_request_id_from_message(message),
                     input_tokens=usage.get("input_tokens"),
                     output_tokens=usage.get("output_tokens"),
+                    usage=usage,
                 )
                 return ChatResult(generations=[ChatGeneration(message=message)])
             except BaseException as exc:
@@ -187,6 +202,9 @@ class LedgerChatModel(BaseChatModel):
                         outcome_unknown=outcome_unknown,
                         error_code=_error_code(exc),
                         provider_request_id=_request_id_from_error(exc),
+                        input_tokens=usage.get("input_tokens"),
+                        output_tokens=usage.get("output_tokens"),
+                        usage=usage,
                     )
                 )
                 decision = _model_retry_decision(
@@ -219,7 +237,7 @@ class LedgerChatModel(BaseChatModel):
             )
             logical_call_id = str(receipt["logical_call_id"])
             output_started = False
-            usage: dict[str, int | None] = {}
+            usage: dict[str, Any] = {}
             provider_request_id: str | None = None
             first_chunk = True
             try:
@@ -243,6 +261,8 @@ class LedgerChatModel(BaseChatModel):
                     if current_usage:
                         usage = current_usage
                     provider_request_id = _request_id_from_message(message) or provider_request_id
+                    if incomplete := _incomplete_response_error(message):
+                        raise incomplete
                     yield ChatGenerationChunk(message=message)
                 await self.store.settle_model_call(
                     run_id=self.run_id,
@@ -250,6 +270,7 @@ class LedgerChatModel(BaseChatModel):
                     provider_request_id=provider_request_id,
                     input_tokens=usage.get("input_tokens"),
                     output_tokens=usage.get("output_tokens"),
+                    usage=usage,
                 )
                 return
             except BaseException as exc:
@@ -261,6 +282,9 @@ class LedgerChatModel(BaseChatModel):
                         outcome_unknown=outcome_unknown,
                         error_code=_error_code(exc),
                         provider_request_id=_request_id_from_error(exc),
+                        input_tokens=usage.get("input_tokens"),
+                        output_tokens=usage.get("output_tokens"),
+                        usage=usage,
                     )
                 )
                 decision = _model_retry_decision(
@@ -275,6 +299,8 @@ class LedgerChatModel(BaseChatModel):
                 retry_attempt += 1
 
     def _outcome_unknown(self, exc: BaseException, *, output_started: bool) -> bool:
+        if isinstance(exc, ModelResponseIncomplete):
+            return False
         # Review calls are read-only and cannot emit Tool calls into the graph.
         # A timeout may leave provider billing uncertain, but never leaves the
         # Agent's external execution outcome uncertain.
@@ -353,16 +379,41 @@ def _has_visible_output(message: BaseMessage) -> bool:
     return False
 
 
-def _usage_from_message(message: BaseMessage) -> dict[str, int | None]:
+def _usage_from_message(message: BaseMessage) -> dict[str, Any]:
     raw = getattr(message, "usage_metadata", None)
     if not isinstance(raw, dict) and isinstance(message, (AIMessage, AIMessageChunk)):
         raw = message.additional_kwargs.get("usage")
     if not isinstance(raw, dict):
         return {}
-    return {
+    usage: dict[str, Any] = {
         "input_tokens": _int_or_none(raw.get("input_tokens")),
         "output_tokens": _int_or_none(raw.get("output_tokens")),
+        "total_tokens": _int_or_none(raw.get("total_tokens")),
     }
+    for key in ("input_token_details", "output_token_details"):
+        details = raw.get(key)
+        if isinstance(details, Mapping):
+            normalized = {
+                str(name): count
+                for name, value in details.items()
+                if (count := _int_or_none(value)) is not None
+            }
+            if normalized:
+                usage[key] = normalized
+    return {key: value for key, value in usage.items() if value is not None}
+
+
+def _incomplete_response_error(message: BaseMessage) -> ModelResponseIncomplete | None:
+    metadata = getattr(message, "response_metadata", None)
+    if not isinstance(metadata, dict) or str(metadata.get("status") or "").lower() != "incomplete":
+        return None
+    details = metadata.get("incomplete_details")
+    reason = (
+        str(details.get("reason") or "unspecified")
+        if isinstance(details, dict)
+        else "unspecified"
+    )
+    return ModelResponseIncomplete(reason, request_id=_request_id_from_message(message))
 
 
 def _request_id_from_message(message: BaseMessage) -> str | None:
@@ -454,8 +505,9 @@ def _retry_after_seconds(exc: BaseException) -> float | None:
 
 
 def _error_code(exc: BaseException) -> str:
-    if isinstance(exc, ModelServiceError) and exc.code:
-        return exc.code[:100]
+    code = getattr(exc, "code", None)
+    if code:
+        return str(code)[:100]
     if isinstance(exc, httpx.HTTPStatusError):
         return f"http_{exc.response.status_code}"
     return type(exc).__name__[:100]

@@ -191,6 +191,9 @@ MCP Server 只从 Runtime 自有配置读取，不会隐式启动 Claude Desktop
   │     │       ↓                                                                  │     │
   │     │ LedgerChatModel 记录首次输出 → 已绑定的唯一供应商模型               │     │
   │     │       ↓                                                                  │     │
+  │     │   OpenAI Responses 无状态重放加密 reasoning；官方 reviewer 用严格 schema │     │
+  │     │   response.incomplete 明确失败；总量、cache、reasoning usage 写入账本    │     │
+  │     │       ↓                                                                  │     │
   │     │   合格 Responses 模型额外绑定托管 web_search；收敛轮和审查调用禁用       │     │
   │     │   供应商在同次 P8 调用内搜索；URL 注解和 OpenAI 完整 sources 投影到回答  │     │
   │     │       ↓                                                                  │     │

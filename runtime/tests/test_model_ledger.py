@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import math
 import re
 from collections.abc import AsyncIterator, Sequence
@@ -28,6 +29,7 @@ from shejane_runtime.llm.errors import ModelServiceError
 from shejane_runtime.llm.ledger import (
     LedgerChatModel,
     ModelContextBudgetExceeded,
+    ModelResponseIncomplete,
     _conservative_token_count,
     _enforce_context_envelope,
     _estimate_tool_tokens,
@@ -73,6 +75,7 @@ def test_model_retry_honors_provider_retry_after() -> None:
 
 class _StreamingModel(BaseChatModel):
     fail_after_output: bool = False
+    incomplete: bool = False
 
     @property
     def _llm_type(self) -> str:
@@ -91,8 +94,24 @@ class _StreamingModel(BaseChatModel):
         yield ChatGenerationChunk(
             message=AIMessageChunk(
                 content="",
-                usage_metadata={"input_tokens": 7, "output_tokens": 3, "total_tokens": 10},
-                response_metadata={"request_id": "provider-1"},
+                usage_metadata={
+                    "input_tokens": 7,
+                    "output_tokens": 3,
+                    "total_tokens": 10,
+                    "input_token_details": {"cache_read": 2},
+                    "output_token_details": {"reasoning": 1},
+                },
+                response_metadata={
+                    "request_id": "provider-1",
+                    **(
+                        {
+                            "status": "incomplete",
+                            "incomplete_details": {"reason": "max_output_tokens"},
+                        }
+                        if self.incomplete
+                        else {}
+                    ),
+                },
             )
         )
 
@@ -309,12 +328,44 @@ async def test_stream_settles_usage_without_reading_sse(tmp_path: Path) -> None:
             assembled += chunk
         [model_call] = await store.list_model_calls_for_run(str(run["id"]))
         assert assembled.additional_kwargs["runtime_model_call_id"] == model_call["id"]
+        assert json.loads(model_call["usage_json"])["output_token_details"] == {
+            "reasoning": 1
+        }
         assert await store.model_usage_summary(str(run["id"])) == {
             "input_tokens": 7,
             "output_tokens": 3,
             "unmetered_calls": 0,
             "outcome_unknown_calls": 0,
             "model_calls": 1,
+        }
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_incomplete_stream_fails_with_usage_instead_of_settling(tmp_path: Path) -> None:
+    store, run = await _store_and_run(tmp_path)
+    try:
+        model = LedgerChatModel(
+            delegate=_StreamingModel(incomplete=True),
+            store=store,
+            run_id=str(run["id"]),
+            execution_attempt_id="job-1:1",
+            model_name="local:test:model",
+            max_calls=2,
+            profile={"max_input_tokens": 8_192},
+        )
+
+        with pytest.raises(ModelResponseIncomplete, match="max_output_tokens"):
+            _ = [chunk async for chunk in model.astream([HumanMessage(content="hi")])]
+
+        [model_call] = await store.list_model_calls_for_run(str(run["id"]))
+        assert model_call["status"] == "failed"
+        assert model_call["error_code"] == "model_response_incomplete"
+        assert model_call["provider_request_id"] == "provider-1"
+        assert model_call["output_tokens"] == 3
+        assert json.loads(model_call["usage_json"])["input_token_details"] == {
+            "cache_read": 2
         }
     finally:
         await store.close()

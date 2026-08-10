@@ -9,7 +9,29 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from .reviewer_output import invoke_json_review
+
 _SENSITIVE_KEY = re.compile(r"(?:api[_-]?key|authorization|credential|password|secret|token)", re.I)
+_RESPONSE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "decisions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "operation_id": {"type": "string"},
+                    "decision": {"type": "string", "enum": ["allow", "ask"]},
+                    "reason": {"type": "string"},
+                },
+                "required": ["operation_id", "decision", "reason"],
+            },
+        }
+    },
+    "required": ["decisions"],
+}
 
 
 class ApprovalReviewUnavailable(RuntimeError):
@@ -52,8 +74,12 @@ async def review_approval_batch(
     ]
     try:
         async with asyncio.timeout(max(0.1, timeout_seconds)):
-            response = await model.ainvoke(messages)
-        parsed = json.loads(_message_text(getattr(response, "content", "")))
+            parsed = await invoke_json_review(
+                model,
+                messages,
+                schema_name="approval_review",
+                schema=_RESPONSE_SCHEMA,
+            )
     except asyncio.CancelledError:
         raise
     except TimeoutError as exc:
@@ -95,13 +121,3 @@ def _redact(value: Any) -> Any:
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     return str(value)
-
-
-def _message_text(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "".join(
-            str(item.get("text") or "") if isinstance(item, dict) else str(item) for item in content
-        )
-    return str(content)

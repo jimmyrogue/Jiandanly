@@ -60,6 +60,16 @@ Client 只展示连接流程和 Runtime 返回的状态，不复制厂商规则�
 Agent 对话能力可明确保存 `openai_chat_completions`、`openai_responses`、
 `anthropic_messages` 或 `google_generate_content` 协议。OpenAI 默认使用 Responses；
 DeepSeek V4 Flash 使用 Responses，V4 Pro 在官方声明支持前继续使用 Chat Completions。
+OpenAI 官方 Responses 请求固定使用 `store: false`，并请求
+`reasoning.encrypted_content`，使 Runtime 可以在不依赖供应商会话存储的情况下重放推理
+item；DeepSeek 的 Responses 本身始终不存储，Runtime 不向其发送不支持的 `store` 或
+`include`。供应商返回 `response.incomplete` 时，P8 会把调用记为明确失败，而不是提交
+截断答案；该次调用已经返回的总 token、缓存 token 与 reasoning token 仍写入账本。
+官方 OpenAI/DeepSeek Responses 连接的内部 approval、clarification、completion reviewer
+会自动使用严格 JSON Schema，其他协议保留现有 JSON 解析和确定性校验兜底。依据见
+[OpenAI Responses migration](https://developers.openai.com/api/docs/guides/migrate-to-responses)、
+[OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs) 和
+[DeepSeek Responses API](https://api-docs.deepseek.com/guides/responses_api)。
 在 OpenAI 官方已声明支持 Web Search 的 GPT-5、GPT-4.1、o3/o4、`chat-latest`
 和 DeepSeek V4 Flash 上，Runtime
 会随 Responses 请求绑定托管的 `{"type":"web_search"}`；该工具由供应商在同一次模型
