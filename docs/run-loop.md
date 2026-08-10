@@ -449,11 +449,11 @@ SheJane follows the same split as LangGraph's fault-tolerance model:
 
 | 概念 | 文件 |
 |---|---|
-| 入口 + 路由 | [`shejane_runtime/server.py`](../runtime/src/shejane_runtime/server.py)、[`shejane_runtime/runs/routes.py`](../runtime/src/shejane_runtime/runs/routes.py)、[`shejane_runtime/runs/decision_routes.py`](../runtime/src/shejane_runtime/runs/decision_routes.py) |
+| 入口 + 路由 | [`shejane_runtime/server.py`](../runtime/src/shejane_runtime/server.py)、[`shejane_runtime/command_routes/`](../runtime/src/shejane_runtime/command_routes/)、[`shejane_runtime/runs/routes.py`](../runtime/src/shejane_runtime/runs/routes.py)、[`shejane_runtime/runs/decision_routes.py`](../runtime/src/shejane_runtime/runs/decision_routes.py) |
 | RunCoordinator 稳定接口 + 生命周期编排 | [`shejane_runtime/runs/__init__.py`](../runtime/src/shejane_runtime/runs/__init__.py)、[`shejane_runtime/runs/coordinator_lifecycle.py`](../runtime/src/shejane_runtime/runs/coordinator_lifecycle.py) |
 | 模型连接变更与 Run 接纳/执行协调 | [`shejane_runtime/runs/model_connection_coordination.py`](../runtime/src/shejane_runtime/runs/model_connection_coordination.py) |
-| P5 leased Job Attempt + heartbeat | [`shejane_runtime/runs/job_execution.py`](../runtime/src/shejane_runtime/runs/job_execution.py) |
-| P7 LangGraph driver loop 与 assistant/failure 投影 | [`shejane_runtime/runs/graph_driver.py`](../runtime/src/shejane_runtime/runs/graph_driver.py)、[`shejane_runtime/runs/assistant_projection.py`](../runtime/src/shejane_runtime/runs/assistant_projection.py)、[`shejane_runtime/runs/failure_projection.py`](../runtime/src/shejane_runtime/runs/failure_projection.py) |
+| P5 leased Job 监督、单次 Attempt 与 heartbeat | [`shejane_runtime/runs/job_execution.py`](../runtime/src/shejane_runtime/runs/job_execution.py)、[`shejane_runtime/runs/job_attempt.py`](../runtime/src/shejane_runtime/runs/job_attempt.py) |
+| P7 Agent 构建、LangGraph checkpoint 流与 assistant/failure 投影 | [`shejane_runtime/runs/graph_driver.py`](../runtime/src/shejane_runtime/runs/graph_driver.py)、[`shejane_runtime/runs/graph_execution.py`](../runtime/src/shejane_runtime/runs/graph_execution.py)、[`shejane_runtime/runs/assistant_projection.py`](../runtime/src/shejane_runtime/runs/assistant_projection.py)、[`shejane_runtime/runs/failure_projection.py`](../runtime/src/shejane_runtime/runs/failure_projection.py) |
 | Run event / terminal result publication | [`shejane_runtime/runs/event_publisher.py`](../runtime/src/shejane_runtime/runs/event_publisher.py) |
 | P11 deterministic settlement | [`shejane_runtime/runs/settlement.py`](../runtime/src/shejane_runtime/runs/settlement.py) |
 | Run 接纳 / checkpoint fork | [`shejane_runtime/runs/admission.py`](../runtime/src/shejane_runtime/runs/admission.py) |
