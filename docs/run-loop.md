@@ -458,7 +458,7 @@ SheJane follows the same split as LangGraph's fault-tolerance model:
 | LangGraph → 客户端事件翻译 | [`shejane_runtime/event_translator.py`](../runtime/src/shejane_runtime/event_translator.py) |
 | structlog + RuntimeObserver | [`shejane_runtime/observability.py`](../runtime/src/shejane_runtime/observability.py) |
 | 工具注册 | [`shejane_runtime/tools/registry.py`](../runtime/src/shejane_runtime/tools/registry.py) |
-| 持久化 store | [`shejane_runtime/store/sqlite.py`](../runtime/src/shejane_runtime/store/sqlite.py) |
+| 持久化 store | [`docs/runtime-store.md`](./runtime-store.md)（模块边界与事务规则）；[`shejane_runtime/store/sqlite.py`](../runtime/src/shejane_runtime/store/sqlite.py)（兼容 facade 与启动装配） |
 | 独立 A2A Gateway | [`shejane_runtime/a2a_gateway/`](../runtime/src/shejane_runtime/a2a_gateway/) |
 
 ---

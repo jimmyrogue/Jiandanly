@@ -1,9 +1,8 @@
-"""Local persistent store (SQLite). Holds runs / events / permissions /
-workspaces / artifacts / memory — the runtime's source of truth.
+"""Runtime-owned SQLite persistence.
 
-LangGraph's own checkpointer + Store databases live in separate files
-(see config.checkpoint_db_path / store_db_path) so schema concerns stay
-isolated.
+``LocalStore`` is the stable facade; domain implementations are split across
+this package. LangGraph checkpoints and Store data use separate databases.
+See ``docs/runtime-store.md`` for ownership and transaction rules.
 """
 
 from .sqlite import LocalStore

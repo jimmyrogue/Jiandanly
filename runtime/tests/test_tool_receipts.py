@@ -1469,7 +1469,7 @@ async def test_artifact_store_enforces_item_quota(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store, run = await _store_and_run(tmp_path)
-    monkeypatch.setattr("shejane_runtime.store.sqlite.MAX_ARTIFACT_BYTES", 4)
+    monkeypatch.setattr("shejane_runtime.store.artifacts.MAX_ARTIFACT_BYTES", 4)
     try:
         with pytest.raises(ArtifactQuotaError):
             await store.create_artifact(
