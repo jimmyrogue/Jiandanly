@@ -2,7 +2,7 @@
 
 > 状态：已实施
 >
-> 更新时间：2026-07-25
+> 更新时间：2026-08-10
 
 ## Runtime 阶段
 
@@ -38,7 +38,7 @@ Client 只展示连接流程和 Runtime 返回的状态，不复制厂商规则�
 
 ## 产品范围
 
-首批官方服务：
+当前官方服务：
 
 1. DeepSeek
 2. Kimi
@@ -46,15 +46,21 @@ Client 只展示连接流程和 Runtime 返回的状态，不复制厂商规则�
 4. GLM
 5. MiniMax
 6. 硅基流动
-7. 连接已有服务
+7. OpenAI
+8. Anthropic
+9. Google Gemini
+10. 连接已有服务
 
-第一版执行 Adapter：
+当前执行 Adapter：
 
 - `openai_chat`
 - `anthropic_messages`
+- `google_genai`
 
-`openai_responses` 是下一优先级，但第一版不提供空 Adapter、隐藏入口或兼容别名。
-第一版不做动态路由、本地模型、SheJane 自有额度、计费或模型网关。
+Agent 对话能力可明确保存 `openai_chat_completions`、`openai_responses`、
+`anthropic_messages` 或 `google_generate_content` 协议。OpenAI 默认使用 Responses；
+DeepSeek V4 Flash 使用 Responses，V4 Pro 在官方声明支持前继续使用 Chat Completions。
+当前不做动态路由、本地模型、SheJane 自有额度、计费或模型网关。
 
 ## 核心模型
 
@@ -64,10 +70,10 @@ Client 只展示连接流程和 Runtime 返回的状态，不复制厂商规则�
 
 ```text
 id                    Runtime 生成的稳定 ID
-preset_id             shejane-official | deepseek | kimi | qwen | glm | minimax | siliconflow | custom
+preset_id             shejane-official | deepseek | kimi | qwen | glm | minimax | siliconflow | openai | anthropic | google | custom
 name                  用户可识别名称
 region                cn | intl | custom | official
-adapter_id            openai_chat | anthropic_messages
+adapter_id            openai_chat | anthropic_messages | google_genai
 base_url              Runtime 保存；官方 preset 固定，自定义服务才由用户输入
 connection_method     api_key | browser_authorization；Runtime preset 决定
 credential_ref        只保存在 Runtime；引用操作系统凭据库

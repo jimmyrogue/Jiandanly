@@ -203,6 +203,35 @@ async def test_google_catalog_discovery_uses_native_models_endpoint(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_openai_catalog_defaults_agent_models_to_responses(monkeypatch) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://api.openai.com/v1/models"
+        return httpx.Response(200, json={"data": [{"id": "gpt-test"}]})
+
+    class PatchedClient(httpx.AsyncClient):
+        def __init__(self, **kwargs) -> None:
+            super().__init__(transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(model_catalog.httpx, "AsyncClient", PatchedClient)
+
+    models, status = await model_routes._refresh_model_service_models(
+        preset=model_service_preset("openai") or {},
+        base_url="https://api.openai.com/v1",
+        adapter_id="openai_chat",
+        api_key="secret",
+    )
+
+    assert status == "ready"
+    assert models[0]["capabilities"] == [
+        {
+            "capability": "agent_chat",
+            "protocol": "openai_responses",
+            "verification": "unverified",
+        }
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("preset_id", "trust_declarations"),
     [("shejane-official", True), ("custom", False)],
@@ -559,6 +588,12 @@ def test_bundled_models_are_recommendations_not_preverified_connections() -> Non
         "unverified",
         "unverified",
     ]
+    assert [
+        model["capabilities"][0]["protocol"] for model in deepseek["models"]
+    ] == [
+        "openai_responses",
+        "openai_chat_completions",
+    ]
 
 
 def test_catalog_refresh_preserves_manual_and_verified_models() -> None:
@@ -672,7 +707,7 @@ def test_model_service_presets_are_runtime_owned(
                 "id": "cn",
                 "name": "中国站",
                 "default": True,
-                "base_url": "https://api.deepseek.com/v1",
+                "base_url": "https://api.deepseek.com",
             }
         ],
     }
@@ -1035,7 +1070,7 @@ def test_model_service_can_replace_its_api_key(
     ]
     assert seen_keys == ["old-secret", "new-secret"]
     assert seen_base_urls == [
-        "https://api.deepseek.com/v1",
+        "https://api.deepseek.com",
         "https://gateway.example/v1",
     ]
     assert list(credential_vault.values()) == ["new-secret"]
@@ -1313,7 +1348,7 @@ def test_imported_model_service_keeps_metadata_but_requires_reconnection(
     assert connection["id"] == connection_id
     assert connection["name"] == "DeepSeek"
     assert connection["adapter_id"] == "openai_chat"
-    assert connection["base_url"] == "https://api.deepseek.com/v1"
+    assert connection["base_url"] == "https://api.deepseek.com"
     assert connection["credential_configured"] is False
     assert connection["catalog_status"] == "stale"
     assert catalog[0]["available"] is False

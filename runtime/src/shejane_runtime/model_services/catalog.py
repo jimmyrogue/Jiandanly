@@ -374,6 +374,14 @@ async def _refresh_model_service_models(
                 {**known, "source": "bundled"},
                 adapter_id=adapter_id,
             )
+        elif preset.get("id") == "openai":
+            profile["capabilities"] = [
+                {
+                    "capability": "agent_chat",
+                    "protocol": "openai_responses",
+                    "verification": "unverified",
+                }
+            ]
         if preset.get("id") == "shejane-official":
             declared_capabilities = candidate.get("capabilities")
             if isinstance(declared_capabilities, list):

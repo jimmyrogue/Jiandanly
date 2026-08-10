@@ -37,7 +37,7 @@ const deepseek = {
     id: 'cn',
     name: '中国站',
     default: true,
-    base_url: 'https://api.deepseek.com/v1',
+    base_url: 'https://api.deepseek.com',
   }],
 }
 
@@ -452,7 +452,7 @@ describe('ModelServicesSettings', () => {
     expect(screen.getByLabelText('API 地址')).toHaveValue('')
     expect(screen.getByLabelText('API 地址')).toHaveAttribute(
       'placeholder',
-      'https://api.deepseek.com/v1',
+      'https://api.deepseek.com',
     )
     expect(screen.getByRole('button', { name: '获取 API Key' })).toHaveAttribute('data-size', 'lg')
     expect(screen.getByRole('button', { name: '连接' })).toHaveClass('h-11')
@@ -515,7 +515,7 @@ describe('ModelServicesSettings', () => {
     expect(screen.getByLabelText('API 地址')).toHaveValue('')
     expect(screen.getByLabelText('API 地址')).toHaveAttribute(
       'placeholder',
-      'https://api.deepseek.com/v1',
+      'https://api.deepseek.com',
     )
     fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'secret' } })
     fireEvent.click(screen.getByRole('button', { name: '连接' }))
@@ -525,7 +525,7 @@ describe('ModelServicesSettings', () => {
         preset_id: 'deepseek',
         region: 'cn',
         api_key: 'secret',
-        base_url: 'https://api.deepseek.com/v1',
+        base_url: 'https://api.deepseek.com',
       },
       config,
     ))

@@ -161,7 +161,7 @@ Client 的“模型服务”设置调用 Runtime 的 `/v1/model-services` 接口
 
 若某个旧凭据因系统授权或开发版可执行身份变化而不可读，Runtime 仍返回其他模型服务，并把该连接标记为“需要 API Key”。用户可在原连接上重新填写 Key；新凭据验证并切换成功后，即使旧凭据暂时无法由 Runtime 删除，也不会回滚可用的新连接。旧条目仍留在操作系统凭据库中，可由用户之后通过系统凭据管理工具清理。
 
-入口包括 DeepSeek、Kimi、千问、GLM、MiniMax、硅基流动、OpenAI、Anthropic、Google Gemini 和“连接已有服务”。官方服务的地址与接口格式由 Runtime 固定，用户只选择区域并填写 API Key；已有服务会先自动识别 OpenAI Chat 或 Anthropic Messages 格式，也可在高级设置中明确选择 Google GenerateContent。
+入口包括 DeepSeek、Kimi、千问、GLM、MiniMax、硅基流动、OpenAI、Anthropic、Google Gemini 和“连接已有服务”。官方服务的地址与接口格式由 Runtime 固定，用户只选择区域并填写 API Key；DeepSeek V4 Flash 使用官方 `https://api.deepseek.com` Responses API，当前尚未获官方 Responses 支持的 V4 Pro 继续使用 Chat Completions。已有服务会先自动识别 OpenAI Chat 或 Anthropic Messages 格式，也可在高级设置中明确选择 Google GenerateContent。
 
 OpenAI 官方连接默认使用 Responses，也可按模型选择 Chat Completions；Anthropic 使用原生 Messages；Google Gemini 使用原生 GenerateContent。Runtime 在 Run 接纳时冻结具体协议，不会按品牌猜测或在失败后静默换协议。这些工具调用路径共用同一套可逆 wire name：工具定义、`tool_choice`、历史 assistant 调用和 `ToolMessage.name` 一致编码，返回 Runtime 后恢复内部点号名称；改名不会改变 call ID、调用顺序、OpenAI reasoning item、Anthropic thinking/signature 或 Gemini thought signature。
 

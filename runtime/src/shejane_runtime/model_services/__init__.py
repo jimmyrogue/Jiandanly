@@ -41,7 +41,7 @@ _PRESETS: tuple[dict[str, Any], ...] = (
                 "id": "cn",
                 "name": "中国站",
                 "default": True,
-                "base_url": "https://api.deepseek.com/v1",
+                "base_url": "https://api.deepseek.com",
             },
         ),
         "models": (
@@ -54,6 +54,13 @@ _PRESETS: tuple[dict[str, Any], ...] = (
                 "tool_calling": True,
                 "streaming": True,
                 "image_inputs": False,
+                "capabilities": [
+                    {
+                        "capability": "agent_chat",
+                        "protocol": "openai_responses",
+                        "verification": "unverified",
+                    }
+                ],
             },
             {
                 "model_id": "deepseek-v4-pro",
@@ -64,6 +71,13 @@ _PRESETS: tuple[dict[str, Any], ...] = (
                 "tool_calling": True,
                 "streaming": True,
                 "image_inputs": False,
+                "capabilities": [
+                    {
+                        "capability": "agent_chat",
+                        "protocol": "openai_chat_completions",
+                        "verification": "unverified",
+                    }
+                ],
             },
         ),
     },
