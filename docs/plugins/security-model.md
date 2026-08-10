@@ -27,7 +27,7 @@ Current repository evidence shaping the design:
 - `runtime/src/shejane_runtime/agent/builder.py` uses a local Deep Agents backend; its shell execution is host-capable and must not be exposed as a plugin executor.
 - `runtime/src/shejane_runtime/middleware/tool_review.py` and `tool_execution.py` provide approval, operation identity, receipts, recovery, and Artifact conversion that plugin Actions must reuse.
 - `runtime/src/shejane_runtime/runs.py` and `store/sqlite.py` own Run acceptance, leases, checkpoints, and durable state.
-- `runtime/src/shejane_runtime/tools/mcp_stdio.py` provides useful bounded subprocess lifecycle patterns, but MCP transport is not the plugin security boundary.
+- `runtime/src/shejane_runtime/tools/mcp/stdio.py` provides useful bounded subprocess lifecycle patterns, but MCP transport is not the plugin security boundary.
 - `runtime/src/shejane_runtime/tools/office.py` is the behavior baseline for future Office plugins.
 - `client/electron/main.cjs` currently sets Electron renderer sandboxing independently of Runtime plugin isolation. Renderer sandbox state does not sandbox Runtime workers.
 - `SECURITY.md` treats credentials, workspaces, tool permissions, loopback pairing, and outbound requests as explicit trust boundaries.

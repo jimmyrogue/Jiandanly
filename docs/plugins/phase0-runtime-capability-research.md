@@ -82,7 +82,7 @@ Action 真正执行发生在 P10；P11 必须关闭 Wasm instance、Worker 进�
 | 只读附件虚拟路径、200 MiB 流式接纳限制、附件与 PDF 200 MiB / 其他文件 20 MiB 模型读取限制、工作区路径校验 | [`runs.py`](../../runtime/src/shejane_runtime/runs.py)；[`backends.py`](../../runtime/src/shejane_runtime/agent/backends.py) | 可作为 Action input materialization 的起点 |
 | Office 读写能力 | [`office.py`](../../runtime/src/shejane_runtime/tools/office.py)；[`pyproject.toml`](../../runtime/pyproject.toml) | 当前已有 DOCX/XLSX/PPTX 能力与回归基线，迁移目标不是从零实现 |
 | 图片能力标记和文本模型明确降级 | [`builder.py`](../../runtime/src/shejane_runtime/agent/builder.py)；[`tool_execution.py`](../../runtime/src/shejane_runtime/middleware/tool_execution.py) | 已能阻止把图片块交给声明为 text-only 的模型 |
-| MCP stdio 子进程、有界入站 frame 和进程树终止 | [`mcp_stdio.py`](../../runtime/src/shejane_runtime/tools/mcp_stdio.py) | Managed Worker IPC 可复用相同的传输与清理经验 |
+| MCP stdio 子进程、有界入站 frame 和进程树终止 | [`stdio.py`](../../runtime/src/shejane_runtime/tools/mcp/stdio.py) | Managed Worker IPC 可复用相同的传输与清理经验 |
 
 当前 Office 并非完全缺失：Runtime 已内置 DOCX/XLSX 的读取和编辑，以及 PPTX 的创建、读取和编辑。当前图片文件可由 Deep Agents `read_file` 形成多模态块，但只在所选模型声明 `image_inputs` 时交付；文本模型收到明确限制。当前工具目录没有通用视频解码、抽帧、OCR/视觉 fallback 或音视频转写 Action。[`office.py`](../../runtime/src/shejane_runtime/tools/office.py) [`registry.py`](../../runtime/src/shejane_runtime/tools/registry.py) [Deep Agents backends](https://docs.langchain.com/oss/python/deepagents/backends)
 
@@ -94,7 +94,7 @@ Action 真正执行发生在 P10；P11 必须关闭 Wasm instance、Worker 进�
 | Run 冻结插件 ID、版本、digest 与 Action schema hash | 当前只冻结模型、工作区、MCP 目录和图定义；没有插件 binding 表或 package lease。[`run-loop.md`](../run-loop.md) [`sqlite.py`](../../runtime/src/shejane_runtime/store/sqlite.py) |
 | 统一 ActionInvocation / ActionResult / ArtifactCandidate | 当前工具直接遵循 LangChain Tool 形态，没有可供 Wasm 与 Worker 共用的结构化执行协议。[`registry.py`](../../runtime/src/shejane_runtime/tools/registry.py) [`tool_execution.py`](../../runtime/src/shejane_runtime/middleware/tool_execution.py) |
 | Wasm Runtime | 依赖中没有 Wasmtime 或 Extism。[`pyproject.toml`](../../runtime/pyproject.toml) |
-| Managed Worker runner | 除 MCP server 外，没有插件 worker handshake、版本协商、invoke/cancel/shutdown 协议。[`mcp_stdio.py`](../../runtime/src/shejane_runtime/tools/mcp_stdio.py) [`builder.py`](../../runtime/src/shejane_runtime/agent/builder.py) |
+| Managed Worker runner | 除 MCP server 外，没有插件 worker handshake、版本协商、invoke/cancel/shutdown 协议。[`stdio.py`](../../runtime/src/shejane_runtime/tools/mcp/stdio.py) [`builder.py`](../../runtime/src/shejane_runtime/agent/builder.py) |
 | 插件级 capability 强制 | 当前文件工具有虚拟路径边界，但 shell 并不受该边界限制；没有插件文件/网络 capability lease。[`builder.py`](../../runtime/src/shejane_runtime/agent/builder.py) |
 | 跨平台进程资源与权限 sandbox | 当前 Runtime 依赖和执行路径中没有 macOS XPC/App Sandbox、Windows AppContainer 或 Linux namespace/Landlock adapter。[`pyproject.toml`](../../runtime/pyproject.toml) [`runs.py`](../../runtime/src/shejane_runtime/runs.py) |
 | 插件产物 staging/验证/原子晋升 | 当前 Artifact 能保存结果，但没有“插件只能写临时输出，Runtime 验证后再晋升”的隔离目录协议。[`tool_execution.py`](../../runtime/src/shejane_runtime/middleware/tool_execution.py) [`sqlite.py`](../../runtime/src/shejane_runtime/store/sqlite.py) |

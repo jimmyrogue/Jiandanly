@@ -20,7 +20,7 @@ LiveAgent 和 Codex 的优势就在于把这三类内容放进同一条有序的
 
 ### 当前实现的根因
 
-1. **模型每轮的中间叙述被主动清空。** [`projectTransientAssistantText`](../../client/src/features/chat/chatStore.ts) 在 `llm.round.started`、`tool.requested` 或 `question.asked` 时返回空字符串；对应测试也明确要求“只保留当前模型回合文本”。因此模型在调用 Tool 前说的“准备检查附件”等内容不会进入最终可见过程。
+1. **模型每轮的中间叙述被主动清空。** [`projectTransientAssistantText`](../../client/src/features/chat/projection/chatStore.ts) 在 `llm.round.started`、`tool.requested` 或 `question.asked` 时返回空字符串；对应测试也明确要求“只保留当前模型回合文本”。因此模型在调用 Tool 前说的“准备检查附件”等内容不会进入最终可见过程。
 2. **思考内容只有一个槽位。** [`appendLocalRunEvent`](../../client/src/App.tsx) 在每个 `llm.round.started` 时清空 `message.reasoning`，旧回合的思考无法与随后发生的 Tool 保持顺序关系。
 3. **完成态活动被完全隐藏。** [`AgentProgress`](../../client/src/features/chat/components/AgentProgress.tsx) 在 `tone === 'done'` 时直接返回；一旦开始输出正文，运行中的活动也会消失。用户无法在完成后展开查看这次任务做过什么。
 4. **Raw reasoning 已退出 Client 协议。** [`event_translator.py`](../../runtime/src/shejane_runtime/event_translator.py) 不再把 `reasoning_content` 转成 SSE；Runtime 只在自身模型能力明确允许时，将 Provider 标记为 display-safe 的 summary 归一化为 `reasoning_summary`。
