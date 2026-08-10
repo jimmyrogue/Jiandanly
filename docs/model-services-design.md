@@ -60,6 +60,17 @@ Client 只展示连接流程和 Runtime 返回的状态，不复制厂商规则�
 Agent 对话能力可明确保存 `openai_chat_completions`、`openai_responses`、
 `anthropic_messages` 或 `google_generate_content` 协议。OpenAI 默认使用 Responses；
 DeepSeek V4 Flash 使用 Responses，V4 Pro 在官方声明支持前继续使用 Chat Completions。
+在 OpenAI 官方已声明支持 Web Search 的 GPT-5、GPT-4.1、o3/o4、`chat-latest`
+和 DeepSeek V4 Flash 上，Runtime
+会随 Responses 请求绑定托管的 `{"type":"web_search"}`；该工具由供应商在同一次模型
+调用内执行，不进入本地 P10 ToolNode。Responses 返回的 URL 注解会投影成可见、可点击
+的行内引用；OpenAI 官方连接还会请求 `web_search_call.action.sources`，把搜索实际查阅
+但未在正文引用的 URL 一并去重展示在回答末尾。DeepSeek 当前不支持 Responses 的
+`include`，因此只能展示其返回的行内引用来源，不能声称是完整检索列表。DeepSeek 的
+托管工具名是 `web_search`，不是 Runtime 本地的 `web.fetch`；
+后者仍保留 SSRF 防护与本地工具回执。规范依据见
+[OpenAI Web Search](https://developers.openai.com/api/docs/guides/tools-web-search) 和
+[DeepSeek Responses API](https://api-docs.deepseek.com/guides/responses_api)。
 当前不做动态路由、本地模型、SheJane 自有额度、计费或模型网关。
 
 ## 核心模型

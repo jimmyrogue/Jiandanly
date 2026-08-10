@@ -148,6 +148,24 @@ class _BindableStreamingModel(_StreamingModel):
         )
 
 
+class _HostedToolBindableModel(_StreamingModel):
+    bound_tool_types: tuple[str, ...] = ()
+
+    def bind_tools(
+        self,
+        tools: Sequence[object],
+        *,
+        tool_choice: str | None = None,
+        **kwargs: object,
+    ) -> BaseChatModel:
+        del tool_choice, kwargs
+        return self.model_copy(
+            update={
+                "bound_tool_types": tuple(str(item["type"]) for item in tools)  # type: ignore[index]
+            }
+        )
+
+
 class _RunnableBindingStreamingModel(_StreamingModel):
     def bind_tools(
         self,
@@ -564,6 +582,30 @@ async def test_provider_boundary_filters_office_schema_for_plain_subagent_task(
             [HumanMessage(content="Review this Python function and report the bug.")],
             tool_schema_tokens=schema_tokens,
         )
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_provider_boundary_preserves_hosted_tools_with_function_tools(
+    tmp_path: Path,
+) -> None:
+    store, run = await _store_and_run(tmp_path)
+    try:
+        unbound = LedgerChatModel(
+            delegate=_HostedToolBindableModel(),
+            store=store,
+            run_id=str(run["id"]),
+            execution_attempt_id="job-1:1",
+            model_name="local:test:responses",
+            max_calls=2,
+            profile={"max_input_tokens": 8_192},
+        )
+        active = unbound.bind_tools([{"type": "web_search"}, _workspace_read])
+        assert isinstance(active, LedgerChatModel)
+        provider_model, _, _, _ = active._provider_model([HumanMessage(content="latest news")])
+        assert isinstance(provider_model, _HostedToolBindableModel)
+        assert provider_model.bound_tool_types == ("web_search", "function")
     finally:
         await store.close()
 

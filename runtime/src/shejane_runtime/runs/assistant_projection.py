@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from typing import Any
+from urllib.parse import urlparse
 
 
 def _assistant_draft_from_update(payload: Any) -> dict[str, Any] | None:
@@ -182,9 +183,77 @@ def _assistant_content_text(content: Any) -> str:
     if not isinstance(content, list):
         return ""
     parts: list[str] = []
+    source_numbers: dict[str, int] = {}
+    consulted_sources: dict[str, None] = {}
     for item in content:
         if isinstance(item, dict) and item.get("type") == "text":
-            parts.append(str(item.get("text") or ""))
+            parts.append(_text_block_with_citations(item, source_numbers))
+        elif isinstance(item, dict) and item.get("type") == "web_search_call":
+            action = item.get("action")
+            if not isinstance(action, dict) or not isinstance(action.get("sources"), list):
+                continue
+            for source in action["sources"]:
+                if isinstance(source, dict) and (url := _safe_source_url(source.get("url"))):
+                    consulted_sources.setdefault(url, None)
         elif isinstance(item, str):
             parts.append(item)
-    return "".join(parts)
+    answer = "".join(parts)
+    sources = [*source_numbers, *consulted_sources]
+    sources = list(dict.fromkeys(sources))
+    if not sources:
+        return answer
+    source_list = "\n".join(f"{number}. <{url}>" for number, url in enumerate(sources, start=1))
+    return (
+        f"{answer}\n\n### Sources\n\n{source_list}" if answer else f"### Sources\n\n{source_list}"
+    )
+
+
+def _text_block_with_citations(
+    block: dict[str, Any],
+    source_numbers: dict[str, int],
+) -> str:
+    text = str(block.get("text") or "")
+    annotations = block.get("annotations")
+    if not isinstance(annotations, list):
+        return text
+    inserted: set[tuple[int, str]] = set()
+    insertions: dict[int, list[str]] = {}
+    for annotation in annotations:
+        if not isinstance(annotation, dict) or annotation.get("type") not in {
+            "citation",
+            "url_citation",
+        }:
+            continue
+        url = _safe_source_url(annotation.get("url"))
+        if url is None or url in text:
+            continue
+        end_index = annotation.get("end_index")
+        position = (
+            end_index
+            if isinstance(end_index, int)
+            and not isinstance(end_index, bool)
+            and 0 <= end_index <= len(text)
+            else len(text)
+        )
+        if (position, url) in inserted:
+            continue
+        inserted.add((position, url))
+        number = source_numbers.setdefault(url, len(source_numbers) + 1)
+        insertions.setdefault(position, []).append(f" [\\[{number}\\]](<{url}>)")
+    for position in sorted(insertions, reverse=True):
+        text = f"{text[:position]}{''.join(insertions[position])}{text[position:]}"
+    return text
+
+
+def _safe_source_url(value: Any) -> str | None:
+    url = str(value or "")
+    parsed = urlparse(url)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or any(character.isspace() for character in url)
+        or "<" in url
+        or ">" in url
+    ):
+        return None
+    return url

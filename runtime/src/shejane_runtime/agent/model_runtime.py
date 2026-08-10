@@ -38,6 +38,7 @@ _COMPLETION_REVIEW_MAX_CALLS = 4
 _TITLE_GENERATION_MAX_CALLS = 1
 _SUMMARIZATION_MAX_CALLS = 4
 _SUMMARIZATION_MAX_OUTPUT_TOKENS = 1_024
+_OPENAI_WEB_SEARCH_MODEL_PREFIXES = ("gpt-5", "gpt-4.1", "o3", "o4")
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,7 +59,24 @@ class RuntimeModelMiddleware(AgentMiddleware):
     def _request_with_model(request: Any) -> Any:
         context = getattr(getattr(request, "runtime", None), "context", None)
         model = getattr(context, "model", None)
-        return request.override(model=model) if model is not None else request
+        if model is None:
+            return request
+        hosted_tools = tuple(getattr(model, "hosted_tools", ()) or ())
+        if getattr(model, "call_purpose", "agent") != "agent" or not hosted_tools:
+            return request.override(model=model)
+        model = model.model_copy(update={"hosted_tools": ()})
+        existing = {
+            str(tool.get("type"))
+            for tool in getattr(request, "tools", ())
+            if isinstance(tool, dict) and tool.get("type")
+        }
+        return request.override(
+            model=model,
+            tools=[
+                *[tool for tool in hosted_tools if str(tool.get("type")) not in existing],
+                *getattr(request, "tools", ()),
+            ],
+        )
 
     def wrap_model_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
         return handler(self._request_with_model(request))
@@ -69,6 +87,29 @@ class RuntimeModelMiddleware(AgentMiddleware):
         handler: Callable[[Any], Awaitable[Any]],
     ) -> Any:
         return await handler(self._request_with_model(request))
+
+
+def _hosted_tools_for_model_binding(
+    model_binding: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], ...]:
+    if not model_binding or model_binding.get("protocol") != "openai_responses":
+        return ()
+    preset_id = str(model_binding.get("preset_id") or "")
+    model_id = str(model_binding.get("model_id") or "")
+    hostname = urlparse(str(model_binding.get("base_url") or "")).hostname
+    if (
+        preset_id == "deepseek"
+        and hostname == "api.deepseek.com"
+        and model_id == "deepseek-v4-flash"
+    ):
+        return ({"type": "web_search"},)
+    if (
+        preset_id == "openai"
+        and hostname == "api.openai.com"
+        and (model_id == "chat-latest" or model_id.startswith(_OPENAI_WEB_SEARCH_MODEL_PREFIXES))
+    ):
+        return ({"type": "web_search"},)
+    return ()
 
 
 def _build_chat_model(
@@ -165,6 +206,17 @@ def _build_byok_chat_model(
         else None
     )
     responses = model_binding.get("protocol") == "openai_responses"
+    responses_options: dict[str, Any] = {}
+    if responses:
+        responses_options = {
+            "use_responses_api": True,
+            "use_previous_response_id": False,
+            "output_version": "v1",
+        }
+        if model_binding.get("preset_id") == "openai" and _hosted_tools_for_model_binding(
+            model_binding
+        ):
+            responses_options["include"] = ["web_search_call.action.sources"]
     return ChatOpenAI(
         model=str(model_binding["model_id"]),
         base_url=base_url,
@@ -178,15 +230,7 @@ def _build_byok_chat_model(
         timeout=settings.model_request_timeout_seconds,
         profile=profile,
         extra_body=extra_body,
-        **(
-            {
-                "use_responses_api": True,
-                "use_previous_response_id": False,
-                "output_version": "v1",
-            }
-            if responses
-            else {}
-        ),
+        **responses_options,
     )
 
 
@@ -221,6 +265,7 @@ def _build_run_model_bundle(
             model_name=mode,
             max_calls=hard_limit,
             profile=getattr(provider, "profile", None),
+            hosted_tools=_hosted_tools_for_model_binding(model_binding),
         )
         if execution_attempt_id is not None
         else provider

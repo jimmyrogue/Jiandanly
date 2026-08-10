@@ -28,6 +28,82 @@ def test_extracts_complete_ai_message_not_user_or_tool_state() -> None:
     assert draft["tool_calls"][0]["name"] == "time.now"
 
 
+def test_projects_responses_citations_as_clickable_markdown() -> None:
+    message = AIMessage(
+        id="ai-cited",
+        content=[
+            {
+                "type": "text",
+                "text": "OpenAI and DeepSeek.",
+                "annotations": [
+                    {
+                        "type": "citation",
+                        "url": "https://openai.com/source",
+                        "end_index": 6,
+                    },
+                    {
+                        "type": "url_citation",
+                        "url": "https://deepseek.com/source",
+                        "end_index": 19,
+                    },
+                ],
+            }
+        ],
+    )
+
+    draft = _assistant_draft_from_update({"model": {"messages": [message]}})
+
+    assert draft is not None
+    assert draft["content"] == (
+        "OpenAI [\\[1\\]](<https://openai.com/source>) and "
+        "DeepSeek [\\[2\\]](<https://deepseek.com/source>).\n\n"
+        "### Sources\n\n"
+        "1. <https://openai.com/source>\n"
+        "2. <https://deepseek.com/source>"
+    )
+
+
+def test_projects_all_consulted_web_search_sources_without_duplicates() -> None:
+    message = AIMessage(
+        id="ai-sources",
+        content=[
+            {
+                "type": "web_search_call",
+                "action": {
+                    "type": "search",
+                    "sources": [
+                        {"type": "url", "url": "https://cited.example/article"},
+                        {"type": "url", "url": "https://consulted.example/page"},
+                        {"type": "url", "url": "https://consulted.example/page"},
+                        {"type": "url", "url": "javascript:alert(1)"},
+                    ],
+                },
+            },
+            {
+                "type": "text",
+                "text": "Answer.",
+                "annotations": [
+                    {
+                        "type": "url_citation",
+                        "url": "https://cited.example/article",
+                        "end_index": 6,
+                    }
+                ],
+            },
+        ],
+    )
+
+    draft = _assistant_draft_from_update({"model": {"messages": [message]}})
+
+    assert draft is not None
+    assert draft["content"] == (
+        "Answer [\\[1\\]](<https://cited.example/article>).\n\n"
+        "### Sources\n\n"
+        "1. <https://cited.example/article>\n"
+        "2. <https://consulted.example/page>"
+    )
+
+
 def test_extracts_durable_round_identity_and_tool_call_ids() -> None:
     message = AIMessage(
         content="I’ll inspect the file.",

@@ -67,6 +67,7 @@ class LedgerChatModel(BaseChatModel):
     call_purpose: str = "agent"
     tool_schema_tokens: int = 0
     bound_tools: tuple[Any, ...] = Field(default_factory=tuple, exclude=True)
+    hosted_tools: tuple[dict[str, Any], ...] = Field(default_factory=tuple, exclude=True)
     bound_tool_choice: Any = Field(default=None, exclude=True)
     bound_tool_kwargs: dict[str, Any] = Field(default_factory=dict, exclude=True)
 

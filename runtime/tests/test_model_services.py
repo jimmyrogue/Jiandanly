@@ -16,6 +16,7 @@ import shejane_runtime.model_services.catalog as model_catalog
 import shejane_runtime.model_services.probes as model_probes
 import shejane_runtime.model_services.routes as model_routes
 import shejane_runtime.server as server_module
+from shejane_runtime.agent.model_runtime import _hosted_tools_for_model_binding
 from shejane_runtime.auth import LOCAL_OWNER_PRINCIPAL_ID
 from shejane_runtime.config import reset_settings_for_tests
 from shejane_runtime.model_services import (
@@ -1725,9 +1726,10 @@ def test_openai_responses_protocol_uses_responses_api_without_provider_session_s
         settings=reset_settings_for_tests(),
         model_binding={
             "adapter_id": "openai_chat",
+            "preset_id": "openai",
             "protocol": "openai_responses",
             "base_url": "https://api.openai.com/v1",
-            "model_id": "gpt-test",
+            "model_id": "gpt-5.6",
             "profile": {},
         },
         model_api_key="secret",
@@ -1736,6 +1738,82 @@ def test_openai_responses_protocol_uses_responses_api_without_provider_session_s
     assert captured["use_responses_api"] is True
     assert captured["use_previous_response_id"] is False
     assert captured["output_version"] == "v1"
+    assert captured["include"] == ["web_search_call.action.sources"]
+
+
+def test_deepseek_responses_does_not_send_unsupported_include(monkeypatch) -> None:
+    import langchain_openai
+
+    captured: dict = {}
+
+    class FakeChatOpenAI:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(langchain_openai, "ChatOpenAI", FakeChatOpenAI)
+
+    model_probes._build_byok_chat_model(
+        settings=reset_settings_for_tests(),
+        model_binding={
+            "adapter_id": "openai_chat",
+            "preset_id": "deepseek",
+            "protocol": "openai_responses",
+            "base_url": "https://api.deepseek.com",
+            "model_id": "deepseek-v4-flash",
+            "profile": {},
+        },
+        model_api_key="secret",
+    )
+
+    assert "include" not in captured
+
+
+@pytest.mark.parametrize(
+    ("binding", "expected"),
+    [
+        (
+            {
+                "preset_id": "deepseek",
+                "protocol": "openai_responses",
+                "base_url": "https://api.deepseek.com",
+                "model_id": "deepseek-v4-flash",
+            },
+            ({"type": "web_search"},),
+        ),
+        (
+            {
+                "preset_id": "deepseek",
+                "protocol": "openai_chat_completions",
+                "base_url": "https://api.deepseek.com",
+                "model_id": "deepseek-v4-pro",
+            },
+            (),
+        ),
+        (
+            {
+                "preset_id": "openai",
+                "protocol": "openai_responses",
+                "base_url": "https://api.openai.com/v1",
+                "model_id": "gpt-5.6",
+            },
+            ({"type": "web_search"},),
+        ),
+        (
+            {
+                "preset_id": "custom",
+                "protocol": "openai_responses",
+                "base_url": "https://gateway.example/v1",
+                "model_id": "gpt-5.6",
+            },
+            (),
+        ),
+    ],
+)
+def test_hosted_web_search_is_limited_to_documented_provider_bindings(
+    binding: dict,
+    expected: tuple[dict, ...],
+) -> None:
+    assert _hosted_tools_for_model_binding(binding) == expected
 
 
 def test_google_generate_content_protocol_uses_native_google_adapter(monkeypatch) -> None:

@@ -47,8 +47,8 @@ def _custom_middleware(
     """
     middleware: list[AgentMiddleware] = [
         RuntimePromptMiddleware(),
-        DynamicBudgetControlMiddleware(),
         RuntimeModelMiddleware(),
+        DynamicBudgetControlMiddleware(),
         ToolVisibilityMiddleware(
             deferred_tool_names=deferred_tool_names,
             blocked_tool_names={"task"} if not settings.enable_subagents else None,

@@ -90,6 +90,35 @@ def test_runtime_model_is_selected_from_invocation_context() -> None:
     assert selected is runtime_model
 
 
+def test_runtime_model_exposes_hosted_tools_through_the_standard_request() -> None:
+    from shejane_runtime.agent.builder import RuntimeModelMiddleware
+
+    class HostedModel:
+        call_purpose = "agent"
+
+        def __init__(self, hosted_tools=None) -> None:
+            self.hosted_tools = ({"type": "web_search"},) if hosted_tools is None else hosted_tools
+
+        def model_copy(self, *, update):
+            return HostedModel(update["hosted_tools"])
+
+    class Request:
+        runtime = SimpleNamespace(context=SimpleNamespace(model=HostedModel()))
+        model = object()
+        tools = ("read_file",)
+
+        def override(self, **changes):
+            clone = Request()
+            clone.model = changes.get("model", self.model)
+            clone.tools = changes.get("tools", self.tools)
+            return clone
+
+    selected = RuntimeModelMiddleware().wrap_model_call(Request(), lambda request: request)
+
+    assert selected.tools == [{"type": "web_search"}, "read_file"]
+    assert selected.model.hosted_tools == ()
+
+
 async def test_agent_definition_cache_reuses_only_matching_structure(
     tmp_path: Path,
     monkeypatch,
@@ -599,6 +628,11 @@ def test_custom_middleware_has_one_bounded_completion_router(tmp_path: Path) -> 
 
     assert len(routers) == 1
     assert routers[0].max_verification_repairs == 2
+    assert [type(item).__name__ for item in middleware[:3]] == [
+        "RuntimePromptMiddleware",
+        "RuntimeModelMiddleware",
+        "DynamicBudgetControlMiddleware",
+    ]
     names = {type(item).__name__ for item in middleware}
     assert not names & {
         "PlanApprovalMiddleware",
