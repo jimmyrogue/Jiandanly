@@ -684,6 +684,8 @@ class FakeBackendChatModel(BaseChatModel):
                 yield chunk
                 await asyncio.sleep(0.015)
             return
+        if "[[e2e:burst]]" in prompt:
+            await asyncio.sleep(0.25)
         for chunk in self._chunks(messages):
             if run_manager is not None and chunk.message.content:
                 await run_manager.on_llm_new_token(str(chunk.message.content), chunk=chunk)
