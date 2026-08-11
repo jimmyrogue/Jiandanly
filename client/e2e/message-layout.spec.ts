@@ -75,15 +75,22 @@ test('subtask card keeps compact bottom and following progress spacing', async (
   expect.soft(thinking!.y - (meta!.y + meta!.height)).toBeLessThanOrEqual(20)
 })
 
-test('model selector label leaves room for descenders', async ({ page }) => {
+test('model and thinking selectors stay independent and leave room for descenders', async ({ page }) => {
   await page.setContent(`
     <style>${styles}</style>
-    <button class="composer-mode-trigger">
-      <span class="composer-mode-trigger-label">gpt-5.6-luna</span>
-    </button>
+    <div class="composer-toolbar">
+      <button class="composer-mode-trigger">
+        <span class="composer-mode-trigger-label">gpt-5.6-luna</span>
+      </button>
+      <button class="composer-mode-trigger composer-reasoning-trigger">
+        <svg width="14" height="14"></svg>
+        <span class="composer-mode-trigger-label">极高</span>
+        <svg class="composer-mode-trigger-chevron" width="12" height="12"></svg>
+      </button>
+    </div>
   `)
 
-  const metrics = await page.locator('.composer-mode-trigger-label').evaluate((element) => {
+  const metrics = await page.locator('.composer-mode-trigger-label').first().evaluate((element) => {
     const style = getComputedStyle(element)
     return {
       fontSize: Number.parseFloat(style.fontSize),
@@ -91,8 +98,45 @@ test('model selector label leaves room for descenders', async ({ page }) => {
       overflowY: style.overflowY,
     }
   })
+  const model = await page.locator('.composer-mode-trigger').first().boundingBox()
+  const thinking = await page.locator('.composer-reasoning-trigger').boundingBox()
 
   expect(metrics.overflowY === 'visible' || metrics.lineHeight > metrics.fontSize).toBe(true)
+  expect(model).not.toBeNull()
+  expect(thinking).not.toBeNull()
+  expect(thinking!.x).toBeGreaterThanOrEqual(model!.x + model!.width)
+  expect(thinking!.width).toBeLessThanOrEqual(76)
+})
+
+test('thinking menu reuses the compact model-menu surface', async ({ page }) => {
+  await page.setContent(`
+    <style>${styles}</style>
+    <div class="composer-mode-menu model-menu">模型</div>
+    <div class="composer-mode-menu composer-reasoning-menu">
+      <div class="composer-mode-item composer-mode-model-item composer-reasoning-item is-active">快速</div>
+      <div class="composer-mode-item composer-mode-model-item composer-reasoning-item">高</div>
+      <div class="composer-mode-item composer-mode-model-item composer-reasoning-item">极高</div>
+    </div>
+  `)
+
+  const modelStyle = await page.locator('.model-menu').evaluate((element) => {
+    const style = getComputedStyle(element)
+    return { borderRadius: style.borderRadius, boxShadow: style.boxShadow }
+  })
+  const menu = page.locator('.composer-reasoning-menu')
+  const menuStyle = await menu.evaluate((element) => {
+    const style = getComputedStyle(element)
+    return { borderRadius: style.borderRadius, boxShadow: style.boxShadow }
+  })
+  const menuBox = await menu.boundingBox()
+  const itemBox = await menu.locator('.composer-reasoning-item').first().boundingBox()
+
+  expect(menuBox).not.toBeNull()
+  expect(itemBox).not.toBeNull()
+  expect(menuBox!.width).toBe(128)
+  expect(itemBox!.height).toBeLessThanOrEqual(28)
+  expect(menuStyle.borderRadius).toBe(modelStyle.borderRadius)
+  expect(menuStyle.boxShadow).toBe(modelStyle.boxShadow)
 })
 
 test('model capability settings follow a vertical hierarchy', async ({ page }) => {

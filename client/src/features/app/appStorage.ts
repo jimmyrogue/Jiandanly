@@ -1,10 +1,11 @@
 import type { ChatMode } from '@/shared/local-data/types'
-import { parseRuntimeModelSpec, type AgentSettings } from '@/runtime/client'
+import { parseRuntimeModelSpec, type AgentSettings, type ReasoningMode } from '@/runtime/client'
 
 const runtimeThreadIDsStorageKey = 'shejane.runtime-thread-ids.v1'
 const agentSettingsStorageKey = 'shejane.agentSettings.v9'
 const legacyAgentSettingsStorageKey = 'shejane-agent-settings'
 const chatModeStorageKey = 'shejane.chatMode.v2'
+const reasoningModeStorageKey = 'shejane.reasoningMode.v1'
 
 const defaultAgentSettings: Required<AgentSettings> = {
   memory: 'on',
@@ -87,6 +88,25 @@ export function readChatMode(): ChatMode {
 export function writeChatMode(mode: ChatMode) {
   try {
     window.localStorage.setItem(chatModeStorageKey, mode)
+  } catch {
+    // Local storage can be unavailable in restricted browser contexts.
+  }
+}
+
+export function readReasoningMode(): ReasoningMode {
+  if (typeof window === 'undefined') return 'off'
+  try {
+    const mode = window.localStorage.getItem(reasoningModeStorageKey)
+    if (mode === 'high' || mode === 'max') return mode
+  } catch {
+    // Local storage can be unavailable in restricted browser contexts.
+  }
+  return 'off'
+}
+
+export function writeReasoningMode(mode: ReasoningMode) {
+  try {
+    window.localStorage.setItem(reasoningModeStorageKey, mode)
   } catch {
     // Local storage can be unavailable in restricted browser contexts.
   }

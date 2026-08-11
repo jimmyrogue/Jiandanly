@@ -447,6 +447,12 @@ export const zh = {
   'composer.mode.imageGeneration': '用于生成图片',
   'composer.mode.imageShort': '图',
   'composer.mode.serviceChangeConfirm': '切换模型服务后，当前对话历史会发送给新的服务。继续吗？',
+  'composer.reasoning.label': '思考强度',
+  'composer.reasoning.button': '{mode}',
+  'composer.reasoning.menuLabel': '思考强度：{mode}',
+  'composer.reasoning.off': '快速',
+  'composer.reasoning.high': '高',
+  'composer.reasoning.max': '极高',
   'composer.permission.menuLabel': '权限模式：{mode}',
   'composer.permission.ask.label': '请求批准',
   'composer.permission.ask.description': '写入文件和外部操作前询问',
@@ -613,6 +619,11 @@ export const zh = {
   'agent.planApproval.modifyPlaceholder': '告诉助手要怎么改计划…',
   'agent.thinking': '正在思考',
   'agent.thinkingStreaming': '正在思考…',
+  'agent.phase.waiting_provider': '等待模型响应…',
+  'agent.phase.reasoning': '正在深度分析…',
+  'agent.phase.answering': '正在整理回答…',
+  'agent.phase.tool_calling': '正在准备工具调用…',
+  'agent.phase.elapsed': '{seconds} 秒',
   'agent.process.running': '正在处理',
   'agent.process.summary': '过程 · {steps} 步 · {tools} 个工具 · 已完成',
   'agent.process.reasoning': '思考摘要',
@@ -916,4 +927,3 @@ export const zh = {
 } as const
 
 export type TranslationKey = keyof typeof zh
-

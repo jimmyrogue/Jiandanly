@@ -5,6 +5,7 @@ import {
   type RunPresentationState,
 } from '@shejane/runtime-sdk'
 import type { LocalThreadItem } from '../../../runtime/client'
+import { stringValue, toolDetail, truncate } from './chatToolPresentation'
 
 /** Compatibility Adapter for Runtime builds that predate `presentations`. */
 export function projectLegacyRunPresentation(
@@ -23,6 +24,8 @@ export function projectLegacyRunPresentation(
     const toolCallID = String(payload.tool_call_id ?? '')
     if (event.event_type === 'tool.requested' && toolCallID) {
       const id = `tool-call:${toolCallID}`
+      const toolName = String(payload.name ?? payload.tool ?? 'tool')
+      const displayDetail = safeLegacyToolDetail(payload, toolName)
       toolIDs.set(toolCallID, id)
       items.set(id, {
         id,
@@ -32,8 +35,10 @@ export function projectLegacyRunPresentation(
         revision: seq,
         source: { kind: 'run_event', id: event.id ?? id },
         tool_call_id: toolCallID,
-        tool_name: String(payload.name ?? payload.tool ?? 'tool'),
+        tool_name: toolName,
         risk: 'unknown',
+        display_target: displayDetail?.text,
+        display_target_kind: displayDetail?.kind,
         created_at: createdAt,
         updated_at: createdAt,
         completed_at: null,
@@ -50,6 +55,9 @@ export function projectLegacyRunPresentation(
         items.set(id, {
           ...current,
           status: event.event_type === 'tool.completed' ? 'completed' : 'failed',
+          failure_detail: event.event_type === 'tool.failed'
+            ? safeLegacyFailureDetail(payload)
+            : null,
           revision: seq,
           updated_at: createdAt,
           completed_at: createdAt,
@@ -158,4 +166,16 @@ function legacyDecisionKind(eventType: string): 'approval' | 'question' | 'plan'
   return undefined
 }
 
+function safeLegacyToolDetail(payload: Record<string, unknown>, toolName: string) {
+  const detail = toolDetail(payload, toolName)
+  if (!detail || detail.kind === 'host' || detail.kind === 'count') return detail
+  const args = payload.arguments
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return undefined
+  const values = args as Record<string, unknown>
+  return stringValue(values.path) || stringValue(values.file_path) ? detail : undefined
+}
 
+function safeLegacyFailureDetail(payload: Record<string, unknown>): string | null {
+  const status = stringValue(payload.message).match(/\b([1-5]\d{2})\b/)?.[1]
+  return status ? truncate(status, 160) : null
+}

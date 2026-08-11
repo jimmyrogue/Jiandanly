@@ -100,6 +100,8 @@ export function useRuntimeModelSettings({
           vendor: model.service_name,
           vendor_info: t('settings.modelServices.localVendorInfo'),
           recommended: model.recommended,
+          reasoningModes: model.reasoning?.modes ?? ['off'],
+          defaultReasoningMode: model.reasoning?.default_mode ?? 'off',
         }]
       })
       const savedMode = readChatMode()
@@ -133,6 +135,7 @@ export function useRuntimeModelSettings({
             vendor: model.service_name,
             vendor_info: t('settings.modelServices.localVendorInfo'),
             recommended: model.recommended,
+            reasoningModes: ['off'],
           }]
         })
         const imageBinding = capabilityBindings.find(

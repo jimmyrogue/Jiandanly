@@ -186,9 +186,121 @@ test.describe.serial('flow:P2-P12 > Electron critical path', () => {
     expect(harness.rendererErrors).toEqual([])
   })
 
+  test('renders semantic grouped Tool activity from the Runtime presentation', async () => {
+    const { page } = harness
+    await page.getByRole('button', { name: /新对话|New chat/ }).click()
+    const composer = page.getByRole('textbox', {
+      name: /交给石间|Hand it to SheJane|Describe a task/,
+    })
+    await composer.fill('[[e2e:presentation]] render semantic Tool activity')
+    await page.getByRole('button', { name: /发送|Send/ }).click()
+
+    const assistant = page.locator('.message.assistant').last()
+    await expect(
+      assistant.locator('.message-content').getByText(
+        'E2E presentation tools complete.',
+        { exact: true },
+      ),
+    ).toBeVisible()
+
+    const process = assistant.locator('.run-process-completed')
+    await expect(process).toBeVisible()
+    const processSummary = process.locator('.run-process-summary')
+    await expect(processSummary).toHaveAttribute('aria-expanded', 'false')
+    await processSummary.click()
+    await expect(processSummary).toHaveAttribute('aria-expanded', 'true')
+
+    const timeActivity = process.locator('.run-process-activity').filter({
+      hasText: /读取时间|Read time/,
+    })
+    await expect(timeActivity).toHaveCount(1)
+    await expect(timeActivity).toContainText('× 2')
+
+    const webActivity = process.locator('.run-process-activity').filter({
+      hasText: /读取网页|Read web page/,
+    })
+    await expect(webActivity).toContainText('127.0.0.1')
+    await expect(webActivity).toContainText(/失败|Failed/)
+    await expect(assistant.getByText('web.fetch', { exact: true })).toHaveCount(0)
+    await expect(assistant.getByText(/must-not-appear/)).toHaveCount(0)
+    expect(harness.rendererErrors).toEqual([])
+  })
+
+  test('rolls subagent batches past five while keeping completed process collapsed', async () => {
+    const { page } = harness
+    await page.getByRole('button', { name: /新对话|New chat/ }).click()
+    const composer = page.getByRole('textbox', {
+      name: /交给石间|Hand it to SheJane|Describe a task/,
+    })
+    const prompt = '[[e2e:subagent-rolling]] research six independent directions'
+    await composer.fill(prompt)
+    await page.getByRole('button', { name: /发送|Send/ }).click()
+
+    const assistant = page.locator('.message.assistant').last()
+    await expect(
+      assistant.locator('.message-content').getByText(
+        'E2E rolling subagent batches completed: 6/6.',
+        { exact: true },
+      ),
+    ).toBeVisible()
+    await expect(assistant.locator('.run-process-summary')).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    )
+
+    const runtimeConnection = {
+      baseURL: requiredEnv('SHEJANE_E2E_RUNTIME_URL'),
+      token: requiredEnv('SHEJANE_E2E_RUNTIME_TOKEN'),
+    }
+    const run = (await listLocalRuns(runtimeConnection)).find(item => item.goal === prompt)
+    expect(run).toBeDefined()
+    const diagnostics = await getLocalRunDiagnostics(run!.id, runtimeConnection)
+    const taskReceipts = diagnostics.tool_receipts.filter(
+      receipt => receipt.tool_name === 'task',
+    )
+    expect(taskReceipts).toHaveLength(6)
+    expect(taskReceipts.every(receipt => receipt.status === 'completed')).toBe(true)
+    expect(diagnostics.execution_policy).toMatchObject({
+      subagent_budget_mode: 'shared_model_budget',
+      max_subagent_tasks: null,
+      preferred_subagent_concurrency: 3,
+      max_concurrent_subagent_tasks: 5,
+    })
+    expect(harness.rendererErrors).toEqual([])
+  })
+
+  test('replays the Runtime phase with elapsed time before public answer text arrives', async () => {
+    const { page } = harness
+    await page.getByRole('button', { name: /新对话|New chat/ }).click()
+    const faultsBeforeRun = faultProxy.faultCount()
+    faultProxy.armNextStreamHalfClose()
+    const composer = page.getByRole('textbox', {
+      name: /交给石间|Hand it to SheJane|Describe a task/,
+    })
+    await composer.fill(
+      '[[e2e:presentation]] [[e2e:reasoning-phase]] verify replayed first-visible progress',
+    )
+    await page.getByRole('button', { name: /发送|Send/ }).click()
+
+    const assistant = page.locator('.message.assistant').last()
+    await expect(
+      assistant.getByText(/正在深度分析… · 1 秒|Analyzing deeply… · 1s/).first(),
+    ).toBeVisible()
+    await expect(assistant).not.toContainText('E2E_PRIVATE_REASONING_MUST_NOT_RENDER')
+    await expect(
+      assistant.locator('.message-content').getByText(
+        'E2E reasoning presentation complete.',
+        { exact: true },
+      ),
+    ).toBeVisible()
+    expect(faultProxy.faultCount()).toBe(faultsBeforeRun + 1)
+    expect(harness.rendererErrors).toEqual([])
+  })
+
   test('reconnects an incomplete SSE stream from its durable cursor without reloading', async () => {
     const { page } = harness
     await page.getByRole('button', { name: /新对话|New chat/ }).click()
+    const faultsBeforeRun = faultProxy.faultCount()
     faultProxy.armNextStreamHalfClose()
     const composer = page.getByRole('textbox', {
       name: /交给石间|Hand it to SheJane|Describe a task/,
@@ -203,7 +315,7 @@ test.describe.serial('flow:P2-P12 > Electron critical path', () => {
         { exact: true },
       ),
     ).toBeVisible()
-    expect(faultProxy.faultCount()).toBe(1)
+    expect(faultProxy.faultCount()).toBe(faultsBeforeRun + 1)
     await expect(page.getByRole('button', { name: /停止生成|Stop/ })).toHaveCount(0)
     expect(harness.rendererErrors).toEqual([])
   })

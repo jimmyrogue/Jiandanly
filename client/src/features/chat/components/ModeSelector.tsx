@@ -1,5 +1,6 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
+  IconBrain,
   IconCheck,
   IconChevronDown,
   IconInfoCircle,
@@ -14,7 +15,11 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useI18n } from '@/shared/i18n/i18n'
 import type { ChatMode } from '@/shared/local-data/types'
-import type { RuntimeModelSpec } from '@shejane/runtime-sdk'
+import { readReasoningMode, writeReasoningMode } from '@/features/app/appStorage'
+import type { ReasoningMode, RuntimeModelSpec } from '@shejane/runtime-sdk'
+
+const OFF_REASONING_MODES: ReasoningMode[] = ['off']
+const REASONING_MODES: ReasoningMode[] = ['off', 'high', 'max']
 
 /** One selectable Runtime model. */
 export interface ModelOption {
@@ -25,6 +30,8 @@ export interface ModelOption {
   vendor_info?: string
   imageInputs: boolean
   recommended?: boolean
+  reasoningModes?: ReasoningMode[]
+  defaultReasoningMode?: ReasoningMode
 }
 
 /**
@@ -53,8 +60,11 @@ export function ModeSelector({
 }) {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
+  const [reasoningMode, setReasoningMode] = useState<ReasoningMode>(readReasoningMode)
   const confirmedServiceChange = useRef(false)
   const selectedModel = models.find((model) => model.id === mode)
+  const supportedReasoningModes = selectedModel?.reasoningModes ?? OFF_REASONING_MODES
+  const defaultReasoningMode = selectedModel?.defaultReasoningMode ?? 'off'
   const groupedModels = useMemo(() => groupModelsByVendor(models), [models])
   const groupedImageModels = useMemo(() => groupModelsByVendor(imageModels), [imageModels])
   const recommendedGroups = groupedModels
@@ -69,6 +79,22 @@ export function ModeSelector({
   const moreGroups = groupedModels
     .filter((group) => group.models.every((model) => !model.recommended))
   const selectedLabel = selectedModel?.label ?? t('composer.mode.chooseModel')
+  const reasoningLabel = t(`composer.reasoning.${reasoningMode}`)
+
+  useEffect(() => {
+    if (supportedReasoningModes.includes(reasoningMode)) return
+    const fallback = supportedReasoningModes.includes(defaultReasoningMode)
+      ? defaultReasoningMode
+      : 'off'
+    setReasoningMode(fallback)
+    writeReasoningMode(fallback)
+  }, [defaultReasoningMode, reasoningMode, supportedReasoningModes])
+
+  const selectReasoningMode = (next: ReasoningMode) => {
+    if (!supportedReasoningModes.includes(next)) return
+    setReasoningMode(next)
+    writeReasoningMode(next)
+  }
 
   const handleOpenChange = (nextOpen: boolean) => {
     setOpen(nextOpen)
@@ -86,6 +112,14 @@ export function ModeSelector({
     ) {
       if (!window.confirm(t('composer.mode.serviceChangeConfirm'))) return
       confirmedServiceChange.current = true
+    }
+    const nextModes = model.reasoningModes ?? OFF_REASONING_MODES
+    if (!nextModes.includes(reasoningMode)) {
+      const fallback = nextModes.includes(model.defaultReasoningMode ?? 'off')
+        ? model.defaultReasoningMode ?? 'off'
+        : 'off'
+      setReasoningMode(fallback)
+      writeReasoningMode(fallback)
     }
     onChange(model.id)
   }
@@ -175,35 +209,74 @@ export function ModeSelector({
   )
 
   return (
-    <DropdownMenu open={open} onOpenChange={handleOpenChange}>
-      <DropdownMenuTrigger asChild disabled={disabled}>
-        <button
-          type="button"
-          className="composer-mode-trigger"
-          aria-label={t('composer.mode.menuLabel')}
-          title={selectedLabel}
-          disabled={disabled}
+    <>
+      <DropdownMenu open={open} onOpenChange={handleOpenChange}>
+        <DropdownMenuTrigger asChild disabled={disabled}>
+          <button
+            type="button"
+            className="composer-mode-trigger"
+            aria-label={t('composer.mode.menuLabel')}
+            title={selectedLabel}
+            disabled={disabled}
+          >
+            <IconSparkles size={14} aria-hidden="true" />
+            <span className="composer-mode-trigger-label">{selectedLabel}</span>
+            <IconChevronDown size={12} aria-hidden="true" className="composer-mode-trigger-chevron" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" alignOffset={4} sideOffset={8} className="composer-mode-menu">
+          <div className="composer-mode-model-list">
+            <div className="composer-mode-section-label">{t('composer.mode.chatModels')}</div>
+            {recommendedGroups.map((group) => renderGroup(group, 'chat'))}
+            {moreGroups.map((group) => renderGroup(group, 'chat'))}
+            {groupedImageModels.length > 0 ? (
+              <>
+                <div className="composer-mode-separator" />
+                <div className="composer-mode-section-label">{t('composer.mode.imageModels')}</div>
+                {groupedImageModels.map((group) => renderGroup(group, 'image'))}
+              </>
+            ) : null}
+          </div>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild disabled={disabled}>
+          <button
+            type="button"
+            className="composer-mode-trigger composer-reasoning-trigger"
+            aria-label={t('composer.reasoning.menuLabel', { mode: reasoningLabel })}
+            title={t('composer.reasoning.menuLabel', { mode: reasoningLabel })}
+            disabled={disabled}
+          >
+            <IconBrain size={14} aria-hidden="true" />
+            <span className="composer-mode-trigger-label">
+              {t('composer.reasoning.button', { mode: reasoningLabel })}
+            </span>
+            <IconChevronDown size={12} aria-hidden="true" className="composer-mode-trigger-chevron" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="end"
+          sideOffset={8}
+          className="composer-mode-menu composer-reasoning-menu"
         >
-          <IconSparkles size={14} aria-hidden="true" />
-          <span className="composer-mode-trigger-label">{selectedLabel}</span>
-          <IconChevronDown size={12} aria-hidden="true" className="composer-mode-trigger-chevron" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" alignOffset={4} sideOffset={8} className="composer-mode-menu">
-        <div className="composer-mode-model-list">
-          <div className="composer-mode-section-label">{t('composer.mode.chatModels')}</div>
-          {recommendedGroups.map((group) => renderGroup(group, 'chat'))}
-          {moreGroups.map((group) => renderGroup(group, 'chat'))}
-          {groupedImageModels.length > 0 ? (
-            <>
-              <div className="composer-mode-separator" />
-              <div className="composer-mode-section-label">{t('composer.mode.imageModels')}</div>
-              {groupedImageModels.map((group) => renderGroup(group, 'image'))}
-            </>
-          ) : null}
-        </div>
-      </DropdownMenuContent>
-    </DropdownMenu>
+          {REASONING_MODES.map((item) => (
+            <DropdownMenuItem
+              key={item}
+              className={`composer-mode-item composer-mode-model-item composer-reasoning-item${reasoningMode === item ? ' is-active' : ''}`}
+              disabled={!supportedReasoningModes.includes(item)}
+              onSelect={() => selectReasoningMode(item)}
+            >
+              <span>{t(`composer.reasoning.${item}`)}</span>
+              {reasoningMode === item ? (
+                <IconCheck size={14} aria-hidden="true" className="composer-mode-item-check" />
+              ) : null}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </>
   )
 }
 

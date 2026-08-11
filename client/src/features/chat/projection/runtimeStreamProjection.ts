@@ -46,6 +46,19 @@ export function processStreamEvent(
     return
   }
   applyRunPresentationEvent(message, event)
+  if (event.event_type === 'llm.phase.changed') {
+    const phase = String(event.payload?.phase ?? '')
+    if (
+      phase === 'waiting_provider'
+      || phase === 'reasoning'
+      || phase === 'answering'
+      || phase === 'tool_calling'
+      || phase === 'completed'
+    ) {
+      message.modelPhase = phase
+      message.modelPhaseStartedAt = event.created_at
+    }
+  }
   if (!message.presentation) {
     message.content = projectTransientAssistantText(message.content, event)
   }

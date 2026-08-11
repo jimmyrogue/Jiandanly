@@ -74,6 +74,91 @@ describe('Runtime thread projection', () => {
     expect(message?.presentation).toBeUndefined()
     expect(message?.agentEvents).toBeUndefined()
   })
+
+  it('restores the active model phase from the authoritative Run snapshot', () => {
+    const snapshot = {
+      thread: {
+        id: 'conversation-phase',
+        title: 'Phase recovery',
+        metadata: {},
+        version: 1,
+        created_at: '2026-08-10T12:00:00Z',
+        updated_at: '2026-08-10T12:00:05Z',
+      },
+      items: [{
+        id: 'assistant-phase',
+        thread_id: 'conversation-phase',
+        run_id: 'run-phase',
+        item_type: 'assistant_message',
+        status: 'in_progress',
+        content: '',
+        metadata: {},
+        position: 1,
+        version: 1,
+        created_at: '2026-08-10T12:00:00Z',
+        updated_at: '2026-08-10T12:00:05Z',
+      }],
+      runs: [{
+        id: 'run-phase',
+        root_run_id: 'run-phase',
+        goal: 'Think deeply',
+        status: 'running',
+        history_json: '[]',
+        settings_json: '{}',
+        metadata_json: '{}',
+        reasoning_mode: 'high',
+        model_phase: 'reasoning',
+        model_phase_started_at: '2026-08-10T12:00:02Z',
+        inputs: [],
+        created_at: '2026-08-10T12:00:00Z',
+        updated_at: '2026-08-10T12:00:05Z',
+      }],
+      events: [],
+      event_high_watermarks: { 'run-phase': 0 },
+      presentations: {},
+      cursor: 1,
+      has_more_items: false,
+      next_before_position: null,
+      events_truncated: true,
+    } as unknown as LocalThreadSnapshot
+
+    const message = projectRuntimeThread(snapshot).messages[0]
+
+    expect(message).toMatchObject({
+      modelPhase: 'reasoning',
+      modelPhaseStartedAt: '2026-08-10T12:00:02Z',
+    })
+  })
+
+  it('applies replayable model phase changes without exposing private reasoning', () => {
+    const message: ChatMessage = {
+      id: 'assistant-phase-live',
+      role: 'assistant',
+      content: '',
+      createdAt: '2026-08-10T12:00:00Z',
+      status: 'streaming',
+      runId: 'run-phase-live',
+    }
+
+    processStreamEvent(
+      message,
+      {
+        event_type: 'llm.phase.changed',
+        run_id: 'run-phase-live',
+        payload: { round_id: 'call-1', phase: 'reasoning' },
+        created_at: '2026-08-10T12:00:03Z',
+      },
+      new Set(),
+      new Map(),
+      createTranslator('zh'),
+    )
+
+    expect(message).toMatchObject({
+      content: '',
+      modelPhase: 'reasoning',
+      modelPhaseStartedAt: '2026-08-10T12:00:03Z',
+    })
+  })
   it('adapts an older Runtime tool timeline into the presentation interface', () => {
     const presentation = projectLegacyRunPresentation(
       'run-legacy-presentation',
@@ -97,7 +182,11 @@ describe('Runtime thread projection', () => {
           run_id: 'run-legacy-presentation',
           seq: 1,
           event_type: 'tool.requested',
-          payload: { tool_call_id: 'legacy-call', tool: 'search' },
+          payload: {
+            tool_call_id: 'legacy-call',
+            tool: 'web.fetch',
+            arguments: { url: 'https://www.bochk.com/account-opening?token=private' },
+          },
           created_at: '2026-08-04T00:00:01Z',
         },
         {
@@ -126,6 +215,9 @@ describe('Runtime thread projection', () => {
     expect(presentation?.snapshot.items?.[0]).toMatchObject({
       id: 'tool-call:legacy-call',
       status: 'completed',
+      tool_name: 'web.fetch',
+      display_target: 'bochk.com',
+      display_target_kind: 'host',
     })
   })
 

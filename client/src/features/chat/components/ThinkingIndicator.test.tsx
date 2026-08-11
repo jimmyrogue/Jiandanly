@@ -1,11 +1,14 @@
 import { cleanup, render } from '@testing-library/react'
 import type { ReactElement } from 'react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ThinkingIndicator } from './ThinkingIndicator'
 import { I18nProvider } from '@/shared/i18n/I18nProvider'
 import type { ChatMessage } from '@/shared/local-data/types'
 
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  vi.useRealTimers()
+})
 
 function message(overrides: Partial<ChatMessage> = {}): ChatMessage {
   return {
@@ -50,6 +53,22 @@ describe('ThinkingIndicator', () => {
   it('renders the pulsing icon for the pending status as well', () => {
     const { container } = renderIndicator(<ThinkingIndicator message={message({ status: 'pending' })} />)
     expect(container.querySelector('.thinking-pulse')).toBeInTheDocument()
+  })
+
+  it('shows the Runtime-owned model phase and its elapsed time', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-10T12:00:09.000Z'))
+
+    const { container } = renderIndicator(
+      <ThinkingIndicator message={message({
+        modelPhase: 'reasoning',
+        modelPhaseStartedAt: '2026-08-10T12:00:02.000Z',
+      })} />,
+    )
+
+    expect(container.querySelector('.thinking-indicator')).toHaveTextContent(
+      '正在深度分析… · 7 秒',
+    )
   })
 
   it('renders nothing while waiting for permission or input (the bars take over)', () => {

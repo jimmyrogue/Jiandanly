@@ -11,6 +11,7 @@ export type MessageRole = 'system' | 'user' | 'assistant'
 /** Concrete Runtime model selection (`local:<connection>:<model>`). */
 export type ChatMode = RuntimeModelSpec | ''
 export type MessageStatus = 'pending' | 'streaming' | 'waiting_permission' | 'waiting_input' | 'done' | 'error'
+export type ModelPhase = 'waiting_provider' | 'reasoning' | 'answering' | 'tool_calling' | 'completed'
 
 export interface AgentQuestionChoice {
   label: string
@@ -175,6 +176,9 @@ export interface ChatMessage {
   /** Highest Runtime event sequence already reflected in this cache entry. */
   lastEventSeq?: number
   tokens?: number
+  /** Runtime-owned phase of the latest model call; rebuilt from the Run snapshot. */
+  modelPhase?: ModelPhase
+  modelPhaseStartedAt?: string
   /** Runtime-owned execution presentation plus disposable live drafts. */
   presentation?: RunPresentationState
   agentEvents?: AgentTimelineItem[]

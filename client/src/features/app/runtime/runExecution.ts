@@ -35,7 +35,7 @@ import { parseSkillDraft } from '@/features/chat/skillDraft'
 import { runtimeCommandErrorMessage } from './runtimeCommandError'
 import { runtimeStoreActions } from '../state/runtimeStore'
 import { workspaceStoreActions } from '../state/workspaceStore'
-import { writeChatMode } from '../appStorage'
+import { readReasoningMode, writeChatMode } from '../appStorage'
 import {
   notifyAgentCompleted,
   notifyAgentFailed,
@@ -268,6 +268,7 @@ export async function executeLocalHarnessMessage({
     settings: effectiveSettings,
     metadata: runOptions?.metadata,
     mode: selectedMode,
+    reasoningMode: readReasoningMode(),
     permissionMode,
     pluginRefs: selectedPlugins.map((plugin) => ({
       pluginId: plugin.pluginId,
@@ -294,7 +295,12 @@ export async function executeLocalHarnessMessage({
   pendingCommandSaved = true
   try {
     const run = await createLocalRun(runInput, runRuntimeConnection)
-    Object.assign(assistantMessage, { runId: run.id, status: 'streaming' as const })
+    Object.assign(assistantMessage, {
+      runId: run.id,
+      status: 'streaming' as const,
+      modelPhase: run.model_phase ?? 'waiting_provider',
+      modelPhaseStartedAt: run.model_phase_started_at ?? run.updated_at,
+    })
     const runInputs = run.inputs
     const runInputsByIndex = new Map(runInputs.map((input) => [input.client_index, input]))
     if (attachments.length && (

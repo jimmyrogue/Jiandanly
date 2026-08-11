@@ -1,9 +1,10 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { I18nProvider } from '@/shared/i18n/I18nProvider'
 import type { ChatMode } from '@/shared/local-data/types'
+import { readReasoningMode, writeReasoningMode } from '@/features/app/appStorage'
 import { ModeSelector, type ModelOption } from './ModeSelector'
 
 const MODELS: ModelOption[] = [
@@ -26,17 +27,20 @@ function renderSelector(mode: ChatMode, onChange = vi.fn()) {
 }
 
 function openMenu() {
-  const trigger = screen.getByRole('button')
+  const trigger = screen.getByRole('button', { name: '选择模型' })
   trigger.focus()
   fireEvent.keyDown(trigger, { key: 'Enter', code: 'Enter' })
 }
 
 describe('ModeSelector (Runtime catalog)', () => {
-  afterEach(cleanup)
+  afterEach(() => {
+    cleanup()
+    localStorage.clear()
+  })
 
   it('shows the selected Runtime model', () => {
     renderSelector('local:openai:gpt-4o')
-    expect(screen.getByRole('button')).toHaveTextContent('GPT-4o')
+    expect(screen.getByRole('button', { name: '选择模型' })).toHaveTextContent('GPT-4o')
   })
 
   it('shows and switches the Runtime-owned image model binding', async () => {
@@ -52,7 +56,7 @@ describe('ModeSelector (Runtime catalog)', () => {
       />,
     ))
 
-    const trigger = screen.getByRole('button')
+    const trigger = screen.getByRole('button', { name: '选择模型' })
     expect(trigger).toHaveTextContent('GPT-4o')
     expect(trigger).not.toHaveTextContent('gpt-image-2')
     openMenu()
@@ -63,7 +67,7 @@ describe('ModeSelector (Runtime catalog)', () => {
 
   it('shows a model-selection prompt for a stale selection', () => {
     renderSelector('local:removed:model')
-    expect(screen.getByRole('button')).toHaveTextContent('选择具体模型')
+    expect(screen.getByRole('button', { name: '选择模型' })).toHaveTextContent('选择具体模型')
   })
 
   it('lists concrete Runtime models directly', async () => {
@@ -133,6 +137,57 @@ describe('ModeSelector (Runtime catalog)', () => {
     ))
     openMenu()
     expect(onRefreshCurrent).toHaveBeenCalledOnce()
+  })
+
+  it('keeps thinking effort outside the model menu and persists the selection', async () => {
+    render(withProviders(
+      <ModeSelector
+        mode="local:deepseek:deepseek-v4-flash"
+        models={[{
+          id: 'local:deepseek:deepseek-v4-flash',
+          label: 'DeepSeek V4 Flash',
+          vendor: 'DeepSeek',
+          imageInputs: false,
+          reasoningModes: ['off', 'high', 'max'],
+          defaultReasoningMode: 'off',
+        }]}
+        onChange={vi.fn()}
+      />,
+    ))
+
+    expect(screen.getByRole('button', { name: '思考强度：快速' })).toHaveTextContent('快速')
+    openMenu()
+    expect(screen.queryByRole('menuitem', { name: '高' })).not.toBeInTheDocument()
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape', code: 'Escape' })
+
+    const reasoningTrigger = screen.getByRole('button', { name: '思考强度：快速' })
+    reasoningTrigger.focus()
+    fireEvent.keyDown(reasoningTrigger, { key: 'Enter', code: 'Enter' })
+    fireEvent.click(await screen.findByRole('menuitem', { name: '高' }))
+
+    expect(screen.getByRole('button', { name: '思考强度：高' })).toHaveTextContent('高')
+    expect(readReasoningMode()).toBe('high')
+  })
+
+  it('uses the model default when a fixed reasoning alias is selected', async () => {
+    writeReasoningMode('off')
+    render(withProviders(
+      <ModeSelector
+        mode="local:official:deepseek-v4-flash-max"
+        models={[{
+          id: 'local:official:deepseek-v4-flash-max',
+          label: 'DeepSeek V4 Flash Max',
+          vendor: 'DeepSeek',
+          imageInputs: false,
+          reasoningModes: ['max'],
+          defaultReasoningMode: 'max',
+        }]}
+        onChange={vi.fn()}
+      />,
+    ))
+
+    await waitFor(() => expect(readReasoningMode()).toBe('max'))
+    expect(screen.getByRole('button', { name: '思考强度：极高' })).toHaveTextContent('极高')
   })
 
 })

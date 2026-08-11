@@ -1,6 +1,7 @@
 import { useI18n } from '@/shared/i18n/i18n'
 import { appLogoURL } from '@/shared/assets/logo'
 import type { ChatMessage } from '@/shared/local-data/types'
+import { useModelPhaseText } from '@/features/chat/projection/modelPhasePresentation'
 
 const THINKING_STATUSES = new Set<ChatMessage['status']>(['pending', 'streaming'])
 
@@ -25,13 +26,21 @@ export function ThinkingIndicator({ message }: { message: ChatMessage }) {
     && THINKING_STATUSES.has(message.status)
     && !hasVisibleProcess
     && !message.content.trim()
+  const phaseText = useModelPhaseText(
+    message.modelPhase,
+    message.modelPhaseStartedAt,
+    active,
+    t,
+  )
   if (!active) {
     return null
   }
   return (
     <div className="thinking-indicator" role="status" aria-label={t('agent.thinking')}>
       <img src={appLogoURL} alt="" className="thinking-mark thinking-pulse" aria-hidden="true" />
-      <span className="thinking-label">{t('agent.thinkingStreaming')}</span>
+      <span className="thinking-label">
+        {phaseText}
+      </span>
     </div>
   )
 }

@@ -190,6 +190,10 @@ function projectRuntimeItem(
         }
       : {}),
     ...(run?.command_id ? { commandId: run.command_id } : {}),
+    ...(run?.model_phase ? { modelPhase: run.model_phase } : {}),
+    ...(run?.model_phase_started_at
+      ? { modelPhaseStartedAt: run.model_phase_started_at }
+      : {}),
     agentEvents: agentEvents.length ? agentEvents : undefined,
     presentation,
     // This is a rebuild from Runtime truth. Explicitly clear an older Client
