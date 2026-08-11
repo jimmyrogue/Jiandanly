@@ -359,13 +359,20 @@ async def _invoke_plugin_vision(
         ),
         None,
     )
+    service_base_url = str(connection.get("base_url") or "") if connection else ""
+    trusted_model_catalog = bool(connection and connection.get("preset_id") == "shejane-official")
     if isinstance(current_profile, dict):
         current_profile = apply_known_model_profile_defaults(
             current_profile,
-            service_base_url=str(connection.get("base_url") or "") if connection else "",
-            trusted_model_catalog=bool(
-                connection and connection.get("preset_id") == "shejane-official"
-            ),
+            service_base_url=service_base_url,
+            trusted_model_catalog=trusted_model_catalog,
+        )
+    frozen_profile = model_binding.get("profile")
+    if isinstance(frozen_profile, dict):
+        frozen_profile = apply_known_model_profile_defaults(
+            frozen_profile,
+            service_base_url=service_base_url,
+            trusted_model_catalog=trusted_model_catalog,
         )
     if (
         connection is None
@@ -373,7 +380,7 @@ async def _invoke_plugin_vision(
         or str(connection.get("adapter_id")) != str(model_binding["adapter_id"])
         or str(connection.get("base_url")) != str(model_binding["base_url"])
         or str(connection.get("credential_ref")) != str(model_binding["credential_ref"])
-        or current_profile != dict(model_binding["profile"])
+        or current_profile != frozen_profile
         or not bool(current_profile.get("image_inputs"))
     ):
         raise PluginActionError(

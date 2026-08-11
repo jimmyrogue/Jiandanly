@@ -341,6 +341,15 @@ async def test_official_catalog_keeps_known_agent_capabilities_and_limits(monkey
             "image_inputs": False,
             "max_input_tokens": 1_000_000,
             "max_output_tokens": 384_000,
+            "provider_family": "deepseek",
+            "reasoning": {
+                "supported": True,
+                "modes": ["off", "high", "max"],
+                "default_mode": "off",
+                "stream_field": "reasoning_content",
+                "tool_roundtrip_required": True,
+                "display_policy": "activity_only",
+            },
             "source": "discovered",
             "verification": "unverified",
             "recommended": True,
@@ -590,7 +599,7 @@ def test_bundled_models_are_recommendations_not_preverified_connections() -> Non
         "unverified",
     ]
     assert [model["capabilities"][0]["protocol"] for model in deepseek["models"]] == [
-        "openai_responses",
+        "openai_chat_completions",
         "openai_chat_completions",
     ]
 
@@ -2051,6 +2060,15 @@ def test_image_generation_model_uses_images_endpoint_and_stays_out_of_agent_cata
         "image_inputs": False,
         "max_input_tokens": None,
         "max_output_tokens": None,
+        "provider_family": "unknown",
+        "reasoning": {
+            "supported": False,
+            "modes": ["off"],
+            "default_mode": "off",
+            "stream_field": None,
+            "tool_roundtrip_required": False,
+            "display_policy": "activity_only",
+        },
     }
     assert requests[0].url == "https://gateway.example/v1/images/generations"
     assert json.loads(requests[0].content)["model"] == "gpt-image-1"

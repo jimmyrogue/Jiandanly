@@ -1096,7 +1096,7 @@ def test_completion_router_rejects_empty_truncated_and_invalid_outputs() -> None
     assert provider_protocol_error["completion_route"]["reason"] == "provider_protocol_error"
 
 
-def test_completion_router_decision_is_part_of_compiled_graph_state() -> None:
+def test_completion_router_decision_stays_private_in_compiled_graph_state() -> None:
     from langchain.agents import create_agent
     from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 
@@ -1110,8 +1110,7 @@ def test_completion_router_decision_is_part_of_compiled_graph_state() -> None:
 
     result = agent.invoke({"messages": [{"role": "user", "content": "hi"}]})
 
-    assert result["completion_route"]["decision"] == "failed"
-    assert result["completion_route"]["reason"] == "empty_model_output"
+    assert "completion_route" not in result
 
 
 def test_compiled_graph_does_not_execute_valid_sibling_of_invalid_tool_call() -> None:
@@ -1154,7 +1153,7 @@ def test_compiled_graph_does_not_execute_valid_sibling_of_invalid_tool_call() ->
     result = agent.invoke({"messages": [{"role": "user", "content": "write"}]})
 
     assert calls["count"] == 0
-    assert result["completion_route"]["reason"] == "invalid_tool_calls"
+    assert "completion_route" not in result
 
 
 # --- tool result retry ---
