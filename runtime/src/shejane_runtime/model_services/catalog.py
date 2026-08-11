@@ -51,6 +51,7 @@ def _model_connection_models(row: dict[str, Any]) -> list[dict[str, Any]]:
             model,
             service_base_url=str(row.get("base_url") or ""),
             trusted_model_catalog=row.get("preset_id") in {"shejane-official", "deepseek"},
+            trusted_hosted_web_search=row.get("preset_id") == "shejane-official",
         )
         normalized["capabilities"] = normalized_model_capabilities(
             normalized,
@@ -116,12 +117,22 @@ def _merge_refreshed_model_catalog(
                 for item in model.get("capabilities", [])
                 if isinstance(item, dict) and item.get("capability")
             }
+            preserve_agent_flags = False
+            preserve_image_inputs = False
             for item in previous.get("capabilities", []):
                 if not isinstance(item, dict) or not item.get("capability"):
                     continue
                 capability = str(item["capability"])
-                if capability not in capabilities or item.get("verification") == "verified":
+                current_protocol = capabilities.get(capability, {}).get("protocol")
+                if capability not in capabilities or (
+                    item.get("verification") == "verified"
+                    and item.get("protocol") == current_protocol
+                ):
                     capabilities[capability] = dict(item)
+                    preserve_agent_flags = preserve_agent_flags or capability == "agent_chat"
+                    preserve_image_inputs = (
+                        preserve_image_inputs or capability == "image_understanding"
+                    )
             merged_capabilities = sorted(
                 capabilities.values(),
                 key=lambda item: MODEL_CAPABILITY_ORDER[str(item["capability"])],
@@ -134,9 +145,19 @@ def _merge_refreshed_model_catalog(
                     if any(item.get("verification") == "verified" for item in merged_capabilities)
                     else "unverified"
                 ),
-                "streaming": bool(previous.get("streaming")),
-                "tool_calling": bool(previous.get("tool_calling")),
-                "image_inputs": bool(previous.get("image_inputs")),
+                **(
+                    {
+                        "streaming": bool(previous.get("streaming")),
+                        "tool_calling": bool(previous.get("tool_calling")),
+                    }
+                    if preserve_agent_flags
+                    else {}
+                ),
+                **(
+                    {"image_inputs": bool(previous.get("image_inputs"))}
+                    if preserve_image_inputs
+                    else {}
+                ),
             }
         merged.append(model)
         seen.add(model_id)
@@ -354,6 +375,7 @@ async def _refresh_model_service_models(
             display_name=display_name[:100] or model_id[:100],
             service_base_url=base_url,
             trusted_model_catalog=preset.get("id") in {"shejane-official", "deepseek"},
+            trusted_hosted_web_search=preset.get("id") == "shejane-official",
         )
         profile.update(
             {
@@ -383,14 +405,47 @@ async def _refresh_model_service_models(
                 }
             ]
         if preset.get("id") == "shejane-official":
-            declared_capabilities = candidate.get("capabilities")
-            if isinstance(declared_capabilities, list):
+            raw_endpoint_types = candidate.get("supported_endpoint_types")
+            endpoint_types = {
+                endpoint
+                for endpoint in (raw_endpoint_types if isinstance(raw_endpoint_types, list) else [])
+                if isinstance(endpoint, str)
+            }
+            raw_capabilities = candidate.get("capabilities")
+            declared_capabilities = (
+                [capability for capability in raw_capabilities if isinstance(capability, str)]
+                if isinstance(raw_capabilities, list)
+                else []
+            )
+            if (
+                not isinstance(raw_capabilities, list)
+                and endpoint_types.intersection({"openai", "openai-response"})
+                and "agent_chat" not in declared_capabilities
+            ):
+                declared_capabilities.append("agent_chat")
+            if isinstance(raw_capabilities, list) or declared_capabilities:
+                agent_protocol = (
+                    "openai_responses"
+                    if "openai-response" in endpoint_types
+                    and (
+                        "openai" not in endpoint_types
+                        or (
+                            isinstance(profile.get("hosted_web_search"), dict)
+                            and profile["hosted_web_search"].get("verification") == "verified"
+                        )
+                    )
+                    else default_model_protocol(adapter_id, "agent_chat")
+                )
                 profile["capabilities"] = normalized_model_capabilities(
                     {
                         "capabilities": [
                             {
                                 "capability": capability,
-                                "protocol": default_model_protocol(adapter_id, capability),
+                                "protocol": (
+                                    agent_protocol
+                                    if capability == "agent_chat"
+                                    else default_model_protocol(adapter_id, capability)
+                                ),
                                 "verification": (
                                     "unverified" if capability == "agent_chat" else "verified"
                                 ),

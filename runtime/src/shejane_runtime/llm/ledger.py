@@ -452,15 +452,7 @@ def _has_visible_output(message: BaseMessage) -> bool:
 
 
 def _has_public_output(message: BaseMessage) -> bool:
-    content = getattr(message, "content", None)
-    if (isinstance(content, str) and bool(content)) or (
-        isinstance(content, list) and bool(content)
-    ):
-        return True
-    return bool(
-        isinstance(message, (AIMessage, AIMessageChunk))
-        and (message.tool_calls or getattr(message, "tool_call_chunks", None))
-    )
+    return model_output_phase(message) in {"answering", "tool_calling"}
 
 
 def _has_response_headers(message: BaseMessage) -> bool:

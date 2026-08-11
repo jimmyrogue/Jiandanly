@@ -2355,6 +2355,29 @@
         "title": "HealthResponse",
         "type": "object"
       },
+      "HostedWebSearchProfile": {
+        "additionalProperties": false,
+        "properties": {
+          "full_sources": {
+            "default": false,
+            "title": "Full Sources",
+            "type": "boolean"
+          },
+          "verification": {
+            "enum": [
+              "verified",
+              "unverified"
+            ],
+            "title": "Verification",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verification"
+        ],
+        "title": "HostedWebSearchProfile",
+        "type": "object"
+      },
       "ImportModelServiceRequest": {
         "additionalProperties": false,
         "properties": {
@@ -4273,6 +4296,16 @@
             "title": "Display Name",
             "type": "string"
           },
+          "hosted_web_search": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HostedWebSearchProfile"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "image_inputs": {
             "title": "Image Inputs",
             "type": "boolean"
@@ -5584,6 +5617,16 @@
             "minLength": 1,
             "title": "Display Name",
             "type": "string"
+          },
+          "hosted_web_search": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HostedWebSearchProfile"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "image_inputs": {
             "default": false,

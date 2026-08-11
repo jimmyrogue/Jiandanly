@@ -1946,6 +1946,19 @@ export interface components {
              */
             worker: string;
         };
+        /** HostedWebSearchProfile */
+        HostedWebSearchProfile: {
+            /**
+             * Full Sources
+             * @default false
+             */
+            full_sources: boolean;
+            /**
+             * Verification
+             * @enum {string}
+             */
+            verification: "verified" | "unverified";
+        };
         /** ImportModelServiceRequest */
         ImportModelServiceRequest: {
             /**
@@ -2627,6 +2640,7 @@ export interface components {
             connection_id: string;
             /** Display Name */
             display_name: string;
+            hosted_web_search?: components["schemas"]["HostedWebSearchProfile"] | null;
             /** Image Inputs */
             image_inputs: boolean;
             /** Max Input Tokens */
@@ -3169,6 +3183,7 @@ export interface components {
             capabilities?: components["schemas"]["ModelCapability"][];
             /** Display Name */
             display_name: string;
+            hosted_web_search?: components["schemas"]["HostedWebSearchProfile"] | null;
             /**
              * Image Inputs
              * @default false

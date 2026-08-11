@@ -194,11 +194,11 @@ MCP Server 只从 Runtime 自有配置读取，不会隐式启动 Claude Desktop
   │     │ LedgerChatModel 记录请求/响应头/首 chunk/推理/首个公开输出时间      │     │
   │     │       ↓                                                                  │     │
   │     │   OpenAI Responses 无状态重放加密 reasoning；官方 reviewer 用严格 schema │     │
-  │     │   DeepSeek Chat Completions 显式 off/high/max；工具回合内部回放 reasoning │     │
+  │     │   DeepSeek Flash Responses / Pro Chat 显式 off/high/max；私有 reasoning 按协议回放 │     │
   │     │   原始 reasoning 不进 SSE；Client 只见可恢复的模型阶段和耗时             │     │
   │     │   response.incomplete 明确失败；总量、cache、reasoning usage 写入账本    │     │
   │     │       ↓                                                                  │     │
-  │     │   合格 Responses 模型额外绑定托管 web_search；收敛轮和审查调用禁用       │     │
+  │     │   冻结目录已验证的 Responses 模型绑定托管 web_search；审查调用禁用       │     │
   │     │   供应商在同次 P8 调用内搜索；URL 注解和 OpenAI 完整 sources 投影到回答  │     │
   │     │       ↓                                                                  │     │
   │     │   OpenAI 兼容或 Anthropic 原生流式接口                                    │     │

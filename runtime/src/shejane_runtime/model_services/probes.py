@@ -95,7 +95,7 @@ async def _verify_model_service_compatibility(
                 choices,
             )
             final = _rewrite_tool_names(
-                await bound.ainvoke(
+                await model.ainvoke(
                     [
                         prompt,
                         provider_tool_request,

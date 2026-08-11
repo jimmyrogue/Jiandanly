@@ -350,10 +350,62 @@ async def test_official_catalog_keeps_known_agent_capabilities_and_limits(monkey
                 "tool_roundtrip_required": True,
                 "display_policy": "activity_only",
             },
+            "hosted_web_search": None,
             "source": "discovered",
             "verification": "unverified",
             "recommended": True,
             "recommended_for": ["agent_chat"],
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_official_catalog_prefers_responses_for_gpt_with_chat_conversion(monkeypatch) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "id": "gpt-5.6-luna",
+                        "supported_endpoint_types": [
+                            "openai",
+                            "openai-response",
+                            "openai-response-compact",
+                            "anthropic",
+                            "gemini",
+                            "openai-alpha-search",
+                        ],
+                        "hosted_web_search": {
+                            "verification": "verified",
+                            "full_sources": True,
+                        },
+                    }
+                ]
+            },
+        )
+
+    class PatchedClient(httpx.AsyncClient):
+        def __init__(self, **kwargs) -> None:
+            super().__init__(transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(model_catalog.httpx, "AsyncClient", PatchedClient)
+    preset = model_service_preset("shejane-official")
+    assert preset is not None
+
+    models, status = await model_routes._refresh_model_service_models(
+        preset=preset,
+        base_url="https://cloud.example.test/v1",
+        adapter_id="openai_chat",
+        api_key="inference-token",
+    )
+
+    assert status == "ready"
+    assert models[0]["capabilities"] == [
+        {
+            "capability": "agent_chat",
+            "protocol": "openai_responses",
+            "verification": "unverified",
         }
     ]
 
@@ -586,6 +638,7 @@ def test_official_deepseek_agent_capabilities_created_before_the_fix_are_restore
 
     assert models[0]["tool_calling"] is True
     assert models[0]["streaming"] is True
+    assert models[0]["capabilities"][0]["protocol"] == "openai_chat_completions"
     assert models[0]["max_input_tokens"] == 1_000_000
     assert models[0]["max_output_tokens"] == 384_000
 
@@ -599,7 +652,7 @@ def test_bundled_models_are_recommendations_not_preverified_connections() -> Non
         "unverified",
     ]
     assert [model["capabilities"][0]["protocol"] for model in deepseek["models"]] == [
-        "openai_chat_completions",
+        "openai_responses",
         "openai_chat_completions",
     ]
 
@@ -673,6 +726,44 @@ def test_catalog_refresh_preserves_manual_and_verified_models() -> None:
     assert merged[0]["streaming"] is True
     assert merged[0]["tool_calling"] is True
     assert merged[1]["capabilities"][0]["verification"] == "verified"
+
+
+def test_catalog_refresh_invalidates_verified_capability_when_protocol_changes() -> None:
+    current = [
+        {
+            "model_id": "gpt-5.6-luna",
+            "source": "discovered",
+            "capabilities": [
+                {
+                    "capability": "agent_chat",
+                    "protocol": "openai_chat_completions",
+                    "verification": "verified",
+                }
+            ],
+        }
+    ]
+    refreshed = [
+        {
+            "model_id": "gpt-5.6-luna",
+            "source": "discovered",
+            "verification": "unverified",
+            "streaming": True,
+            "tool_calling": True,
+            "image_inputs": False,
+            "capabilities": [
+                {
+                    "capability": "agent_chat",
+                    "protocol": "openai_responses",
+                    "verification": "unverified",
+                }
+            ],
+        }
+    ]
+
+    merged = model_routes._merge_refreshed_model_catalog(current, refreshed)
+
+    assert merged[0]["verification"] == "unverified"
+    assert merged[0]["capabilities"] == refreshed[0]["capabilities"]
 
 
 def test_model_service_presets_are_runtime_owned(
@@ -873,6 +964,7 @@ def test_model_service_connection_makes_catalog_models_available_without_probe(
         "tool_roundtrip_required": True,
         "display_policy": "activity_only",
     }
+    assert connected["models"][0]["hosted_web_search"] is None
     assert "api_key" not in connected
     assert listed.json()["services"] == [connected]
     assert [model["available"] for model in models.json()["models"]] == [True, True]
@@ -1407,20 +1499,23 @@ def test_imported_custom_service_must_be_recreated_manually(
 async def test_compatibility_verification_completes_model_tool_model_loop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    rounds: list[list] = []
+    rounds: list[tuple[bool, list]] = []
     bound_options: list[dict] = []
 
     class ProbeModel:
+        def __init__(self, *, tools_bound: bool = False) -> None:
+            self.tools_bound = tools_bound
+
         def bind(self, **kwargs):
             bound_options.append(kwargs)
             return self
 
         def bind_tools(self, tools, **_kwargs):
             assert [tool["function"]["name"] for tool in tools] == ["shejane_ping"]
-            return self
+            return ProbeModel(tools_bound=True)
 
         async def ainvoke(self, messages):
-            rounds.append(messages)
+            rounds.append((self.tools_bound, messages))
             if len(rounds) == 1:
                 return AIMessage(
                     content="",
@@ -1440,12 +1535,14 @@ async def test_compatibility_verification_completes_model_tool_model_loop(
     )
 
     assert len(rounds) == 2
+    assert [tools_bound for tools_bound, _messages in rounds] == [True, False]
     assert bound_options == [{"max_tokens": 512}]
-    assert rounds[1][1].additional_kwargs["reasoning_content"] == "keep me"
-    assert rounds[1][1].tool_calls[0]["name"] == "shejane_ping"
-    assert isinstance(rounds[1][2], ToolMessage)
-    assert rounds[1][2].name == "shejane_ping"
-    assert rounds[1][2].tool_call_id == "call-ping"
+    second_round = rounds[1][1]
+    assert second_round[1].additional_kwargs["reasoning_content"] == "keep me"
+    assert second_round[1].tool_calls[0]["name"] == "shejane_ping"
+    assert isinstance(second_round[2], ToolMessage)
+    assert second_round[2].name == "shejane_ping"
+    assert second_round[2].tool_call_id == "call-ping"
 
 
 @pytest.mark.asyncio
@@ -1782,7 +1879,12 @@ def test_openai_responses_protocol_uses_responses_api_without_provider_session_s
             "protocol": "openai_responses",
             "base_url": "https://api.openai.com/v1",
             "model_id": "gpt-5.6",
-            "profile": {},
+            "profile": {
+                "hosted_web_search": {
+                    "verification": "verified",
+                    "full_sources": True,
+                }
+            },
         },
         model_api_key="secret",
     )
@@ -1798,6 +1900,42 @@ def test_openai_responses_protocol_uses_responses_api_without_provider_session_s
 
 
 def test_deepseek_responses_does_not_send_unsupported_include(monkeypatch) -> None:
+    import shejane_runtime.llm.deepseek as deepseek_adapter
+
+    captured: dict = {}
+
+    class FakeChatOpenAI:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(deepseek_adapter, "DeepSeekChatOpenAI", FakeChatOpenAI)
+
+    model_probes._build_byok_chat_model(
+        settings=reset_settings_for_tests(),
+        model_binding={
+            "adapter_id": "openai_chat",
+            "preset_id": "deepseek",
+            "protocol": "openai_responses",
+            "provider_family": "deepseek",
+            "reasoning_mode": "max",
+            "base_url": "https://api.deepseek.com",
+            "model_id": "deepseek-v4-flash",
+            "profile": {
+                "hosted_web_search": {
+                    "verification": "verified",
+                    "full_sources": False,
+                }
+            },
+        },
+        model_api_key="secret",
+    )
+
+    assert "include" not in captured
+    assert "store" not in captured
+    assert captured["reasoning"] == {"effort": "max"}
+
+
+def test_shejane_responses_requests_full_hosted_search_sources(monkeypatch) -> None:
     import langchain_openai
 
     captured: dict = {}
@@ -1812,17 +1950,21 @@ def test_deepseek_responses_does_not_send_unsupported_include(monkeypatch) -> No
         settings=reset_settings_for_tests(),
         model_binding={
             "adapter_id": "openai_chat",
-            "preset_id": "deepseek",
+            "preset_id": "shejane-official",
             "protocol": "openai_responses",
-            "base_url": "https://api.deepseek.com",
-            "model_id": "deepseek-v4-flash",
-            "profile": {},
+            "base_url": "https://app.shejane.com/v1",
+            "model_id": "gpt-5.6-luna",
+            "profile": {
+                "hosted_web_search": {
+                    "verification": "verified",
+                    "full_sources": True,
+                }
+            },
         },
         model_api_key="secret",
     )
 
-    assert "include" not in captured
-    assert "store" not in captured
+    assert captured["include"] == ["web_search_call.action.sources"]
 
 
 @pytest.mark.parametrize(
@@ -1830,21 +1972,29 @@ def test_deepseek_responses_does_not_send_unsupported_include(monkeypatch) -> No
     [
         (
             {
-                "preset_id": "deepseek",
                 "protocol": "openai_responses",
-                "base_url": "https://api.deepseek.com",
                 "model_id": "deepseek-v4-flash",
+                "profile": {
+                    "hosted_web_search": {
+                        "verification": "verified",
+                        "full_sources": False,
+                    }
+                },
             },
             ({"type": "web_search"},),
         ),
         (
             {
-                "preset_id": "deepseek",
-                "protocol": "openai_chat_completions",
-                "base_url": "https://api.deepseek.com",
-                "model_id": "deepseek-v4-pro",
+                "protocol": "openai_responses",
+                "model_id": "gpt-5.6-luna",
+                "profile": {
+                    "hosted_web_search": {
+                        "verification": "verified",
+                        "full_sources": True,
+                    }
+                },
             },
-            (),
+            ({"type": "web_search"},),
         ),
         (
             {
@@ -1853,14 +2003,18 @@ def test_deepseek_responses_does_not_send_unsupported_include(monkeypatch) -> No
                 "base_url": "https://api.openai.com/v1",
                 "model_id": "gpt-5.6",
             },
-            ({"type": "web_search"},),
+            (),
         ),
         (
             {
-                "preset_id": "custom",
-                "protocol": "openai_responses",
-                "base_url": "https://gateway.example/v1",
+                "protocol": "openai_chat_completions",
                 "model_id": "gpt-5.6",
+                "profile": {
+                    "hosted_web_search": {
+                        "verification": "verified",
+                        "full_sources": True,
+                    }
+                },
             },
             (),
         ),
@@ -1871,6 +2025,95 @@ def test_hosted_web_search_is_limited_to_documented_provider_bindings(
     expected: tuple[dict, ...],
 ) -> None:
     assert _hosted_tools_for_model_binding(binding) == expected
+
+
+def test_hosted_web_search_profile_is_exact_and_fail_closed() -> None:
+    direct_openai = discovered_model_profile(
+        {},
+        model_id="gpt-5.6-luna",
+        display_name="Luna",
+        service_base_url="https://api.openai.com/v1",
+    )
+    unsupported_openai = discovered_model_profile(
+        {},
+        model_id="gpt-4o-mini",
+        display_name="4o mini",
+        service_base_url="https://api.openai.com/v1",
+    )
+    unsupported_responses_openai = discovered_model_profile(
+        {},
+        model_id="gpt-5-mini",
+        display_name="GPT-5 mini",
+        service_base_url="https://api.openai.com/v1",
+    )
+    forged_gateway = discovered_model_profile(
+        {"hosted_web_search": {"verification": "verified", "full_sources": True}},
+        model_id="gpt-5.6-luna",
+        display_name="Forged Luna",
+        service_base_url="https://gateway.example/v1",
+    )
+    direct_deepseek = discovered_model_profile(
+        {},
+        model_id="deepseek-v4-flash",
+        display_name="DeepSeek V4 Flash",
+        service_base_url="https://api.deepseek.com",
+    )
+
+    assert direct_openai["hosted_web_search"] == {
+        "verification": "verified",
+        "full_sources": True,
+    }
+    assert unsupported_openai["hosted_web_search"] is None
+    assert unsupported_responses_openai["hosted_web_search"] is None
+    assert forged_gateway["hosted_web_search"] is None
+    assert direct_deepseek["hosted_web_search"] == {
+        "verification": "verified",
+        "full_sources": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_trusted_official_catalog_exposes_verified_hosted_web_search(
+    monkeypatch,
+) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "id": "gpt-5.6-luna",
+                        "supported_endpoint_types": ["openai-response"],
+                        "capabilities": ["agent_chat"],
+                        "hosted_web_search": {
+                            "verification": "verified",
+                            "full_sources": True,
+                        },
+                    }
+                ]
+            },
+        )
+
+    class PatchedClient(httpx.AsyncClient):
+        def __init__(self, **kwargs) -> None:
+            super().__init__(transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(model_catalog.httpx, "AsyncClient", PatchedClient)
+    preset = model_service_preset("shejane-official")
+    assert preset is not None
+
+    models, status = await model_routes._refresh_model_service_models(
+        preset=preset,
+        base_url="https://app.shejane.com/v1",
+        adapter_id="openai_chat",
+        api_key="inference-token",
+    )
+
+    assert status == "ready"
+    assert models[0]["hosted_web_search"] == {
+        "verification": "verified",
+        "full_sources": True,
+    }
 
 
 def test_google_generate_content_protocol_uses_native_google_adapter(monkeypatch) -> None:
@@ -2069,6 +2312,7 @@ def test_image_generation_model_uses_images_endpoint_and_stays_out_of_agent_cata
             "tool_roundtrip_required": False,
             "display_policy": "activity_only",
         },
+        "hosted_web_search": None,
     }
     assert requests[0].url == "https://gateway.example/v1/images/generations"
     assert json.loads(requests[0].content)["model"] == "gpt-image-1"

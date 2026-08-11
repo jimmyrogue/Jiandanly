@@ -33,6 +33,7 @@ from shejane_runtime.llm.ledger import (
     _conservative_token_count,
     _enforce_context_envelope,
     _estimate_tool_tokens,
+    _has_public_output,
     _model_retry_decision,
     _provider_tools,
     _rewrite_tool_names,
@@ -52,6 +53,19 @@ def test_tool_token_estimate_is_local_and_conservative() -> None:
 
     payload = '[{"name": "lookup", "description": "查询天气", "input_schema": {"type": "object"}}]'
     assert estimated == math.ceil(len(payload.encode("utf-8")) / 2)
+
+
+def test_reasoning_content_block_is_not_public_output() -> None:
+    message = AIMessage(
+        content=[
+            {
+                "type": "reasoning",
+                "content": [{"type": "reasoning_text", "text": "private"}],
+            }
+        ]
+    )
+
+    assert _has_public_output(message) is False
 
 
 def test_model_retry_honors_provider_retry_after() -> None:

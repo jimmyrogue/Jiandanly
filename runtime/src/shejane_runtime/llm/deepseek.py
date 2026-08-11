@@ -10,16 +10,44 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
+import openai
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun, CallbackManagerForLLMRun
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langchain_core.outputs import ChatGenerationChunk
 from langchain_openai import ChatOpenAI
+from langchain_openai.chat_models.base import (
+    _astream_with_chunk_timeout,
+    _convert_responses_chunk_to_generation_chunk,
+    _handle_openai_api_error,
+    _handle_openai_bad_request,
+)
 
 _REASONING_DELTA_KEY = "_shejane_deepseek_reasoning_delta"
 _REASONING_MARKER = "_shejane_reasoning"
 
 
-def deepseek_request_options(reasoning_mode: str) -> dict[str, Any]:
+def _has_non_reasoning_content(content: Any) -> bool:
+    if isinstance(content, str):
+        return bool(content)
+    if not isinstance(content, list):
+        return False
+    return any(
+        (isinstance(item, str) and bool(item))
+        or (isinstance(item, dict) and item.get("type") != "reasoning")
+        for item in content
+    )
+
+
+def deepseek_request_options(
+    reasoning_mode: str,
+    *,
+    responses: bool = False,
+) -> dict[str, Any]:
+    if responses:
+        effort = {"off": "none", "high": "high", "max": "max"}.get(reasoning_mode)
+        if effort is None:
+            raise ValueError(f"unsupported DeepSeek reasoning mode: {reasoning_mode}")
+        return {"reasoning": {"effort": effort}}
     if reasoning_mode == "off":
         return {"extra_body": {"thinking": {"type": "disabled"}}}
     if reasoning_mode in {"high", "max"}:
@@ -34,9 +62,10 @@ def model_output_phase(message: BaseMessage) -> str | None:
     if isinstance(message, (AIMessage, AIMessageChunk)):
         if message.tool_calls or getattr(message, "tool_call_chunks", None):
             return "tool_calling"
-        content = message.content
-        if (isinstance(content, str) and content) or (isinstance(content, list) and content):
+        if _has_non_reasoning_content(message.content):
             return "answering"
+        if isinstance(message.content, list) and message.content:
+            return "reasoning"
         if message.additional_kwargs.get("reasoning_content") or message.additional_kwargs.get(
             _REASONING_MARKER
         ):
@@ -137,6 +166,115 @@ class DeepSeekChatOpenAI(ChatOpenAI):
                 tool_seen=tool_seen,
             )
             yield generation
+
+    async def _astream_responses(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatGenerationChunk]:
+        """Handle DeepSeek's reasoning-text stream event for stateless Tool replay."""
+        kwargs["stream"] = True
+        payload = self._get_request_payload(messages, stop=stop, **kwargs)
+        try:
+            if self.include_response_headers:
+                raw = await self.root_async_client.with_raw_response.responses.create(**payload)
+                context_manager = raw.parse()
+                headers = {"headers": dict(raw.headers)}
+            else:
+                context_manager = await self.root_async_client.responses.create(**payload)
+                headers = {}
+            current_index = current_output_index = current_sub_index = -1
+            reasoning_item: dict[str, Any] | None = None
+            reasoning_parts: list[str] = []
+            reasoning_index = -1
+            replayed = False
+            is_first_chunk = True
+            original_schema = kwargs.get("response_format")
+            async with context_manager as response:
+                async for chunk in _astream_with_chunk_timeout(
+                    response,
+                    self.stream_chunk_timeout,
+                    model_name=self.model_name,
+                ):
+                    if chunk.type == "response.reasoning_text.delta":
+                        if isinstance(chunk.delta, str) and chunk.delta:
+                            reasoning_parts.append(chunk.delta)
+                        yield ChatGenerationChunk(
+                            message=AIMessageChunk(
+                                content=[],
+                                additional_kwargs={_REASONING_MARKER: True},
+                            )
+                        )
+                        continue
+                    if chunk.type == "response.output_item.done" and chunk.item.type == "reasoning":
+                        reasoning_item = chunk.item.model_dump(exclude_none=True, mode="json")
+                        continue
+                    metadata = headers if is_first_chunk else {}
+                    (
+                        current_index,
+                        current_output_index,
+                        current_sub_index,
+                        generation,
+                    ) = _convert_responses_chunk_to_generation_chunk(
+                        chunk,
+                        current_index,
+                        current_output_index,
+                        current_sub_index,
+                        schema=original_schema,
+                        metadata=metadata,
+                        output_version=self.output_version,
+                    )
+                    if (
+                        chunk.type == "response.output_item.added"
+                        and chunk.item.type == "reasoning"
+                    ):
+                        reasoning_item = chunk.item.model_dump(exclude_none=True, mode="json")
+                        if generation and isinstance(generation.message.content, list):
+                            block = next(
+                                (
+                                    item
+                                    for item in generation.message.content
+                                    if isinstance(item, dict) and item.get("type") == "reasoning"
+                                ),
+                                None,
+                            )
+                            if block is not None:
+                                reasoning_index = int(block.get("index", current_index))
+                        yield ChatGenerationChunk(
+                            message=AIMessageChunk(
+                                content=[],
+                                additional_kwargs={_REASONING_MARKER: True},
+                            )
+                        )
+                        continue
+                    if (
+                        not replayed
+                        and reasoning_parts
+                        and chunk.type == "response.output_item.added"
+                        and chunk.item.type in {"function_call", "custom_tool_call"}
+                    ):
+                        replay = dict(reasoning_item or {"type": "reasoning"})
+                        replay["content"] = [
+                            {"type": "reasoning_text", "text": "".join(reasoning_parts)}
+                        ]
+                        replay["index"] = reasoning_index
+                        yield ChatGenerationChunk(message=AIMessageChunk(content=[replay]))
+                        replayed = True
+                    if generation is None:
+                        continue
+                    if run_manager:
+                        await run_manager.on_llm_new_token(
+                            generation.text,
+                            chunk=generation,
+                        )
+                    is_first_chunk = False
+                    yield generation
+        except openai.BadRequestError as exc:
+            _handle_openai_bad_request(exc)
+        except openai.APIError as exc:
+            _handle_openai_api_error(exc)
 
     def _create_chat_result(
         self,

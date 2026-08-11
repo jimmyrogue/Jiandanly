@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 from ..agent.builder import skill_catalog_fingerprint
 from ..config import Settings
+from ..model_services.catalog import _model_connection_models
 from ..model_services.credentials import CredentialStoreError
 from ..model_services.profiles import (
     apply_known_model_profile_defaults,
@@ -206,10 +207,16 @@ class RunModelBindings:
                 "model_service_missing",
                 "model service is not connected",
             )
-        try:
-            models = json.loads(connection.get("models_json") or "[]")
-        except (json.JSONDecodeError, TypeError):
-            models = []
+        models = _model_connection_models(connection)
+        if connection.get("preset_id") == "shejane-official":
+            updated = await self.store.update_model_connection_catalog(
+                principal_id=principal_id,
+                connection_id=connection_id,
+                models=models,
+                catalog_status=str(connection["catalog_status"]),
+            )
+            if updated is not None:
+                connection = updated
         profile = next(
             (
                 model
@@ -227,6 +234,7 @@ class RunModelBindings:
             profile,
             service_base_url=str(connection.get("base_url") or ""),
             trusted_model_catalog=connection.get("preset_id") in {"shejane-official", "deepseek"},
+            trusted_hosted_web_search=connection.get("preset_id") == "shejane-official",
         )
         profile["capabilities"] = normalized_model_capabilities(
             profile,
@@ -326,6 +334,7 @@ class RunModelBindings:
                 service_base_url=str(connection.get("base_url") or ""),
                 trusted_model_catalog=connection.get("preset_id")
                 in {"shejane-official", "deepseek"},
+                trusted_hosted_web_search=connection.get("preset_id") == "shejane-official",
             )
             profile["capabilities"] = normalized_model_capabilities(
                 profile,

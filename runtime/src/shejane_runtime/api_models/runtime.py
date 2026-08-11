@@ -117,6 +117,13 @@ class ModelReasoningProfile(BaseModel):
         return self
 
 
+class HostedWebSearchProfile(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    verification: ModelVerification
+    full_sources: bool = False
+
+
 class ModelCapability(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -160,6 +167,7 @@ class ModelCapabilityProfile(BaseModel):
     max_output_tokens: int | None = Field(default=None, ge=128, le=1_000_000)
     provider_family: ProviderFamily = "unknown"
     reasoning: ModelReasoningProfile = Field(default_factory=ModelReasoningProfile)
+    hosted_web_search: HostedWebSearchProfile | None = None
 
 
 class LocalRuntimeModel(BaseModel):
@@ -178,6 +186,7 @@ class LocalRuntimeModel(BaseModel):
     max_output_tokens: int | None = None
     provider_family: ProviderFamily = "unknown"
     reasoning: ModelReasoningProfile = Field(default_factory=ModelReasoningProfile)
+    hosted_web_search: HostedWebSearchProfile | None = None
     available: bool
 
 

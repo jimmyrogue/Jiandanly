@@ -1,6 +1,16 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
+from openai.types.responses import (
+    ResponseFunctionToolCall,
+    ResponseOutputItemAddedEvent,
+    ResponseOutputItemDoneEvent,
+    ResponseReasoningItem,
+    ResponseReasoningTextDeltaEvent,
+)
 
 from shejane_runtime.llm.deepseek import (
     DeepSeekChatOpenAI,
@@ -33,6 +43,16 @@ def test_deepseek_reasoning_modes_map_to_explicit_provider_options() -> None:
     assert deepseek_request_options("max") == {
         "extra_body": {"thinking": {"type": "enabled"}},
         "reasoning_effort": "max",
+    }
+
+    assert deepseek_request_options("off", responses=True) == {
+        "reasoning": {"effort": "none"},
+    }
+    assert deepseek_request_options("high", responses=True) == {
+        "reasoning": {"effort": "high"},
+    }
+    assert deepseek_request_options("max", responses=True) == {
+        "reasoning": {"effort": "max"},
     }
 
 
@@ -104,6 +124,108 @@ def test_deepseek_stream_preserves_reasoning_without_exposing_it_as_content() ->
     )
     assert tool_seen is True
     assert tool_generation.message.additional_kwargs["reasoning_content"] == "private delta"
+
+
+@pytest.mark.asyncio
+async def test_deepseek_responses_replays_reasoning_only_for_function_tool_roundtrip() -> None:
+    events = [
+        ResponseOutputItemAddedEvent(
+            item=ResponseReasoningItem(
+                id="reasoning-1",
+                summary=[],
+                type="reasoning",
+                status="in_progress",
+            ),
+            output_index=0,
+            sequence_number=1,
+            type="response.output_item.added",
+        ),
+        ResponseReasoningTextDeltaEvent(
+            content_index=0,
+            delta="private response reasoning",
+            item_id="reasoning-1",
+            output_index=0,
+            sequence_number=2,
+            type="response.reasoning_text.delta",
+        ),
+        ResponseOutputItemDoneEvent(
+            item=ResponseReasoningItem(
+                id="reasoning-1",
+                summary=[],
+                type="reasoning",
+                status="completed",
+            ),
+            output_index=0,
+            sequence_number=3,
+            type="response.output_item.done",
+        ),
+        ResponseOutputItemAddedEvent(
+            item=ResponseFunctionToolCall(
+                arguments="{}",
+                call_id="call-1",
+                id="function-1",
+                name="lookup",
+                type="function_call",
+                status="in_progress",
+            ),
+            output_index=1,
+            sequence_number=4,
+            type="response.output_item.added",
+        ),
+    ]
+
+    class FakeStream:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if not events:
+                raise StopAsyncIteration
+            return events.pop(0)
+
+    class FakeResponses:
+        async def create(self, **_payload):
+            return FakeStream()
+
+    model = DeepSeekChatOpenAI(
+        model="deepseek-v4-flash",
+        api_key="test-key",
+        base_url="https://api.deepseek.com",
+        streaming=True,
+        max_retries=0,
+        use_responses_api=True,
+        output_version="v1",
+    )
+    object.__setattr__(
+        model,
+        "root_async_client",
+        SimpleNamespace(responses=FakeResponses()),
+    )
+
+    chunks = [
+        chunk async for chunk in model._astream_responses([HumanMessage(content="look it up")])
+    ]
+    content = [item for chunk in chunks for item in chunk.message.content if isinstance(item, dict)]
+
+    reasoning = next(item for item in content if item.get("type") == "reasoning")
+    assert reasoning["content"] == [
+        {"type": "reasoning_text", "text": "private response reasoning"}
+    ]
+    assert reasoning["status"] == "completed"
+    assert content.index(reasoning) < next(
+        index for index, item in enumerate(content) if item.get("type") == "function_call"
+    )
+    assert all(
+        "private response reasoning" not in str(chunk.message.content) for chunk in chunks[:2]
+    )
+
+    assert model_output_phase(AIMessage(content=[reasoning])) == "reasoning"
 
 
 def test_deepseek_nonstream_response_preserves_reasoning_for_tool_replay() -> None:

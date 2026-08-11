@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 from urllib.parse import urlparse
 
@@ -29,6 +30,15 @@ _DEEPSEEK_REASONING_PROFILE = {
 }
 
 _REASONING_MODES = {"off", "high", "max"}
+_OPENAI_WEB_SEARCH_MODELS = {
+    "gpt-4.1",
+    "gpt-4.1-mini",
+    "gpt-5.6-luna",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "o4-mini",
+}
+_OPENAI_SNAPSHOT_SUFFIX = re.compile(r"-20\d{2}-\d{2}-\d{2}$")
 
 MODEL_CAPABILITY_ORDER = {
     "agent_chat": 0,
@@ -164,15 +174,44 @@ def _normalized_reasoning_profile(
     }
 
 
+def _openai_model_supports_web_search(model_id: str) -> bool:
+    return _OPENAI_SNAPSHOT_SUFFIX.sub("", model_id) in _OPENAI_WEB_SEARCH_MODELS
+
+
+def _normalized_hosted_web_search(
+    value: Any,
+    *,
+    model_id: str,
+    hostname: str | None,
+    trusted_model_catalog: bool,
+) -> dict[str, Any] | None:
+    if hostname == "api.openai.com" and _openai_model_supports_web_search(model_id):
+        return {"verification": "verified", "full_sources": True}
+    if hostname == "api.deepseek.com" and model_id == "deepseek-v4-flash":
+        return {"verification": "verified", "full_sources": False}
+    if not trusted_model_catalog or not isinstance(value, dict):
+        return None
+    if value.get("verification") not in {"verified", "unverified"} or not isinstance(
+        value.get("full_sources"), bool
+    ):
+        return None
+    return {
+        "verification": value["verification"],
+        "full_sources": value["full_sources"],
+    }
+
+
 def apply_known_model_profile_defaults(
     profile: dict[str, Any],
     *,
     service_base_url: str,
     trusted_model_catalog: bool = False,
+    trusted_hosted_web_search: bool = False,
 ) -> dict[str, Any]:
     """Fill published limits and repair stale trusted-catalog agent flags."""
     normalized = dict(profile)
     hostname = urlparse(service_base_url).hostname
+    model_id = str(normalized.get("model_id") or "")
     claimed_provider_family = str(normalized.get("provider_family") or "").strip().lower()
     provider_family = (
         claimed_provider_family
@@ -190,9 +229,15 @@ def apply_known_model_profile_defaults(
         provider_family=provider_family,
         trusted=trusted_model_catalog or hostname == "api.deepseek.com",
     )
+    normalized["hosted_web_search"] = _normalized_hosted_web_search(
+        normalized.get("hosted_web_search"),
+        model_id=model_id,
+        hostname=hostname,
+        trusted_model_catalog=trusted_hosted_web_search,
+    )
     if normalized["provider_family"] != "deepseek" and not trusted_model_catalog:
         return normalized
-    limits = _DEEPSEEK_V4_LIMITS.get(str(normalized.get("model_id")))
+    limits = _DEEPSEEK_V4_LIMITS.get(model_id)
     if limits is None:
         return normalized
     max_input_tokens, max_output_tokens = limits
@@ -214,6 +259,7 @@ def discovered_model_profile(
     service_base_url: str,
     catalog_model: dict[str, Any] | None = None,
     trusted_model_catalog: bool = False,
+    trusted_hosted_web_search: bool = False,
 ) -> dict[str, Any]:
     """Normalize optional capability metadata exposed by model-list APIs."""
     architecture = candidate.get("architecture")
@@ -235,6 +281,11 @@ def discovered_model_profile(
         "provider_family": str(candidate.get("provider_family") or "unknown"),
         "reasoning": (
             dict(candidate["reasoning"]) if isinstance(candidate.get("reasoning"), dict) else None
+        ),
+        "hosted_web_search": (
+            dict(candidate["hosted_web_search"])
+            if isinstance(candidate.get("hosted_web_search"), dict)
+            else None
         ),
     }
     if catalog_model:
@@ -287,4 +338,5 @@ def discovered_model_profile(
         profile,
         service_base_url=service_base_url,
         trusted_model_catalog=trusted_model_catalog,
+        trusted_hosted_web_search=trusted_hosted_web_search,
     )

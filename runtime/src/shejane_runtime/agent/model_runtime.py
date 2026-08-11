@@ -38,7 +38,6 @@ _COMPLETION_REVIEW_MAX_CALLS = 4
 _TITLE_GENERATION_MAX_CALLS = 1
 _SUMMARIZATION_MAX_CALLS = 4
 _SUMMARIZATION_MAX_OUTPUT_TOKENS = 1_024
-_OPENAI_WEB_SEARCH_MODEL_PREFIXES = ("gpt-5", "gpt-4.1", "o3", "o4")
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,20 +93,9 @@ def _hosted_tools_for_model_binding(
 ) -> tuple[dict[str, Any], ...]:
     if not model_binding or model_binding.get("protocol") != "openai_responses":
         return ()
-    preset_id = str(model_binding.get("preset_id") or "")
-    model_id = str(model_binding.get("model_id") or "")
-    hostname = urlparse(str(model_binding.get("base_url") or "")).hostname
-    if (
-        preset_id == "deepseek"
-        and hostname == "api.deepseek.com"
-        and model_id == "deepseek-v4-flash"
-    ):
-        return ({"type": "web_search"},)
-    if (
-        preset_id == "openai"
-        and hostname == "api.openai.com"
-        and (model_id == "chat-latest" or model_id.startswith(_OPENAI_WEB_SEARCH_MODEL_PREFIXES))
-    ):
+    profile = model_binding.get("profile")
+    hosted_web_search = profile.get("hosted_web_search") if isinstance(profile, dict) else None
+    if isinstance(hosted_web_search, dict) and hosted_web_search.get("verification") == "verified":
         return ({"type": "web_search"},)
     return ()
 
@@ -200,10 +188,11 @@ def _build_byok_chat_model(
     base_url = str(model_binding["base_url"])
     provider_family = str(model_binding.get("provider_family") or "unknown")
     reasoning_mode = str(model_binding.get("reasoning_mode") or "off")
+    responses = model_binding.get("protocol") == "openai_responses"
     if provider_family == "deepseek":
         from ..llm.deepseek import DeepSeekChatOpenAI, deepseek_request_options
 
-        request_options = deepseek_request_options(reasoning_mode)
+        request_options = deepseek_request_options(reasoning_mode, responses=responses)
         chat_model_type = DeepSeekChatOpenAI
     else:
         from langchain_openai import ChatOpenAI
@@ -213,9 +202,9 @@ def _build_byok_chat_model(
     extra_body = request_options.pop("extra_body", None)
     if urlparse(base_url).hostname in {"open.bigmodel.cn", "api.z.ai"}:
         extra_body = {**(extra_body or {}), "tool_stream": True}
-    responses = model_binding.get("protocol") == "openai_responses"
     responses_options: dict[str, Any] = {}
     if responses:
+        hosted_profile = model_binding.get("profile", {}).get("hosted_web_search")
         responses_options = {
             "use_responses_api": True,
             "use_previous_response_id": False,
@@ -227,8 +216,12 @@ def _build_byok_chat_model(
         ):
             responses_options["store"] = False
             responses_options["include"] = ["reasoning.encrypted_content"]
-            if _hosted_tools_for_model_binding(model_binding):
-                responses_options["include"].append("web_search_call.action.sources")
+        if (
+            _hosted_tools_for_model_binding(model_binding)
+            and isinstance(hosted_profile, dict)
+            and hosted_profile.get("full_sources") is True
+        ):
+            responses_options.setdefault("include", []).append("web_search_call.action.sources")
     return chat_model_type(
         model=str(model_binding["model_id"]),
         base_url=base_url,

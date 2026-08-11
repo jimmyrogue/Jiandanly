@@ -66,10 +66,14 @@ _PRESETS: tuple[dict[str, Any], ...] = (
                 "capabilities": [
                     {
                         "capability": "agent_chat",
-                        "protocol": "openai_chat_completions",
+                        "protocol": "openai_responses",
                         "verification": "unverified",
                     }
                 ],
+                "hosted_web_search": {
+                    "verification": "verified",
+                    "full_sources": False,
+                },
             },
             {
                 "model_id": "deepseek-v4-pro",

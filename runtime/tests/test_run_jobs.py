@@ -279,6 +279,81 @@ async def _async(value: Any) -> Any:
     return value
 
 
+async def test_run_admission_does_not_infer_responses_from_cached_model_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = await LocalStore.open(tmp_path / "local.db")
+    coordinator = RunCoordinator(
+        store=store,
+        checkpointer=None,  # type: ignore[arg-type]
+        settings=Settings(SHEJANE_FAKE_LLM=False),
+    )
+    monkeypatch.setattr("shejane_runtime.runs.get_model_api_key", lambda *_args: _async("secret"))
+    try:
+        await store.create_model_connection(
+            principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+            connection_id="conn-luna",
+            preset_id="shejane-official",
+            name="SheJane",
+            region="official",
+            adapter_id="openai_chat",
+            base_url="https://app.shejane.com/v1",
+            requires_api_key=True,
+            credential_ref="keyring:model-service:conn-luna",
+            models=[
+                {
+                    "model_id": "gpt-5.6-luna",
+                    "display_name": "gpt-5.6-luna",
+                    "source": "discovered",
+                    "streaming": False,
+                    "tool_calling": False,
+                    "capabilities": [
+                        {
+                            "capability": "agent_chat",
+                            "protocol": "openai_chat_completions",
+                            "verification": "unverified",
+                        }
+                    ],
+                    "hosted_web_search": {
+                        "verification": "verified",
+                        "full_sources": True,
+                    },
+                }
+            ],
+            catalog_status="ready",
+        )
+
+        run = await coordinator.start_run(
+            principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+            command_id="cmd_luna_cached_protocol",
+            client_message_id="msg_luna_cached_protocol",
+            protocol_version=1,
+            required_capabilities=["agent.run", "agent.stream"],
+            goal="plan a day trip",
+            mode="local:conn-luna:gpt-5.6-luna",
+        )
+
+        snapshot = json.loads(run["settings_json"])
+        assert snapshot["_model_binding"]["protocol"] == "openai_chat_completions"
+        assert snapshot["_model_binding"]["profile"]["streaming"] is False
+        assert snapshot["_model_binding"]["profile"]["tool_calling"] is False
+        assert snapshot["_model_binding"]["profile"]["hosted_web_search"] == {
+            "verification": "verified",
+            "full_sources": True,
+        }
+        connection = await store.get_model_connection(
+            principal_id=LOCAL_OWNER_PRINCIPAL_ID,
+            connection_id="conn-luna",
+        )
+        assert connection is not None
+        [cached] = json.loads(connection["models_json"])
+        assert cached["capabilities"][0]["protocol"] == "openai_chat_completions"
+        assert cached["hosted_web_search"]["verification"] == "verified"
+    finally:
+        await store.close()
+
+
 async def test_preflight_crash_is_persisted_as_a_failed_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -263,7 +263,7 @@ Agent 定义只包含图结构、状态结构、静态工具说明、中间件�
 8. 按模型目录校验并冻结明确的推理档位；不支持时拒绝接纳，不能静默降档。
 9. 记录请求开始、响应头、首个原始 chunk、推理开始、首个公开输出和 reasoning token，并投影 `waiting_provider / reasoning / answering / tool_calling / completed` 阶段。
 10. 统一处理文本、供应商批准的推理摘要、工具调用、用量和错误；原始 chain-of-thought 不进入公开协议。
-11. DeepSeek 工具回合只在内部消息中保存并回放其 `reasoning_content`，不把它投影给 Client。
+11. DeepSeek 工具回合只在内部消息中保存并回放 Chat `reasoning_content` 或 Responses reasoning item，不把原始内容投影给 Client。
 12. 更新权威助手草稿；逐字增量仅用于实时显示。
 13. 完整消息结束后结算用量，交给 P9。
 

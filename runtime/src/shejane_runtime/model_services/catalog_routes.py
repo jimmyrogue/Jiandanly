@@ -394,6 +394,7 @@ async def list_runtime_models(request: Request) -> dict[str, Any]:
                         "max_output_tokens": model.get("max_output_tokens"),
                         "provider_family": model.get("provider_family", "unknown"),
                         "reasoning": model.get("reasoning"),
+                        "hosted_web_search": model.get("hosted_web_search"),
                         "available": configured and agent_capability is not None,
                     }
                 )
