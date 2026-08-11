@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, NotRequired
+from typing import Annotated, Any, NotRequired
 
 from langchain.agents.middleware import AgentMiddleware, AgentState, hook_config
+from langchain.agents.middleware.types import PrivateStateAttr
 
 from .completion_evidence import (
     _assistant_text,
@@ -35,12 +36,12 @@ from .completion_semantic_review import (
 
 
 class CompletionRouterState(AgentState):
-    budget_control: NotRequired[dict[str, Any]]
-    completion_route: NotRequired[dict[str, Any]]
-    verification_repair_state: NotRequired[dict[str, Any]]
-    clarification_review_state: NotRequired[dict[str, Any]]
-    completion_review_state: NotRequired[dict[str, Any]]
-    incremental_execution: NotRequired[dict[str, Any]]
+    budget_control: NotRequired[Annotated[dict[str, Any], PrivateStateAttr]]
+    completion_route: NotRequired[Annotated[dict[str, Any], PrivateStateAttr]]
+    verification_repair_state: NotRequired[Annotated[dict[str, Any], PrivateStateAttr]]
+    clarification_review_state: NotRequired[Annotated[dict[str, Any], PrivateStateAttr]]
+    completion_review_state: NotRequired[Annotated[dict[str, Any], PrivateStateAttr]]
+    incremental_execution: NotRequired[Annotated[dict[str, Any], PrivateStateAttr]]
     todos: NotRequired[list[dict[str, Any]]]
 
 

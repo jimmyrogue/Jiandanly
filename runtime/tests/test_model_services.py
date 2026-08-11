@@ -857,6 +857,15 @@ def test_model_service_connection_makes_catalog_models_available_without_probe(
     ]
     assert connected["models"][0]["recommended"] is True
     assert connected["models"][1]["recommended"] is False
+    assert connected["models"][0]["provider_family"] == "deepseek"
+    assert connected["models"][0]["reasoning"] == {
+        "supported": True,
+        "modes": ["off", "high", "max"],
+        "default_mode": "off",
+        "stream_field": "reasoning_content",
+        "tool_roundtrip_required": True,
+        "display_policy": "activity_only",
+    }
     assert "api_key" not in connected
     assert listed.json()["services"] == [connected]
     assert [model["available"] for model in models.json()["models"]] == [True, True]
@@ -1707,6 +1716,42 @@ def test_glm_tool_stream_is_shared_by_probe_and_agent_requests(monkeypatch) -> N
     )
 
     assert captured["extra_body"] == {"tool_stream": True}
+
+
+def test_deepseek_chat_uses_the_reasoning_aware_adapter(monkeypatch) -> None:
+    import shejane_runtime.llm.deepseek as deepseek_adapter
+
+    captured: list[dict] = []
+
+    class FakeDeepSeekChatOpenAI:
+        def __init__(self, **kwargs) -> None:
+            captured.append(kwargs)
+
+    monkeypatch.setattr(deepseek_adapter, "DeepSeekChatOpenAI", FakeDeepSeekChatOpenAI)
+
+    for reasoning_mode in ("off", "high", "max"):
+        model_probes._build_byok_chat_model(
+            settings=reset_settings_for_tests(),
+            model_binding={
+                "adapter_id": "openai_chat",
+                "protocol": "openai_chat_completions",
+                "provider_family": "deepseek",
+                "reasoning_mode": reasoning_mode,
+                "base_url": "https://api.deepseek.com",
+                "model_id": "deepseek-v4-flash",
+                "profile": {},
+            },
+            model_api_key="secret",
+        )
+
+    assert [item["extra_body"] for item in captured] == [
+        {"thinking": {"type": "disabled"}},
+        {"thinking": {"type": "enabled"}},
+        {"thinking": {"type": "enabled"}},
+    ]
+    assert "reasoning_effort" not in captured[0]
+    assert captured[1]["reasoning_effort"] == "high"
+    assert captured[2]["reasoning_effort"] == "max"
 
 
 def test_openai_responses_protocol_uses_responses_api_without_provider_session_state(

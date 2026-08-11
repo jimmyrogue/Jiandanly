@@ -49,7 +49,6 @@ from ..middleware.agent_mailbox import AgentMailboxMiddleware
 from ..middleware.steering import SteeringMiddleware
 from ..middleware.tool_visibility import (
     ToolVisibilityMiddleware,
-    execution_policy_for_task,
 )
 from ..plugins.catalog import PluginExecutionLease
 from ..plugins.linux_cgroup import load_linux_cgroup_resources
@@ -59,6 +58,7 @@ from ..run_configuration import (
     _agent_model_call_final_reserve,
     _agent_model_call_limit,
     _agent_soft_model_call_limit,
+    _execution_policy_snapshot,
 )
 from ..run_configuration import (
     _agent_soft_model_call_limit_for_complexity as _agent_soft_model_call_limit_for_complexity,
@@ -89,9 +89,6 @@ from .definition_cache import (
     _cached_agent_definition as _cached_agent_definition,
 )
 from .mailbox import build_agent_mailbox_tools
-from .middleware_stack import (
-    MAX_SUBAGENT_TASKS_PER_RUN as MAX_SUBAGENT_TASKS_PER_RUN,
-)
 from .middleware_stack import (
     _custom_middleware as _custom_middleware,
 )
@@ -296,6 +293,11 @@ async def build_agent(
         resource_stack=resource_stack,
         hard_limit=agent_model_call_limit,
         final_reserve=agent_model_call_final_reserve,
+        phase_emit=(
+            runtime_context.steering_emit
+            if runtime_context is not None and callable(runtime_context.steering_emit)
+            else None
+        ),
         build_chat_model=_build_chat_model,
     )
     model = models.model
@@ -426,7 +428,13 @@ async def build_agent(
             model_call_soft_limit=agent_model_call_soft_limit,
             model_call_hard_limit=agent_model_call_limit,
             model_call_final_reserve=agent_model_call_final_reserve,
-            execution_policy=execution_policy_for_task(task_goal),
+            execution_policy=_execution_policy_snapshot(
+                task_goal or "",
+                {
+                    "max_model_calls": settings.max_model_calls,
+                    "subagents": settings.enable_subagents,
+                },
+            ),
             approval_model=approval_model,
             clarification_model=clarification_model,
             completion_model=completion_model,
@@ -480,7 +488,13 @@ async def build_agent(
         if runtime_context.model_call_final_reserve is None:
             runtime_context.model_call_final_reserve = agent_model_call_final_reserve
         if not runtime_context.execution_policy:
-            runtime_context.execution_policy = execution_policy_for_task(task_goal)
+            runtime_context.execution_policy = _execution_policy_snapshot(
+                task_goal or "",
+                {
+                    "max_model_calls": settings.max_model_calls,
+                    "subagents": settings.enable_subagents,
+                },
+            )
         runtime_context.approval_model = approval_model
         runtime_context.clarification_model = clarification_model
         runtime_context.completion_model = completion_model

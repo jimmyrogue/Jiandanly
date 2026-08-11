@@ -81,6 +81,15 @@ async def add_model_service_model(
         "image_inputs": False,
         "max_input_tokens": None,
         "max_output_tokens": None,
+        "provider_family": "unknown",
+        "reasoning": {
+            "supported": False,
+            "modes": ["off"],
+            "default_mode": "off",
+            "stream_field": None,
+            "tool_roundtrip_required": False,
+            "display_policy": "activity_only",
+        },
     }
     async with request.app.state.coordinator.model_connection_catalog_update(
         principal_id=principal_id,
@@ -164,6 +173,7 @@ async def verify_model_service_model(
         protocol=body.protocol,
         api_key=api_key,
         model_id=model_id,
+        provider_family=str(model.get("provider_family") or "unknown"),
     )
     async with request.app.state.coordinator.model_connection_catalog_update(
         principal_id=principal_id,
@@ -339,6 +349,15 @@ async def list_runtime_models(request: Request) -> dict[str, Any]:
                 "recommended": True,
                 "max_input_tokens": 128_000,
                 "max_output_tokens": 8_192,
+                "provider_family": "unknown",
+                "reasoning": {
+                    "supported": False,
+                    "modes": ["off"],
+                    "default_mode": "off",
+                    "stream_field": None,
+                    "tool_roundtrip_required": False,
+                    "display_policy": "activity_only",
+                },
                 "available": True,
             }
         )
@@ -373,6 +392,8 @@ async def list_runtime_models(request: Request) -> dict[str, Any]:
                         "recommended": "agent_chat" in model.get("recommended_for", []),
                         "max_input_tokens": model.get("max_input_tokens"),
                         "max_output_tokens": model.get("max_output_tokens"),
+                        "provider_family": model.get("provider_family", "unknown"),
+                        "reasoning": model.get("reasoning"),
                         "available": configured and agent_capability is not None,
                     }
                 )

@@ -12,6 +12,7 @@ from .runtime import (
     MAX_LOCAL_REQUEST_BODY_BYTES,
     MAX_RUNTIME_MODEL_SPEC_LENGTH,
     RUNTIME_MODEL_PATTERN,
+    ReasoningMode,
 )
 
 
@@ -106,6 +107,7 @@ class CreateRunRequest(BaseModel):
         max_length=MAX_RUNTIME_MODEL_SPEC_LENGTH,
         pattern=RUNTIME_MODEL_PATTERN,
     )
+    reasoning_mode: ReasoningMode | None = None
     permission_mode: PermissionMode = "ask"
     history: list[dict[str, str]] | None = Field(default=None, max_length=256)
     parent_run_id: str | None = Field(default=None, max_length=128)
@@ -188,6 +190,7 @@ class CreateScheduledRunRequest(BaseModel):
         max_length=MAX_RUNTIME_MODEL_SPEC_LENGTH,
         pattern=RUNTIME_MODEL_PATTERN,
     )
+    reasoning_mode: ReasoningMode | None = None
     permission_mode: PermissionMode = "ask"
     history: list[dict[str, str]] | None = None
     settings: dict[str, Any] | None = None

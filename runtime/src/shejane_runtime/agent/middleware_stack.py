@@ -22,7 +22,6 @@ from ..middleware.tool_visibility import ToolVisibilityMiddleware
 from .model_runtime import RuntimeModelMiddleware
 from .prompt_middleware import RuntimePromptMiddleware
 
-MAX_SUBAGENT_TASKS_PER_RUN = 2
 _MAX_TEAM_RUNS_PER_RUN = 2
 _MAX_CHILD_CONTROL_CALLS_PER_RUN = 16
 RETRY_ELIGIBLE_TOOLS: list[str] = ["web.fetch", "read_file"]
@@ -68,10 +67,6 @@ def _custom_middleware(
             ToolCallLimitMiddleware(  # P8
                 tool_name="web.search",
                 run_limit=settings.research_search_limit,
-            ),
-            ToolCallLimitMiddleware(
-                tool_name="task",
-                run_limit=MAX_SUBAGENT_TASKS_PER_RUN,
             ),
             ToolCallLimitMiddleware(
                 tool_name="team.run",

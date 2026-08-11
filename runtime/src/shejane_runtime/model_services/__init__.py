@@ -54,10 +54,19 @@ _PRESETS: tuple[dict[str, Any], ...] = (
                 "tool_calling": True,
                 "streaming": True,
                 "image_inputs": False,
+                "provider_family": "deepseek",
+                "reasoning": {
+                    "supported": True,
+                    "modes": ["off", "high", "max"],
+                    "default_mode": "off",
+                    "stream_field": "reasoning_content",
+                    "tool_roundtrip_required": True,
+                    "display_policy": "activity_only",
+                },
                 "capabilities": [
                     {
                         "capability": "agent_chat",
-                        "protocol": "openai_responses",
+                        "protocol": "openai_chat_completions",
                         "verification": "unverified",
                     }
                 ],
@@ -71,6 +80,15 @@ _PRESETS: tuple[dict[str, Any], ...] = (
                 "tool_calling": True,
                 "streaming": True,
                 "image_inputs": False,
+                "provider_family": "deepseek",
+                "reasoning": {
+                    "supported": True,
+                    "modes": ["off", "high", "max"],
+                    "default_mode": "off",
+                    "stream_field": "reasoning_content",
+                    "tool_roundtrip_required": True,
+                    "display_policy": "activity_only",
+                },
                 "capabilities": [
                     {
                         "capability": "agent_chat",

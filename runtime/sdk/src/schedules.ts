@@ -5,7 +5,7 @@ import type { Fetcher, RuntimeClientConfig } from './http.js'
 import type { RuntimeModelSpec } from './model_services.js'
 import { serializeAgentSettings } from './run_commands.js'
 import type { AgentSettings, LocalRunMetadata } from './run_commands.js'
-import type { LocalScheduledRun, PermissionMode } from './types.js'
+import type { LocalScheduledRun, PermissionMode, ReasoningMode } from './types.js'
 
 export async function listLocalSchedules(
   config: RuntimeClientConfig,
@@ -34,6 +34,7 @@ export async function createLocalSchedule(
     runAt: string
     workspacePath?: string
     mode: RuntimeModelSpec
+    reasoningMode?: ReasoningMode
     permissionMode?: PermissionMode
     history?: Array<{ role: string; content: string }>
     settings?: AgentSettings
@@ -50,6 +51,7 @@ export async function createLocalSchedule(
       run_at: input.runAt,
       workspace_path: input.workspacePath || undefined,
       model: input.mode,
+      ...(input.reasoningMode ? { reasoning_mode: input.reasoningMode } : {}),
       permission_mode: input.permissionMode,
       history: input.history ?? [],
       settings: serializeAgentSettings(input.settings),
@@ -82,4 +84,3 @@ export async function markLocalScheduleNotified(
   })
   return decodeLocalResponse<LocalScheduledRun>(response)
 }
-

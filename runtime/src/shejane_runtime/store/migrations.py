@@ -244,6 +244,7 @@ async def _ensure_columns(conn: aiosqlite.Connection) -> None:
     await _ensure_model_call_parent_operation_column(conn)
     await _ensure_model_call_retry_columns(conn)
     await _ensure_model_call_usage_column(conn)
+    await _ensure_model_call_phase_columns(conn)
     await _ensure_wait_candidates(conn)
     await _ensure_artifact_storage_columns(conn)
     transient_placeholders = ",".join("?" for _ in TRANSIENT_RUN_EVENT_TYPES)
@@ -549,6 +550,29 @@ async def _ensure_model_call_usage_column(conn: aiosqlite.Connection) -> None:
         await conn.execute(
             "ALTER TABLE local_model_calls ADD COLUMN usage_json TEXT NOT NULL DEFAULT '{}'"
         )
+
+
+async def _ensure_model_call_phase_columns(conn: aiosqlite.Connection) -> None:
+    cursor = await conn.execute("PRAGMA table_info(local_model_calls)")
+    columns = {row[1] for row in await cursor.fetchall()}
+    additions = (
+        ("phase", "TEXT NOT NULL DEFAULT 'waiting_provider'"),
+        ("phase_started_at", "TEXT"),
+        ("request_started_at", "TEXT"),
+        ("response_headers_at", "TEXT"),
+        ("first_raw_chunk_at", "TEXT"),
+        ("reasoning_started_at", "TEXT"),
+        ("first_visible_output_at", "TEXT"),
+        ("reasoning_tokens", "INTEGER"),
+    )
+    for name, definition in additions:
+        if name not in columns:
+            await conn.execute(f"ALTER TABLE local_model_calls ADD COLUMN {name} {definition}")
+    await conn.execute(
+        "UPDATE local_model_calls SET phase_started_at = COALESCE(phase_started_at, created_at), "
+        "request_started_at = COALESCE(request_started_at, created_at), "
+        "first_visible_output_at = COALESCE(first_visible_output_at, first_output_at)"
+    )
 
 
 async def _ensure_tool_receipt_namespace(conn: aiosqlite.Connection) -> None:

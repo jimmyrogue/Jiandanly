@@ -88,7 +88,17 @@ class _StreamingModel(BaseChatModel):
         run_manager: AsyncCallbackManagerForLLMRun | None = None,
         **kwargs: object,
     ) -> AsyncIterator[ChatGenerationChunk]:
-        yield ChatGenerationChunk(message=AIMessageChunk(content="hello"))
+        yield ChatGenerationChunk(
+            message=AIMessageChunk(
+                content="hello",
+                response_metadata={
+                    "headers": {
+                        "x-request-id": "provider-from-header",
+                        "set-cookie": "private-cookie=must-not-persist",
+                    }
+                },
+            )
+        )
         if self.fail_after_output:
             raise TimeoutError("provider disconnected")
         yield ChatGenerationChunk(
@@ -144,6 +154,35 @@ class _TransientThenStreamingModel(_StreamingModel):
                 retryable=True,
             )
         yield ChatGenerationChunk(message=AIMessageChunk(content="recovered"))
+
+
+class _ReasoningThenAnswerModel(_StreamingModel):
+    async def _astream(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
+        **kwargs: object,
+    ) -> AsyncIterator[ChatGenerationChunk]:
+        del messages, stop, run_manager, kwargs
+        yield ChatGenerationChunk(
+            message=AIMessageChunk(
+                content="",
+                additional_kwargs={"reasoning_content": "private reasoning"},
+            )
+        )
+        yield ChatGenerationChunk(message=AIMessageChunk(content="public answer"))
+        yield ChatGenerationChunk(
+            message=AIMessageChunk(
+                content="",
+                usage_metadata={
+                    "input_tokens": 5,
+                    "output_tokens": 7,
+                    "total_tokens": 12,
+                    "output_token_details": {"reasoning": 3},
+                },
+            )
+        )
 
 
 class _BindableStreamingModel(_StreamingModel):
@@ -328,6 +367,8 @@ async def test_stream_settles_usage_without_reading_sse(tmp_path: Path) -> None:
             assembled += chunk
         [model_call] = await store.list_model_calls_for_run(str(run["id"]))
         assert assembled.additional_kwargs["runtime_model_call_id"] == model_call["id"]
+        assert "headers" not in assembled.response_metadata
+        assert model_call["response_headers_at"] is not None
         assert json.loads(model_call["usage_json"])["output_token_details"] == {
             "reasoning": 1
         }
@@ -338,6 +379,80 @@ async def test_stream_settles_usage_without_reading_sse(tmp_path: Path) -> None:
             "outcome_unknown_calls": 0,
             "model_calls": 1,
         }
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_latest_run_phase_ignores_non_agent_model_calls(tmp_path: Path) -> None:
+    store, run = await _store_and_run(tmp_path)
+    run_id = str(run["id"])
+    try:
+        agent_call = await store.reserve_model_call(
+            run_id=run_id,
+            execution_attempt_id="job-1:1",
+            model="local:test:model",
+            max_calls=2,
+        )
+        await store.mark_model_call_phase(
+            run_id=run_id,
+            call_id=str(agent_call["id"]),
+            phase="reasoning",
+        )
+        await store.reserve_model_call(
+            run_id=run_id,
+            execution_attempt_id="job-1:1",
+            model="local:test:model",
+            max_calls=2,
+            purpose="title_generation",
+        )
+
+        [latest] = await store.latest_model_calls_for_runs([run_id])
+
+        assert latest["id"] == agent_call["id"]
+        assert latest["phase"] == "reasoning"
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_reasoning_stream_records_private_and_public_latency_phases(tmp_path: Path) -> None:
+    store, run = await _store_and_run(tmp_path)
+    emitted: list[tuple[str, dict[str, str]]] = []
+
+    async def emit(event_type: str, payload: dict[str, str]) -> None:
+        emitted.append((event_type, payload))
+
+    try:
+        model = LedgerChatModel(
+            delegate=_ReasoningThenAnswerModel(),
+            store=store,
+            run_id=str(run["id"]),
+            execution_attempt_id="job-1:1",
+            model_name="local:test:model",
+            max_calls=2,
+            profile={"max_input_tokens": 8_192},
+            phase_emit=emit,
+        )
+
+        chunks = [chunk async for chunk in model.astream([HumanMessage(content="hi")])]
+
+        assert "".join(str(chunk.content) for chunk in chunks) == "public answer"
+        assert [payload["phase"] for _, payload in emitted] == [
+            "waiting_provider",
+            "reasoning",
+            "answering",
+            "completed",
+        ]
+        assert {event_type for event_type, _ in emitted} == {"llm.phase.changed"}
+        [model_call] = await store.list_model_calls_for_run(str(run["id"]))
+        assert model_call["phase"] == "completed"
+        assert model_call["request_started_at"] is not None
+        assert model_call["first_raw_chunk_at"] is not None
+        assert model_call["reasoning_started_at"] is not None
+        assert model_call["first_output_at"] is not None
+        assert model_call["first_visible_output_at"] is not None
+        assert model_call["reasoning_tokens"] == 3
     finally:
         await store.close()
 

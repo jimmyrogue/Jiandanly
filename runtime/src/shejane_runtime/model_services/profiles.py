@@ -10,6 +10,26 @@ _DEEPSEEK_V4_LIMITS = {
     "deepseek-v4-pro": (1_000_000, 384_000),
 }
 
+_DEFAULT_REASONING_PROFILE = {
+    "supported": False,
+    "modes": ["off"],
+    "default_mode": "off",
+    "stream_field": None,
+    "tool_roundtrip_required": False,
+    "display_policy": "activity_only",
+}
+
+_DEEPSEEK_REASONING_PROFILE = {
+    "supported": True,
+    "modes": ["off", "high", "max"],
+    "default_mode": "off",
+    "stream_field": "reasoning_content",
+    "tool_roundtrip_required": True,
+    "display_policy": "activity_only",
+}
+
+_REASONING_MODES = {"off", "high", "max"}
+
 MODEL_CAPABILITY_ORDER = {
     "agent_chat": 0,
     "image_understanding": 1,
@@ -104,6 +124,48 @@ def _bounded_integer(value: Any, *, minimum: int, maximum: int) -> int | None:
     return value if minimum <= value <= maximum else None
 
 
+def _normalized_reasoning_profile(
+    value: Any,
+    *,
+    provider_family: str,
+    trusted: bool,
+) -> dict[str, Any]:
+    fallback = (
+        _DEEPSEEK_REASONING_PROFILE
+        if provider_family == "deepseek"
+        else _DEFAULT_REASONING_PROFILE
+    )
+    if provider_family != "deepseek" or not trusted or not isinstance(value, dict):
+        return dict(fallback)
+    supported = value.get("supported")
+    modes = value.get("modes")
+    default_mode = value.get("default_mode")
+    stream_field = value.get("stream_field")
+    tool_roundtrip_required = value.get("tool_roundtrip_required")
+    display_policy = value.get("display_policy")
+    if (
+        not isinstance(supported, bool)
+        or not isinstance(modes, list)
+        or not 1 <= len(modes) <= 3
+        or any(not isinstance(mode, str) or mode not in _REASONING_MODES for mode in modes)
+        or len(modes) != len(set(modes))
+        or default_mode not in modes
+        or stream_field not in {None, "reasoning_content", "content_blocks"}
+        or not isinstance(tool_roundtrip_required, bool)
+        or display_policy not in {"activity_only", "summary_only"}
+        or (not supported and modes != ["off"])
+    ):
+        return dict(fallback)
+    return {
+        "supported": supported,
+        "modes": list(modes),
+        "default_mode": default_mode,
+        "stream_field": stream_field,
+        "tool_roundtrip_required": tool_roundtrip_required,
+        "display_policy": display_policy,
+    }
+
+
 def apply_known_model_profile_defaults(
     profile: dict[str, Any],
     *,
@@ -112,7 +174,26 @@ def apply_known_model_profile_defaults(
 ) -> dict[str, Any]:
     """Fill published limits and repair stale trusted-catalog agent flags."""
     normalized = dict(profile)
-    if not trusted_model_catalog and urlparse(service_base_url).hostname != "api.deepseek.com":
+    hostname = urlparse(service_base_url).hostname
+    claimed_provider_family = str(normalized.get("provider_family") or "").strip().lower()
+    provider_family = (
+        claimed_provider_family
+        if trusted_model_catalog
+        and claimed_provider_family in {"openai", "deepseek", "anthropic", "google"}
+        else "unknown"
+    )
+    if hostname == "api.deepseek.com" or (
+        trusted_model_catalog
+        and str(normalized.get("model_id") or "").startswith("deepseek-")
+    ):
+        provider_family = "deepseek"
+    normalized["provider_family"] = provider_family
+    normalized["reasoning"] = _normalized_reasoning_profile(
+        normalized.get("reasoning"),
+        provider_family=provider_family,
+        trusted=trusted_model_catalog or hostname == "api.deepseek.com",
+    )
+    if normalized["provider_family"] != "deepseek" and not trusted_model_catalog:
         return normalized
     limits = _DEEPSEEK_V4_LIMITS.get(str(normalized.get("model_id")))
     if limits is None:
@@ -154,6 +235,12 @@ def discovered_model_profile(
         "image_inputs": False,
         "max_input_tokens": None,
         "max_output_tokens": None,
+        "provider_family": str(candidate.get("provider_family") or "unknown"),
+        "reasoning": (
+            dict(candidate["reasoning"])
+            if isinstance(candidate.get("reasoning"), dict)
+            else None
+        ),
     }
     if catalog_model:
         modalities = catalog_model.get("modalities")

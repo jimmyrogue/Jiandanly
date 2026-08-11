@@ -51,10 +51,11 @@ async def _run_with_inputs(store: LocalStore, run: dict[str, Any]) -> dict[str, 
 async def _runs_with_inputs(store: LocalStore, runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     run_ids = [str(run["id"]) for run in runs]
     missing_subagent_ids = [str(run["id"]) for run in runs if "subagent_invocations" not in run]
-    rows, subagent_rows, child_rows = await asyncio.gather(
+    rows, subagent_rows, child_rows, model_calls = await asyncio.gather(
         store.list_run_inputs_for_runs(run_ids),
         store.list_subagent_invocations_for_runs(missing_subagent_ids),
         store.list_child_runs_for_runs(run_ids),
+        store.latest_model_calls_for_runs(run_ids),
     )
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
@@ -65,9 +66,12 @@ async def _runs_with_inputs(store: LocalStore, runs: list[dict[str, Any]]) -> li
     grouped_children: dict[str, list[dict[str, Any]]] = {}
     for row in child_rows:
         grouped_children.setdefault(str(row["parent_run_id"]), []).append(row)
+    latest_model_call = {str(row["run_id"]): row for row in model_calls}
     return [
         {
             **run,
+            "reasoning_mode": _run_reasoning_mode(run),
+            **_run_model_phase(run, latest_model_call.get(str(run["id"]))),
             "inputs": [
                 {
                     "client_index": index,
@@ -96,6 +100,37 @@ async def _runs_with_inputs(store: LocalStore, runs: list[dict[str, Any]]) -> li
         }
         for run in runs
     ]
+
+
+def _run_reasoning_mode(run: dict[str, Any]) -> str:
+    try:
+        settings = json.loads(str(run.get("settings_json") or "{}"))
+    except (json.JSONDecodeError, TypeError):
+        return "off"
+    mode = settings.get("reasoning_mode") if isinstance(settings, dict) else None
+    return str(mode) if mode in {"off", "high", "max"} else "off"
+
+
+def _run_model_phase(
+    run: dict[str, Any],
+    model_call: dict[str, Any] | None,
+) -> dict[str, str | None]:
+    if model_call is not None:
+        phase = str(model_call.get("phase") or "")
+        if phase in {"waiting_provider", "reasoning", "answering", "tool_calling", "completed"}:
+            return {
+                "model_phase": phase,
+                "model_phase_started_at": str(
+                    model_call.get("phase_started_at") or model_call.get("created_at") or ""
+                ) or None,
+            }
+    if run.get("status") in {"queued", "running"}:
+        return {
+            "model_phase": "waiting_provider",
+            "model_phase_started_at": str(run.get("updated_at") or run.get("created_at") or "")
+            or None,
+        }
+    return {"model_phase": None, "model_phase_started_at": None}
 
 
 async def _normalized_path(raw: str) -> str:

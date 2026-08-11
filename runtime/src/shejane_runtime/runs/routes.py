@@ -96,6 +96,7 @@ async def create_run(request: Request, body: CreateRunRequest) -> dict[str, Any]
             attachment_paths=attachment_paths,
             # The runtime's legacy `mode` column carries the Runtime model selection.
             mode=body.model,
+            reasoning_mode=body.reasoning_mode,
             permission_mode=body.permission_mode,
             history=body.history or [],
             parent_run_id=body.parent_run_id,

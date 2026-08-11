@@ -19,9 +19,10 @@ from __future__ import annotations
 import logging
 import os
 import re
-from typing import Any, NotRequired
+from typing import Annotated, Any, NotRequired
 
 from langchain.agents.middleware import AgentMiddleware, AgentState
+from langchain.agents.middleware.types import PrivateStateAttr
 
 log = logging.getLogger("shejane_runtime.middleware.plan_first")
 
@@ -80,7 +81,7 @@ _INFORMATIONAL_HOW_TO = re.compile(
 
 
 class PlanFirstState(AgentState):
-    incremental_execution: NotRequired[dict[str, Any]]
+    incremental_execution: NotRequired[Annotated[dict[str, Any], PrivateStateAttr]]
 
 
 class PlanFirstMiddleware(AgentMiddleware):

@@ -675,14 +675,7 @@ export interface paths {
         };
         /**
          * Run Diagnostics
-         * @description Return the full `LocalRunDiagnostics` payload.
-         *
-         *     Shape is defined by `LocalRunDiagnostics` and generated into the SDK.
-         *     It includes the redacted durable trace projection used by exports.
-         *
-         *     Phase 5'+ used to return only `{run, events}`, so the
-         *     `DiagnosticsPanel` rendered NaN counts (permissions.length on
-         *     undefined) and the "latest checkpoint" tab was always missing.
+         * @description Return the complete, redacted durable diagnostics projection.
          */
         get: operations["run_diagnostics_v1_runs__run_id__diagnostics_get"];
         put?: never;
@@ -1324,6 +1317,8 @@ export interface components {
             plugin_refs?: components["schemas"]["PluginReference"][];
             /** Protocol Version */
             protocol_version: number;
+            /** Reasoning Mode */
+            reasoning_mode?: ("off" | "high" | "max") | null;
             /** Replace From Client Id */
             replace_from_client_id?: string | null;
             /** Required Capabilities */
@@ -1371,6 +1366,8 @@ export interface components {
              * @enum {string}
              */
             permission_mode: "ask" | "auto" | "full_access";
+            /** Reasoning Mode */
+            reasoning_mode?: ("off" | "high" | "max") | null;
             /** Run At */
             run_at: string;
             /** Settings */
@@ -1493,12 +1490,14 @@ export interface components {
             complexity: "simple" | "complex";
             /** Final Model Call Reserve */
             final_model_call_reserve: number;
+            /** Max Concurrent Subagent Tasks */
+            max_concurrent_subagent_tasks: number;
             /** Max Model Calls */
             max_model_calls: number;
             /** Max Subagent Model Calls */
             max_subagent_model_calls: number;
             /** Max Subagent Tasks */
-            max_subagent_tasks: number;
+            max_subagent_tasks?: number | null;
             /**
              * Plan Mode
              * @enum {string}
@@ -1506,12 +1505,19 @@ export interface components {
             plan_mode: "off" | "auto" | "always";
             /** Plan Required */
             plan_required: boolean;
+            /** Preferred Subagent Concurrency */
+            preferred_subagent_concurrency: number;
             /** Reason */
             reason: string;
             /** Soft Model Call Limit */
             soft_model_call_limit: number;
             /** Subagent Allowed */
             subagent_allowed: boolean;
+            /**
+             * Subagent Budget Mode
+             * @constant
+             */
+            subagent_budget_mode: "shared_model_budget";
         };
         /**
          * DiagnosticsFailure
@@ -1592,6 +1598,10 @@ export interface components {
             execution_attempt_id: string;
             /** First Output At */
             first_output_at?: string | null;
+            /** First Raw Chunk At */
+            first_raw_chunk_at?: string | null;
+            /** First Visible Output At */
+            first_visible_output_at?: string | null;
             /** Id */
             id: string;
             /** Input Tokens */
@@ -1608,10 +1618,25 @@ export interface components {
             output_tokens?: number | null;
             /** Parent Tool Operation Id */
             parent_tool_operation_id?: string | null;
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "waiting_provider" | "reasoning" | "answering" | "tool_calling" | "completed";
+            /** Phase Started At */
+            phase_started_at: string;
             /** Provider Request Id */
             provider_request_id?: string | null;
             /** Purpose */
             purpose: string;
+            /** Reasoning Started At */
+            reasoning_started_at?: string | null;
+            /** Reasoning Tokens */
+            reasoning_tokens?: number | null;
+            /** Request Started At */
+            request_started_at: string;
+            /** Response Headers At */
+            response_headers_at?: string | null;
             /** Retry Attempt */
             retry_attempt: number;
             /** Status */
@@ -2503,8 +2528,14 @@ export interface components {
              * @default {}
              */
             metadata_json: string;
+            /** Model Phase */
+            model_phase?: ("waiting_provider" | "reasoning" | "answering" | "tool_calling" | "completed") | null;
+            /** Model Phase Started At */
+            model_phase_started_at?: string | null;
             /** Parent Run Id */
             parent_run_id?: string | null;
+            /** Reasoning Mode */
+            reasoning_mode?: ("off" | "high" | "max") | null;
             /** Root Run Id */
             root_run_id: string;
             /**
@@ -2604,6 +2635,13 @@ export interface components {
             max_output_tokens?: number | null;
             /** Model Id */
             model_id: string;
+            /**
+             * Provider Family
+             * @default unknown
+             * @enum {string}
+             */
+            provider_family: "openai" | "deepseek" | "anthropic" | "google" | "unknown";
+            reasoning?: components["schemas"]["ModelReasoningProfile"];
             /** Recommended */
             recommended: boolean;
             /** Service Name */
@@ -3060,6 +3098,35 @@ export interface components {
             /** Updated At */
             updated_at: string;
         };
+        /** ModelReasoningProfile */
+        ModelReasoningProfile: {
+            /**
+             * Default Mode
+             * @default off
+             * @enum {string}
+             */
+            default_mode: "off" | "high" | "max";
+            /**
+             * Display Policy
+             * @default activity_only
+             * @enum {string}
+             */
+            display_policy: "activity_only" | "summary_only";
+            /** Modes */
+            modes?: ("off" | "high" | "max")[];
+            /** Stream Field */
+            stream_field?: ("reasoning_content" | "content_blocks") | null;
+            /**
+             * Supported
+             * @default false
+             */
+            supported: boolean;
+            /**
+             * Tool Roundtrip Required
+             * @default false
+             */
+            tool_roundtrip_required: boolean;
+        };
         /** ModelServiceConnection */
         ModelServiceConnection: {
             /**
@@ -3113,6 +3180,13 @@ export interface components {
             max_output_tokens?: number | null;
             /** Model Id */
             model_id: string;
+            /**
+             * Provider Family
+             * @default unknown
+             * @enum {string}
+             */
+            provider_family: "openai" | "deepseek" | "anthropic" | "google" | "unknown";
+            reasoning?: components["schemas"]["ModelReasoningProfile"];
             /**
              * Recommended
              * @default false
@@ -4104,6 +4178,12 @@ export interface components {
             completed_at?: string | null;
             /** Created At */
             created_at: string;
+            /** Display Target */
+            display_target?: string | null;
+            /** Display Target Kind */
+            display_target_kind?: ("host" | "text" | "count") | null;
+            /** Failure Detail */
+            failure_detail?: string | null;
             /** Id */
             id: string;
             /**

@@ -115,6 +115,9 @@ class RunPresentationToolItem(BaseModel):
     tool_call_id: str
     tool_name: str
     risk: str
+    display_target: str | None = None
+    display_target_kind: Literal["host", "text", "count"] | None = None
+    failure_detail: str | None = None
     created_at: str
     updated_at: str
     completed_at: str | None = None

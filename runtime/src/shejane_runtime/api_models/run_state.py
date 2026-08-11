@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from .runtime import ReasoningMode
+
 RunStatus = Literal[
     "queued",
     "running",
@@ -144,6 +146,15 @@ class LocalRun(BaseModel):
     parent_run_id: str | None = None
     settings_json: str = "{}"
     metadata_json: str = "{}"
+    reasoning_mode: ReasoningMode | None = None
+    model_phase: Literal[
+        "waiting_provider",
+        "reasoning",
+        "answering",
+        "tool_calling",
+        "completed",
+    ] | None = None
+    model_phase_started_at: str | None = None
     events_count: int | None = None
     command_id: str | None = None
     client_message_id: str | None = None

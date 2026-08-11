@@ -5,13 +5,15 @@ from __future__ import annotations
 import json
 from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from typing import Any, NotRequired, cast
+from typing import Annotated, Any, NotRequired, cast
 
 from langchain.agents.middleware import AgentMiddleware, AgentState, ToolCallRequest
+from langchain.agents.middleware.types import PrivateStateAttr
 from langchain_core.messages import SystemMessage, ToolMessage
 from langgraph.types import Command
 
 from ..agent.context_builder import RuntimeContext
+from ..config import MAX_CONCURRENT_SUBAGENT_TASKS
 from ..llm.ledger import MODEL_RETRY_ATTEMPTS
 from .tool_execution_identity import READ_ONLY_TOOLS
 
@@ -27,7 +29,7 @@ def finalization_attempt_reserve(hard_limit: int, final_turns: int) -> int:
 
 
 class DynamicBudgetControlState(AgentState):
-    budget_control: NotRequired[dict[str, Any]]
+    budget_control: NotRequired[Annotated[dict[str, Any], PrivateStateAttr]]
 
 
 class DynamicBudgetControlMiddleware(AgentMiddleware):
@@ -107,6 +109,14 @@ async def _budget_decision(
     remaining = max(0, hard_limit - used)
     repeated = _repeated_read_tool(state.get("messages", ()) if isinstance(state, Mapping) else ())
     reserved_attempts = finalization_attempt_reserve(hard_limit, reserve)
+    policy_limit = context.execution_policy.get("max_concurrent_subagent_tasks")
+    max_concurrent_subagent_tasks = (
+        max(0, policy_limit)
+        if isinstance(policy_limit, int) and not isinstance(policy_limit, bool)
+        else MAX_CONCURRENT_SUBAGENT_TASKS
+        if context.subagents_enabled
+        else 0
+    )
     force_threshold = max(0, hard_limit - reserved_attempts - convergence_lead)
     force_final = used >= force_threshold or (repeated is not None and repeated[1] >= 3)
     soft_exhausted = used >= soft_limit
@@ -117,21 +127,28 @@ async def _budget_decision(
         or soft_exhausted
         or (repeated is not None and repeated[1] >= 2)
     )
-    if not warn:
-        return {"mode": "normal", "run_id": context.run_id}
-
-    return {
-        "mode": ("converge" if force_final else "delegate_closed" if delegation_closed else "warn"),
+    control = {
+        "mode": (
+            "converge"
+            if force_final
+            else "delegate_closed"
+            if delegation_closed
+            else "warn"
+            if warn
+            else "normal"
+        ),
         "run_id": context.run_id,
         "used": used,
         "remaining": remaining,
         "soft_limit": soft_limit,
         "hard_limit": hard_limit,
         "delegation_model_call_limit": hard_limit - reserved_attempts,
+        "max_concurrent_subagent_tasks": max_concurrent_subagent_tasks,
         "soft_exhausted": soft_exhausted,
         "repeated_tool": repeated[0] if repeated is not None else None,
         "repeat_count": repeated[1] if repeated is not None else 0,
     }
+    return control
 
 
 def _controlled_request(request: Any, control: dict[str, Any]) -> Any:
@@ -219,24 +236,42 @@ def _blocked_tool_result(request: Any) -> ToolMessage | None:
     mode = str(control.get("mode") or "normal")
     tool_name = str(request.tool_call.get("name") or "")
     capacity_exhausted = False
+    parallel_capacity_exhausted = False
     if tool_name in _SYNCHRONOUS_DELEGATION_TOOLS and "delegation_model_call_limit" in control:
         used = max(0, int(control.get("used") or 0))
         delegation_limit = max(0, int(control.get("delegation_model_call_limit") or 0))
         available = max(0, delegation_limit - used - 1)
-        capacity_exhausted = (
-            _synchronous_member_calls(cast(Mapping[str, Any], state), request.tool_call) > available
+        _, member_end = _synchronous_member_span(
+            cast(Mapping[str, Any], state), request.tool_call
+        )
+        capacity_exhausted = member_end > available
+        max_concurrent = control.get("max_concurrent_subagent_tasks")
+        parallel_capacity_exhausted = (
+            isinstance(max_concurrent, int)
+            and not isinstance(max_concurrent, bool)
+            and member_end > max(0, max_concurrent)
         )
     if (
         mode != "converge"
         and not capacity_exhausted
+        and not parallel_capacity_exhausted
         and not (mode == "delegate_closed" and tool_name in _SYNCHRONOUS_DELEGATION_TOOLS)
     ):
         return None
-    return ToolMessage(
-        content=(
+    if parallel_capacity_exhausted:
+        content = (
+            f"Tool {tool_name} was not executed because this batch exceeds Runtime's "
+            f"parallel delegation capacity of {int(control['max_concurrent_subagent_tasks'])}. "
+            "Wait for the accepted subagents, then delegate remaining independent work only "
+            "if the Runtime still exposes this tool."
+        )
+    else:
+        content = (
             f"Tool {tool_name} was not executed because Runtime budget convergence is active. "
             "Use existing evidence to produce the best available final answer."
-        ),
+        )
+    return ToolMessage(
+        content=content,
         name=tool_name,
         tool_call_id=str(request.tool_call.get("id") or ""),
         status="error",
@@ -254,25 +289,32 @@ def _request_tool_name(tool: Any) -> str:
     return str(getattr(tool, "name", "") or "")
 
 
-def _synchronous_member_calls(state: Mapping[str, Any], current_call: Any) -> int:
+def _synchronous_member_span(
+    state: Mapping[str, Any], current_call: Any
+) -> tuple[int, int]:
     calls: Sequence[Any] = ()
     messages = state.get("messages")
     if isinstance(messages, Sequence) and messages:
         calls = getattr(messages[-1], "tool_calls", ()) or ()
     if not calls:
         calls = (current_call,)
-    total = 0
+    current_id = str(current_call.get("id") or "") if isinstance(current_call, Mapping) else ""
+    position = 0
     for call in calls:
         if not isinstance(call, Mapping):
             continue
         name = str(call.get("name") or "")
+        members = 0
         if name == "task":
-            total += 1
+            members = 1
         elif name == "team.run":
             args = call.get("args")
             assignments = args.get("assignments") if isinstance(args, Mapping) else None
-            total += len(assignments) if isinstance(assignments, list) else 1
-    return total
+            members = len(assignments) if isinstance(assignments, list) else 1
+        if str(call.get("id") or "") == current_id:
+            return position, position + members
+        position += members
+    return 0, 1
 
 
 def _repeated_read_tool(messages: Sequence[Any]) -> tuple[str, int] | None:

@@ -9,6 +9,7 @@ export type LocalChildRun = Schemas['LocalChildRun']
 export type LocalAgentMessage = Schemas['LocalAgentMessage']
 export type LocalCollaborationSnapshot = Schemas['LocalCollaborationSnapshot']
 export type PermissionMode = Schemas['CreateRunRequest']['permission_mode']
+export type ReasoningMode = NonNullable<Schemas['CreateRunRequest']['reasoning_mode']>
 export type LocalThread = Schemas['LocalThread']
 export type LocalThreadItem = Schemas['LocalThreadItem']
 export type LocalThreadChange = Schemas['LocalThreadChange']
@@ -70,4 +71,3 @@ export type LocalPlanApprovalDecision = 'approve' | 'modify' | 'reject'
 export type ListChildRunsResponse = Schemas['ListChildRunsResponse']
 export type ListAgentMessagesResponse = Schemas['ListAgentMessagesResponse']
 export type ListRunEventsResponse = Schemas['ListRunEventsResponse']
-

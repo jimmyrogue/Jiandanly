@@ -20,7 +20,7 @@ from langchain_core.callbacks import (
     CallbackManagerForLLMRun,
 )
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 
 FAKE_REPLY = "Fake runtime reply for the SSE contract test."
@@ -206,6 +206,56 @@ class FakeBackendChatModel(BaseChatModel):
                     ],
                 )
             return AIMessage(content=f"E2E frozen settings retained: {task_result.content}")
+        if "[[e2e:subagent-rolling]]" in prompt:
+            first_batch = [
+                _last_tool_result(
+                    messages,
+                    "task",
+                    tool_call_id=f"call_e2e_rolling_subagent_{index}",
+                )
+                for index in range(5)
+            ]
+            if any(result is None for result in first_batch):
+                return AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": f"call_e2e_rolling_subagent_{index}",
+                            "name": "task",
+                            "args": {
+                                "description": (
+                                    f"[[e2e:rolling-child:{index}]] Return child {index}."
+                                ),
+                                "subagent_type": "writer",
+                            },
+                        }
+                        for index in range(5)
+                    ],
+                )
+            replacement = _last_tool_result(
+                messages,
+                "task",
+                tool_call_id="call_e2e_rolling_subagent_5",
+            )
+            if replacement is None:
+                return AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_e2e_rolling_subagent_5",
+                            "name": "task",
+                            "args": {
+                                "description": (
+                                    "[[e2e:rolling-child:5]] Return the rolling replacement."
+                                ),
+                                "subagent_type": "writer",
+                            },
+                        }
+                    ],
+                )
+            return AIMessage(content="E2E rolling subagent batches completed: 6/6.")
+        if "[[e2e:rolling-child:" in prompt:
+            return AIMessage(content="E2E rolling child complete.")
         if "[[e2e:subagent-child]]" in prompt:
             return AIMessage(content="E2E_SUBAGENT_RESULT")
         if "[[e2e:subagent]]" in prompt:
@@ -394,6 +444,39 @@ class FakeBackendChatModel(BaseChatModel):
                     ],
                 )
             return AIMessage(content=f"E2E memory result: {result.content}")
+        if "[[e2e:presentation]]" in prompt:
+            results = [
+                _last_tool_result(messages, name, tool_call_id=tool_call_id)
+                for name, tool_call_id in (
+                    ("time.now", "call_e2e_presentation_time_first"),
+                    ("time.now", "call_e2e_presentation_time_second"),
+                    ("web.fetch", "call_e2e_presentation_web"),
+                )
+            ]
+            if all(result is not None for result in results):
+                return AIMessage(content="E2E presentation tools complete.")
+            return AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "call_e2e_presentation_time_first",
+                        "name": "time.now",
+                        "args": {},
+                    },
+                    {
+                        "id": "call_e2e_presentation_time_second",
+                        "name": "time.now",
+                        "args": {},
+                    },
+                    {
+                        "id": "call_e2e_presentation_web",
+                        "name": "web.fetch",
+                        "args": {
+                            "url": "http://127.0.0.1/private?token=must-not-appear"
+                        },
+                    },
+                ],
+            )
         tool_request = _e2e_tool_request(prompt)
         if tool_request is not None:
             name, args = tool_request
@@ -557,6 +640,26 @@ class FakeBackendChatModel(BaseChatModel):
                 delay = 30.0
             await asyncio.sleep(delay)
             yield ChatGenerationChunk(message=AIMessageChunk(content="finished"))
+            return
+        if "[[e2e:reasoning-phase]]" in prompt and (
+            "[[e2e:presentation]]" not in prompt
+            or any(isinstance(message, ToolMessage) for message in messages)
+        ):
+            yield ChatGenerationChunk(
+                message=AIMessageChunk(
+                    content="",
+                    additional_kwargs={
+                        "reasoning_content": "E2E_PRIVATE_REASONING_MUST_NOT_RENDER"
+                    },
+                )
+            )
+            await asyncio.sleep(2)
+            final_text = (
+                "E2E reasoning presentation complete."
+                if "[[e2e:presentation]]" in prompt
+                else "E2E reasoning phase complete."
+            )
+            yield ChatGenerationChunk(message=AIMessageChunk(content=final_text))
             return
         if "[[e2e:slow]]" in prompt:
             chunk = ChatGenerationChunk(message=AIMessageChunk(content="E2E working "))

@@ -305,6 +305,7 @@ async def test_dispatcher_starts_due_schedule_and_marks_completed(tmp_path: Path
                 "goal": "跑一次本地检查",
                 "workspace_path": str(tmp_path),
                 "mode": "auto",
+                "reasoning_mode": None,
                 "history": [],
                 "settings": {"skills": "on"},
                 "settings_are_frozen": False,
@@ -377,6 +378,7 @@ def test_schedule_http_create_list_cancel_and_mark_notified(client: TestClient) 
     assert schedule_settings["_snapshot_version"] == 1
     assert schedule_settings["memory"] == "on"
     assert schedule_settings["permission_mode"] == "auto"
+    assert "reasoning_mode" not in schedule_settings
     assert "must-not-persist" not in schedule["settings_json"]
     assert json.loads(schedule["metadata_json"]) == {}
 

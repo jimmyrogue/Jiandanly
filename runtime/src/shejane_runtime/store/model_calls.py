@@ -77,12 +77,17 @@ class ModelCallStore(SqliteDatabase):
                 "status": "reserved",
                 "created_at": _now(),
             }
+            record["phase"] = "waiting_provider"
+            record["phase_started_at"] = record["created_at"]
+            record["request_started_at"] = record["created_at"]
             await conn.execute(
                 "INSERT INTO local_model_calls "
                 "(id, run_id, execution_attempt_id, call_index, model, purpose, "
-                "parent_tool_operation_id, logical_call_id, retry_attempt, status, created_at) "
+                "parent_tool_operation_id, logical_call_id, retry_attempt, status, created_at, "
+                "phase, phase_started_at, request_started_at) "
                 "VALUES (:id, :run_id, :execution_attempt_id, :call_index, :model, :purpose, "
-                ":parent_tool_operation_id, :logical_call_id, :retry_attempt, :status, :created_at)",
+                ":parent_tool_operation_id, :logical_call_id, :retry_attempt, :status, :created_at, "
+                ":phase, :phase_started_at, :request_started_at)",
                 record,
             )
         return record
@@ -182,13 +187,68 @@ class ModelCallStore(SqliteDatabase):
         )
         return [dict(row) for row in await cursor.fetchall()]
 
-    async def mark_model_call_output(self, *, run_id: str, call_id: str) -> None:
+    async def mark_model_call_phase(
+        self,
+        *,
+        run_id: str,
+        call_id: str,
+        phase: str,
+        raw_chunk: bool = False,
+        response_headers: bool = False,
+    ) -> None:
+        if phase not in {
+            "waiting_provider",
+            "reasoning",
+            "answering",
+            "tool_calling",
+            "completed",
+        }:
+            raise ValueError("model call phase is invalid")
+        now = _now()
+        async with self.run_write_transaction(run_id) as conn:
+            cursor = await conn.execute(
+                "UPDATE local_model_calls SET phase = ?, "
+                "phase_started_at = CASE WHEN phase = ? THEN phase_started_at ELSE ? END, "
+                "first_raw_chunk_at = CASE WHEN ? THEN COALESCE(first_raw_chunk_at, ?) "
+                "ELSE first_raw_chunk_at END, "
+                "response_headers_at = CASE WHEN ? THEN COALESCE(response_headers_at, ?) "
+                "ELSE response_headers_at END, "
+                "reasoning_started_at = CASE WHEN ? = 'reasoning' "
+                "THEN COALESCE(reasoning_started_at, ?) ELSE reasoning_started_at END "
+                "WHERE id = ? AND run_id = ? AND status IN ('reserved', 'streaming')",
+                (
+                    phase,
+                    phase,
+                    now,
+                    raw_chunk,
+                    now,
+                    response_headers,
+                    now,
+                    phase,
+                    now,
+                    call_id,
+                    run_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError(f"model call {call_id} cannot record phase")
+
+    async def mark_model_call_output(
+        self,
+        *,
+        run_id: str,
+        call_id: str,
+        visible: bool = True,
+    ) -> None:
+        now = _now()
         async with self.run_write_transaction(run_id) as conn:
             cursor = await conn.execute(
                 "UPDATE local_model_calls SET status = 'streaming', output_started = 1, "
-                "first_output_at = COALESCE(first_output_at, ?) "
+                "first_output_at = COALESCE(first_output_at, ?), "
+                "first_visible_output_at = CASE WHEN ? "
+                "THEN COALESCE(first_visible_output_at, ?) ELSE first_visible_output_at END "
                 "WHERE id = ? AND run_id = ? AND status IN ('reserved', 'streaming')",
-                (_now(), call_id, run_id),
+                (now, visible, now, call_id, run_id),
             )
             if cursor.rowcount != 1:
                 raise RuntimeError(f"model call {call_id} cannot record output")
@@ -201,22 +261,27 @@ class ModelCallStore(SqliteDatabase):
         provider_request_id: str | None,
         input_tokens: int | None,
         output_tokens: int | None,
+        reasoning_tokens: int | None = None,
         usage: dict[str, Any] | None = None,
     ) -> None:
         usage_known = input_tokens is not None or output_tokens is not None
         status = "completed" if usage_known else "completed_unmetered"
+        now = _now()
         async with self.run_write_transaction(run_id) as conn:
             cursor = await conn.execute(
                 "UPDATE local_model_calls SET status = ?, provider_request_id = ?, "
-                "input_tokens = ?, output_tokens = ?, usage_json = ?, completed_at = ? "
+                "input_tokens = ?, output_tokens = ?, reasoning_tokens = ?, usage_json = ?, "
+                "phase = 'completed', phase_started_at = ?, completed_at = ? "
                 "WHERE id = ? AND run_id = ? AND status IN ('reserved', 'streaming')",
                 (
                     status,
                     provider_request_id,
                     input_tokens,
                     output_tokens,
+                    reasoning_tokens,
                     json.dumps(usage or {}, ensure_ascii=False, sort_keys=True),
-                    _now(),
+                    now,
+                    now,
                     call_id,
                     run_id,
                 ),
@@ -234,6 +299,7 @@ class ModelCallStore(SqliteDatabase):
         provider_request_id: str | None = None,
         input_tokens: int | None = None,
         output_tokens: int | None = None,
+        reasoning_tokens: int | None = None,
         usage: dict[str, Any] | None = None,
     ) -> None:
         status = "outcome_unknown" if outcome_unknown else "failed"
@@ -241,7 +307,7 @@ class ModelCallStore(SqliteDatabase):
             cursor = await conn.execute(
                 "UPDATE local_model_calls SET status = ?, error_code = ?, "
                 "provider_request_id = ?, input_tokens = ?, output_tokens = ?, "
-                "usage_json = ?, completed_at = ? "
+                "reasoning_tokens = ?, usage_json = ?, completed_at = ? "
                 "WHERE id = ? AND run_id = ? AND status IN ('reserved', 'streaming')",
                 (
                     status,
@@ -249,6 +315,7 @@ class ModelCallStore(SqliteDatabase):
                     provider_request_id,
                     input_tokens,
                     output_tokens,
+                    reasoning_tokens,
                     json.dumps(usage or {}, ensure_ascii=False, sort_keys=True),
                     _now(),
                     call_id,
@@ -257,6 +324,23 @@ class ModelCallStore(SqliteDatabase):
             )
             if cursor.rowcount != 1:
                 raise RuntimeError(f"model call {call_id} cannot be failed")
+
+    async def latest_model_calls_for_runs(
+        self,
+        run_ids: list[str],
+    ) -> list[dict[str, Any]]:
+        if not run_ids:
+            return []
+        placeholders = ",".join("?" for _ in run_ids)
+        cursor = await self._conn.execute(
+            "SELECT calls.* FROM local_model_calls calls JOIN ("
+            "SELECT run_id, MAX(call_index) AS call_index FROM local_model_calls "
+            f"WHERE run_id IN ({placeholders}) AND purpose = 'agent' "
+            "AND parent_tool_operation_id IS NULL GROUP BY run_id"
+            ") latest ON latest.run_id = calls.run_id AND latest.call_index = calls.call_index",
+            tuple(run_ids),
+        )
+        return [dict(row) for row in await cursor.fetchall()]
 
     async def model_usage_summary(self, run_id: str) -> dict[str, int]:
         row = await (

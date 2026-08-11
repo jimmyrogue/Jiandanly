@@ -8,18 +8,14 @@ from typing import Any
 
 from langgraph.graph import add_messages
 
-from ..agent.builder import MAX_SUBAGENT_TASKS_PER_RUN
 from ..agent.subagents import SUBAGENT_MODEL_CALL_LIMIT
 from ..build_info import runtime_build_identity
 from ..failure_policy import classify_failure_payload
-from ..middleware.tool_visibility import execution_policy_for_task
 from ..progress_ledger import latest_feature_ledger as latest_feature_ledger
 from ..progress_ledger import progress_ledger_state
 from ..run_configuration import (
     RUNTIME_PROTOCOL_VERSION,
-    _agent_model_call_final_reserve,
-    _agent_model_call_limit,
-    _agent_soft_model_call_limit_for_complexity,
+    _execution_policy_snapshot,
 )
 
 log = logging.getLogger("shejane_runtime.server")
@@ -34,46 +30,12 @@ def diagnostics_execution_policy(run: dict[str, Any]) -> dict[str, Any]:
         settings = {}
     if not isinstance(settings, dict):
         settings = {}
-    stored_policy = settings.get("_execution_policy")
-    policy = (
-        stored_policy
-        if isinstance(stored_policy, dict)
-        and stored_policy.get("complexity") in {"simple", "complex"}
-        else execution_policy_for_task(str(run.get("goal") or ""))
-    )
+    policy = _execution_policy_snapshot(str(run.get("goal") or ""), settings)
     plan_mode = str(settings.get("plan_first") or "off")
     if plan_mode not in {"off", "auto", "always"}:
         plan_mode = "off"
-    configured_model_calls = settings.get("max_model_calls")
-    max_model_calls = (
-        int(configured_model_calls)
-        if isinstance(configured_model_calls, int) and configured_model_calls > 0
-        else 100
-    )
     subagents_enabled = settings.get("subagents") is not False
     subagent_allowed = bool(policy["subagent_allowed"] and subagents_enabled)
-    hard_model_call_limit = _agent_model_call_limit(
-        max_model_calls,
-        str(run.get("goal") or ""),
-    )
-    stored_hard_limit = policy.get("max_model_calls")
-    if isinstance(stored_hard_limit, int) and stored_hard_limit > 0:
-        hard_model_call_limit = stored_hard_limit
-    stored_soft_limit = policy.get("soft_model_call_limit")
-    soft_model_call_limit = (
-        max(1, min(hard_model_call_limit, stored_soft_limit))
-        if isinstance(stored_soft_limit, int) and stored_soft_limit > 0
-        else _agent_soft_model_call_limit_for_complexity(
-            hard_model_call_limit,
-            str(policy["complexity"]),
-        )
-    )
-    stored_final_reserve = policy.get("final_model_call_reserve")
-    final_model_call_reserve = (
-        max(1, min(hard_model_call_limit, stored_final_reserve))
-        if isinstance(stored_final_reserve, int) and stored_final_reserve > 0
-        else _agent_model_call_final_reserve(hard_model_call_limit)
-    )
     return {
         "complexity": policy["complexity"],
         "plan_mode": plan_mode,
@@ -81,10 +43,17 @@ def diagnostics_execution_policy(run: dict[str, Any]) -> dict[str, Any]:
         or (plan_mode == "auto" and policy["complexity"] == "complex"),
         "subagent_allowed": subagent_allowed,
         "reason": "subagents_disabled" if not subagents_enabled else policy["reason"],
-        "max_model_calls": hard_model_call_limit,
-        "soft_model_call_limit": soft_model_call_limit,
-        "final_model_call_reserve": final_model_call_reserve,
-        "max_subagent_tasks": MAX_SUBAGENT_TASKS_PER_RUN if subagent_allowed else 0,
+        "max_model_calls": policy["max_model_calls"],
+        "soft_model_call_limit": policy["soft_model_call_limit"],
+        "final_model_call_reserve": policy["final_model_call_reserve"],
+        "subagent_budget_mode": policy["subagent_budget_mode"],
+        "max_subagent_tasks": None,
+        "preferred_subagent_concurrency": (
+            policy["preferred_subagent_concurrency"] if subagent_allowed else 0
+        ),
+        "max_concurrent_subagent_tasks": (
+            policy["max_concurrent_subagent_tasks"] if subagent_allowed else 0
+        ),
         "max_subagent_model_calls": SUBAGENT_MODEL_CALL_LIMIT if subagent_allowed else 0,
     }
 

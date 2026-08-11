@@ -18,6 +18,9 @@ RUN_BUDGET_LIMITS: dict[str, tuple[int, int]] = {
     "research_search_limit": (1, 20),
 }
 
+PREFERRED_SUBAGENT_CONCURRENCY = 3
+MAX_CONCURRENT_SUBAGENT_TASKS = 5
+
 DEFAULT_RUNTIME_DATA_DIR = Path.home() / ".shejane" / "runtime"
 LEGACY_RUNTIME_DATA_DIR = Path.home() / ".shejane" / "local-host"
 LEGACY_RUNTIME_DB_FILENAME = "local-host.db"

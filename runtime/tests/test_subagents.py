@@ -56,6 +56,35 @@ def test_build_subagents_returns_researcher_and_writer() -> None:
     assert all(str(item["system_prompt"]).startswith("<identity>") for item in subs)
 
 
+def test_agent_control_state_is_private_to_each_agent() -> None:
+    from deepagents.middleware._state import private_state_field_names
+
+    from shejane_runtime.agent.subagents import build_subagents
+    from shejane_runtime.middleware.completion_router import CompletionRouterState
+    from shejane_runtime.middleware.plan_first import PlanFirstState
+
+    subagent_schemas = [
+        middleware.state_schema
+        for subagent in build_subagents(main_tools=[], main_model="x", agent_roots=[])
+        for middleware in subagent["middleware"]
+        if getattr(middleware, "state_schema", None) is not None
+    ]
+    private_keys = private_state_field_names(
+        CompletionRouterState,
+        PlanFirstState,
+        *subagent_schemas,
+    )
+
+    assert {
+        "budget_control",
+        "clarification_review_state",
+        "completion_review_state",
+        "completion_route",
+        "incremental_execution",
+        "verification_repair_state",
+    } <= private_keys
+
+
 def test_researcher_pulls_only_research_relevant_tools_from_main() -> None:
     """When the main toolset includes the researcher's preferred names,
     the researcher's tool list is filtered to that subset."""

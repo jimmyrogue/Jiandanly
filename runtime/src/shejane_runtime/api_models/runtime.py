@@ -92,6 +92,29 @@ ModelProtocol = Literal[
     "openai_images_edits",
 ]
 ModelVerification = Literal["verified", "unverified"]
+ProviderFamily = Literal["openai", "deepseek", "anthropic", "google", "unknown"]
+ReasoningMode = Literal["off", "high", "max"]
+
+
+class ModelReasoningProfile(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    supported: bool = False
+    modes: list[ReasoningMode] = Field(default_factory=lambda: ["off"], min_length=1, max_length=3)
+    default_mode: ReasoningMode = "off"
+    stream_field: Literal["reasoning_content", "content_blocks"] | None = None
+    tool_roundtrip_required: bool = False
+    display_policy: Literal["activity_only", "summary_only"] = "activity_only"
+
+    @model_validator(mode="after")
+    def validate_modes(self) -> ModelReasoningProfile:
+        if len(self.modes) != len(set(self.modes)):
+            raise ValueError("reasoning modes must be unique")
+        if self.default_mode not in self.modes:
+            raise ValueError("default reasoning mode must be supported")
+        if not self.supported and self.modes != ["off"]:
+            raise ValueError("unsupported reasoning profiles may only expose off mode")
+        return self
 
 
 class ModelCapability(BaseModel):
@@ -135,6 +158,8 @@ class ModelCapabilityProfile(BaseModel):
     image_inputs: bool = False
     max_input_tokens: int | None = Field(default=None, ge=1, le=10_000_000)
     max_output_tokens: int | None = Field(default=None, ge=128, le=1_000_000)
+    provider_family: ProviderFamily = "unknown"
+    reasoning: ModelReasoningProfile = Field(default_factory=ModelReasoningProfile)
 
 
 class LocalRuntimeModel(BaseModel):
@@ -151,6 +176,8 @@ class LocalRuntimeModel(BaseModel):
     recommended: bool
     max_input_tokens: int | None = None
     max_output_tokens: int | None = None
+    provider_family: ProviderFamily = "unknown"
+    reasoning: ModelReasoningProfile = Field(default_factory=ModelReasoningProfile)
     available: bool
 
 

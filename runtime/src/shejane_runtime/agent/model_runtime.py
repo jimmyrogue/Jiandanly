@@ -197,14 +197,22 @@ def _build_byok_chat_model(
             profile=profile,
         )
 
-    from langchain_openai import ChatOpenAI
-
     base_url = str(model_binding["base_url"])
-    extra_body = (
-        {"tool_stream": True}
-        if urlparse(base_url).hostname in {"open.bigmodel.cn", "api.z.ai"}
-        else None
-    )
+    provider_family = str(model_binding.get("provider_family") or "unknown")
+    reasoning_mode = str(model_binding.get("reasoning_mode") or "off")
+    if provider_family == "deepseek":
+        from ..llm.deepseek import DeepSeekChatOpenAI, deepseek_request_options
+
+        request_options = deepseek_request_options(reasoning_mode)
+        chat_model_type = DeepSeekChatOpenAI
+    else:
+        from langchain_openai import ChatOpenAI
+
+        request_options = {}
+        chat_model_type = ChatOpenAI
+    extra_body = request_options.pop("extra_body", None)
+    if urlparse(base_url).hostname in {"open.bigmodel.cn", "api.z.ai"}:
+        extra_body = {**(extra_body or {}), "tool_stream": True}
     responses = model_binding.get("protocol") == "openai_responses"
     responses_options: dict[str, Any] = {}
     if responses:
@@ -221,7 +229,7 @@ def _build_byok_chat_model(
             responses_options["include"] = ["reasoning.encrypted_content"]
             if _hosted_tools_for_model_binding(model_binding):
                 responses_options["include"].append("web_search_call.action.sources")
-    return ChatOpenAI(
+    return chat_model_type(
         model=str(model_binding["model_id"]),
         base_url=base_url,
         api_key=model_api_key or "local",
@@ -229,11 +237,13 @@ def _build_byok_chat_model(
         http_async_client=httpx.AsyncClient(),
         streaming=True,
         stream_usage=True,
+        include_response_headers=True,
         max_retries=0,
         max_tokens=int(profile["max_output_tokens"]),
         timeout=settings.model_request_timeout_seconds,
         profile=profile,
         extra_body=extra_body,
+        **request_options,
         **responses_options,
     )
 
@@ -250,6 +260,7 @@ def _build_run_model_bundle(
     resource_stack: AsyncExitStack | None,
     hard_limit: int,
     final_reserve: int,
+    phase_emit: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
     build_chat_model: Callable[..., Any] = _build_chat_model,
 ) -> _RunModelBundle:
     provider = build_chat_model(
@@ -270,6 +281,7 @@ def _build_run_model_bundle(
             max_calls=hard_limit,
             profile=getattr(provider, "profile", None),
             hosted_tools=_hosted_tools_for_model_binding(model_binding),
+            phase_emit=phase_emit,
             supports_json_schema_output=bool(
                 model_binding
                 and model_binding.get("protocol") == "openai_responses"

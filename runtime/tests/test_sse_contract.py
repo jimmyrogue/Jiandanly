@@ -84,6 +84,7 @@ def test_sse_stream_envelope_and_event_names(tmp_path) -> None:
 
     names = [e["event_type"] for e in envelopes]
     assert "run.started" in names
+    assert "llm.phase.changed" in names
     assert "llm.delta" in names
     assert "run.completed" in names
     # Canonical names, not the retired ones.

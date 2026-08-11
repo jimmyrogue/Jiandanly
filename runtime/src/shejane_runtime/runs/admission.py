@@ -31,6 +31,7 @@ from .inputs import (
     _attachment_bindings,
     _prepare_run_inputs,
 )
+from .model_bindings import default_reasoning_mode, reasoning_mode_error
 from .stream_state import _checkpoint_is_ancestor, _json_object
 
 
@@ -58,6 +59,7 @@ async def admit_run(
     workspace_path: str | None = None,
     attachment_paths: list[str] | None = None,
     mode: str = "fast",
+    reasoning_mode: str | None = None,
     permission_mode: str = "ask",
     history: list[dict[str, str]] | None = None,
     parent_run_id: str | None = None,
@@ -85,6 +87,8 @@ async def admit_run(
                 "run settings snapshot version is unsupported",
             )
         public_settings = dict(settings)
+        frozen_mode = public_settings.get("reasoning_mode")
+        reasoning_mode = str(frozen_mode) if frozen_mode else reasoning_mode
     else:
         public_settings = public_run_settings(settings)
         public_settings["permission_mode"] = permission_mode
@@ -111,6 +115,7 @@ async def admit_run(
         "workspace_path": workspace_path,
         "attachment_paths": [item["source_path"] for item in attachment_bindings],
         "model": mode,
+        "reasoning_mode": reasoning_mode,
         "permission_mode": public_settings.get("permission_mode", "ask"),
         "history": history or [],
         "parent_run_id": parent_run_id,
@@ -158,6 +163,19 @@ async def admit_run(
             else freeze_run_settings(runtime_settings, public_settings)
         )
         settings_snapshot["_model_binding"] = model_binding
+        requested_reasoning_mode = settings_snapshot.get("reasoning_mode") or reasoning_mode
+        frozen_reasoning_mode = (
+            str(requested_reasoning_mode)
+            if requested_reasoning_mode
+            else default_reasoning_mode(model_binding)
+        )
+        if frozen_reasoning_mode not in {"off", "high", "max"}:
+            frozen_reasoning_mode = default_reasoning_mode(model_binding)
+        settings_snapshot["reasoning_mode"] = frozen_reasoning_mode
+        if admission_error is None:
+            admission_error = reasoning_mode_error(model_binding, frozen_reasoning_mode)
+        if admission_error is None:
+            model_binding["reasoning_mode"] = frozen_reasoning_mode
         settings_snapshot["_diagnostics_build"] = runtime_build_identity(
             protocol_version=RUNTIME_PROTOCOL_VERSION
         )

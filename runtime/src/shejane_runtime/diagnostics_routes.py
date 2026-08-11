@@ -84,8 +84,20 @@ async def run_diagnostics(request: Request, run_id: str) -> dict[str, Any]:
                 "provider_request_id": call.get("provider_request_id"),
                 "input_tokens": call.get("input_tokens"),
                 "output_tokens": call.get("output_tokens"),
+                "reasoning_tokens": call.get("reasoning_tokens"),
+                "phase": str(call.get("phase") or "waiting_provider"),
                 "error_code": call.get("error_code"),
                 "created_at": str(call["created_at"]),
+                "request_started_at": str(
+                    call.get("request_started_at") or call["created_at"]
+                ),
+                "response_headers_at": call.get("response_headers_at"),
+                "first_raw_chunk_at": call.get("first_raw_chunk_at"),
+                "reasoning_started_at": call.get("reasoning_started_at"),
+                "first_visible_output_at": call.get("first_visible_output_at"),
+                "phase_started_at": str(
+                    call.get("phase_started_at") or call["created_at"]
+                ),
                 "first_output_at": call.get("first_output_at"),
                 "completed_at": call.get("completed_at"),
             }

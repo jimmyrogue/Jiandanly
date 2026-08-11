@@ -249,7 +249,7 @@ async def test_tool_guard_blocks_guessed_calls_during_subagent_convergence() -> 
 
 
 @pytest.mark.asyncio
-async def test_tool_guard_rejects_task_batch_that_cannot_fit_before_subagent_cap() -> None:
+async def test_tool_guard_runs_only_the_task_that_fits_before_subagent_cap() -> None:
     calls = [
         {
             "id": f"task-{index}",
@@ -259,25 +259,96 @@ async def test_tool_guard_rejects_task_batch_that_cannot_fit_before_subagent_cap
         }
         for index in range(2)
     ]
-    request = SimpleNamespace(
-        state={
-            "budget_control": {
-                "mode": "warn",
-                "used": 92,
-                "delegation_model_call_limit": 94,
-            },
-            "messages": [AIMessage(content="", tool_calls=calls)],
+    state = {
+        "budget_control": {
+            "mode": "warn",
+            "used": 92,
+            "delegation_model_call_limit": 94,
         },
-        tool_call=calls[0],
+        "messages": [AIMessage(content="", tool_calls=calls)],
+    }
+
+    async def execute(request: Any) -> ToolMessage:
+        return ToolMessage(
+            content="ok",
+            name="task",
+            tool_call_id=str(request.tool_call["id"]),
+        )
+
+    results = [
+        await DynamicBudgetControlMiddleware().awrap_tool_call(
+            SimpleNamespace(state=state, tool_call=call),
+            execute,
+        )
+        for call in calls
+    ]
+
+    assert results[0].status == "success"
+    assert results[1].status == "error"
+
+
+@pytest.mark.asyncio
+async def test_budget_decision_exposes_frozen_parallel_subagent_capacity() -> None:
+    runtime = SimpleNamespace(
+        context=RuntimeContext(
+            run_id="run-budget",
+            store=_BudgetStore(0),
+            model_call_soft_limit=24,
+            model_call_hard_limit=100,
+            model_call_final_reserve=2,
+            execution_policy={"max_concurrent_subagent_tasks": 4},
+        )
     )
 
-    async def must_not_execute(_request: Any) -> Any:
-        raise AssertionError("oversized task batch reached its handler")
+    update = await DynamicBudgetControlMiddleware().abefore_model(
+        {"messages": [HumanMessage(content="research")]},
+        runtime,
+    )
 
-    result = await DynamicBudgetControlMiddleware().awrap_tool_call(request, must_not_execute)
+    assert update["budget_control"]["mode"] == "normal"
+    assert update["budget_control"]["max_concurrent_subagent_tasks"] == 4
+    assert update["budget_control"]["delegation_model_call_limit"] == 94
 
-    assert isinstance(result, ToolMessage)
-    assert result.status == "error"
+
+@pytest.mark.asyncio
+async def test_tool_guard_runs_at_most_five_tasks_from_one_parallel_batch() -> None:
+    calls = [
+        {
+            "id": f"task-{index}",
+            "name": "task",
+            "args": {"description": f"work {index}", "subagent_type": "researcher"},
+            "type": "tool_call",
+        }
+        for index in range(6)
+    ]
+    state = {
+        "budget_control": {
+            "mode": "normal",
+            "used": 0,
+            "delegation_model_call_limit": 94,
+            "max_concurrent_subagent_tasks": 5,
+        },
+        "messages": [AIMessage(content="", tool_calls=calls)],
+    }
+
+    async def execute(request: Any) -> ToolMessage:
+        return ToolMessage(
+            content="ok",
+            name="task",
+            tool_call_id=str(request.tool_call["id"]),
+        )
+
+    results = [
+        await DynamicBudgetControlMiddleware().awrap_tool_call(
+            SimpleNamespace(state=state, tool_call=call),
+            execute,
+        )
+        for call in calls
+    ]
+
+    assert [result.status for result in results[:5]] == ["success"] * 5
+    assert results[5].status == "error"
+    assert "parallel delegation capacity" in str(results[5].content).lower()
 
 
 @pytest.mark.asyncio

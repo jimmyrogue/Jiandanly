@@ -50,7 +50,7 @@ def _model_connection_models(row: dict[str, Any]) -> list[dict[str, Any]]:
         normalized = apply_known_model_profile_defaults(
             model,
             service_base_url=str(row.get("base_url") or ""),
-            trusted_model_catalog=row.get("preset_id") == "shejane-official",
+            trusted_model_catalog=row.get("preset_id") in {"shejane-official", "deepseek"},
         )
         normalized["capabilities"] = normalized_model_capabilities(
             normalized,
@@ -353,7 +353,7 @@ async def _refresh_model_service_models(
             model_id=model_id,
             display_name=display_name[:100] or model_id[:100],
             service_base_url=base_url,
-            trusted_model_catalog=preset.get("id") == "shejane-official",
+            trusted_model_catalog=preset.get("id") in {"shejane-official", "deepseek"},
         )
         profile.update(
             {

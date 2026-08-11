@@ -468,6 +468,22 @@
             "title": "Protocol Version",
             "type": "integer"
           },
+          "reasoning_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "off",
+                  "high",
+                  "max"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Mode"
+          },
           "replace_from_client_id": {
             "anyOf": [
               {
@@ -651,6 +667,22 @@
             ],
             "title": "Permission Mode",
             "type": "string"
+          },
+          "reasoning_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "off",
+                  "high",
+                  "max"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Mode"
           },
           "run_at": {
             "title": "Run At",
@@ -955,6 +987,11 @@
             "title": "Final Model Call Reserve",
             "type": "integer"
           },
+          "max_concurrent_subagent_tasks": {
+            "minimum": 0.0,
+            "title": "Max Concurrent Subagent Tasks",
+            "type": "integer"
+          },
           "max_model_calls": {
             "minimum": 1.0,
             "title": "Max Model Calls",
@@ -966,9 +1003,16 @@
             "type": "integer"
           },
           "max_subagent_tasks": {
-            "minimum": 0.0,
-            "title": "Max Subagent Tasks",
-            "type": "integer"
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Subagent Tasks"
           },
           "plan_mode": {
             "enum": [
@@ -983,6 +1027,11 @@
             "title": "Plan Required",
             "type": "boolean"
           },
+          "preferred_subagent_concurrency": {
+            "minimum": 0.0,
+            "title": "Preferred Subagent Concurrency",
+            "type": "integer"
+          },
           "reason": {
             "title": "Reason",
             "type": "string"
@@ -995,6 +1044,11 @@
           "subagent_allowed": {
             "title": "Subagent Allowed",
             "type": "boolean"
+          },
+          "subagent_budget_mode": {
+            "const": "shared_model_budget",
+            "title": "Subagent Budget Mode",
+            "type": "string"
           }
         },
         "required": [
@@ -1006,7 +1060,9 @@
           "max_model_calls",
           "soft_model_call_limit",
           "final_model_call_reserve",
-          "max_subagent_tasks",
+          "subagent_budget_mode",
+          "preferred_subagent_concurrency",
+          "max_concurrent_subagent_tasks",
           "max_subagent_model_calls"
         ],
         "title": "DiagnosticsExecutionPolicy",
@@ -1240,6 +1296,28 @@
             ],
             "title": "First Output At"
           },
+          "first_raw_chunk_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Raw Chunk At"
+          },
+          "first_visible_output_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Visible Output At"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -1293,6 +1371,21 @@
             ],
             "title": "Parent Tool Operation Id"
           },
+          "phase": {
+            "enum": [
+              "waiting_provider",
+              "reasoning",
+              "answering",
+              "tool_calling",
+              "completed"
+            ],
+            "title": "Phase",
+            "type": "string"
+          },
+          "phase_started_at": {
+            "title": "Phase Started At",
+            "type": "string"
+          },
           "provider_request_id": {
             "anyOf": [
               {
@@ -1307,6 +1400,43 @@
           "purpose": {
             "title": "Purpose",
             "type": "string"
+          },
+          "reasoning_started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Started At"
+          },
+          "reasoning_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Tokens"
+          },
+          "request_started_at": {
+            "title": "Request Started At",
+            "type": "string"
+          },
+          "response_headers_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Headers At"
           },
           "retry_attempt": {
             "minimum": 0.0,
@@ -1329,7 +1459,10 @@
           "status",
           "output_started",
           "outcome_unknown",
-          "created_at"
+          "phase",
+          "created_at",
+          "request_started_at",
+          "phase_started_at"
         ],
         "title": "DiagnosticsModelCall",
         "type": "object"
@@ -3792,6 +3925,35 @@
             "title": "Metadata Json",
             "type": "string"
           },
+          "model_phase": {
+            "anyOf": [
+              {
+                "enum": [
+                  "waiting_provider",
+                  "reasoning",
+                  "answering",
+                  "tool_calling",
+                  "completed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Phase"
+          },
+          "model_phase_started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Phase Started At"
+          },
           "parent_run_id": {
             "anyOf": [
               {
@@ -3802,6 +3964,22 @@
               }
             ],
             "title": "Parent Run Id"
+          },
+          "reasoning_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "off",
+                  "high",
+                  "max"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Mode"
           },
           "root_run_id": {
             "title": "Root Run Id",
@@ -4124,6 +4302,21 @@
           "model_id": {
             "title": "Model Id",
             "type": "string"
+          },
+          "provider_family": {
+            "default": "unknown",
+            "enum": [
+              "openai",
+              "deepseek",
+              "anthropic",
+              "google",
+              "unknown"
+            ],
+            "title": "Provider Family",
+            "type": "string"
+          },
+          "reasoning": {
+            "$ref": "#/components/schemas/ModelReasoningProfile"
           },
           "recommended": {
             "title": "Recommended",
@@ -5223,6 +5416,71 @@
         "title": "ModelCapabilityBinding",
         "type": "object"
       },
+      "ModelReasoningProfile": {
+        "additionalProperties": false,
+        "properties": {
+          "default_mode": {
+            "default": "off",
+            "enum": [
+              "off",
+              "high",
+              "max"
+            ],
+            "title": "Default Mode",
+            "type": "string"
+          },
+          "display_policy": {
+            "default": "activity_only",
+            "enum": [
+              "activity_only",
+              "summary_only"
+            ],
+            "title": "Display Policy",
+            "type": "string"
+          },
+          "modes": {
+            "items": {
+              "enum": [
+                "off",
+                "high",
+                "max"
+              ],
+              "type": "string"
+            },
+            "maxItems": 3,
+            "minItems": 1,
+            "title": "Modes",
+            "type": "array"
+          },
+          "stream_field": {
+            "anyOf": [
+              {
+                "enum": [
+                  "reasoning_content",
+                  "content_blocks"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stream Field"
+          },
+          "supported": {
+            "default": false,
+            "title": "Supported",
+            "type": "boolean"
+          },
+          "tool_roundtrip_required": {
+            "default": false,
+            "title": "Tool Roundtrip Required",
+            "type": "boolean"
+          }
+        },
+        "title": "ModelReasoningProfile",
+        "type": "object"
+      },
       "ModelServiceConnection": {
         "properties": {
           "adapter_id": {
@@ -5364,6 +5622,21 @@
             "pattern": "^\\S+$",
             "title": "Model Id",
             "type": "string"
+          },
+          "provider_family": {
+            "default": "unknown",
+            "enum": [
+              "openai",
+              "deepseek",
+              "anthropic",
+              "google",
+              "unknown"
+            ],
+            "title": "Provider Family",
+            "type": "string"
+          },
+          "reasoning": {
+            "$ref": "#/components/schemas/ModelReasoningProfile"
           },
           "recommended": {
             "default": false,
@@ -7869,6 +8142,44 @@
           "created_at": {
             "title": "Created At",
             "type": "string"
+          },
+          "display_target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Target"
+          },
+          "display_target_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "host",
+                  "text",
+                  "count"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Target Kind"
+          },
+          "failure_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Detail"
           },
           "id": {
             "title": "Id",
@@ -10518,7 +10829,7 @@
     },
     "/v1/runs/{run_id}/diagnostics": {
       "get": {
-        "description": "Return the full `LocalRunDiagnostics` payload.\n\nShape is defined by `LocalRunDiagnostics` and generated into the SDK.\nIt includes the redacted durable trace projection used by exports.\n\nPhase 5'+ used to return only `{run, events}`, so the\n`DiagnosticsPanel` rendered NaN counts (permissions.length on\nundefined) and the \"latest checkpoint\" tab was always missing.",
+        "description": "Return the complete, redacted durable diagnostics projection.",
         "operationId": "run_diagnostics_v1_runs__run_id__diagnostics_get",
         "parameters": [
           {

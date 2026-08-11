@@ -16,6 +16,7 @@ import type {
   LocalToolReconciliationDecision,
   PermissionMode,
   PlanResolveCommandReceipt,
+  ReasoningMode,
   ResolvePermissionCommandReceipt,
   ToolReconcileCommandReceipt,
 } from './types.js'
@@ -97,6 +98,7 @@ export interface CreateLocalRunInput {
   settings?: AgentSettings
   metadata?: LocalRunMetadata
   mode: RuntimeModelSpec
+  reasoningMode?: ReasoningMode
   permissionMode?: PermissionMode
 }
 
@@ -195,6 +197,7 @@ export async function createLocalRun(
     settings,
     metadata: input.metadata && Object.keys(input.metadata).length > 0 ? input.metadata : undefined,
     model: input.mode,
+    ...(input.reasoningMode ? { reasoning_mode: input.reasoningMode } : {}),
     permission_mode: input.permissionMode,
   })
   const request = () =>

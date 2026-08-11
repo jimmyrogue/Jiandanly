@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import re
+from http import HTTPStatus
 from typing import Any
+from urllib.parse import urlsplit
 
 _TOOL_STATUS = {
     "prepared": "pending",
@@ -15,6 +18,10 @@ _TOOL_STATUS = {
     "canceled": "canceled",
     "outcome_unknown": "unknown",
 }
+
+_DISPLAY_TARGET_MAX = 40
+_FAILURE_DETAIL_MAX = 160
+_SAFE_ERROR_TYPE = re.compile(rf"[A-Za-z_][A-Za-z0-9_.]{{0,{_FAILURE_DETAIL_MAX - 1}}}")
 
 
 def project_run_presentation(
@@ -122,6 +129,12 @@ def project_run_presentation(
         if tool_name == "task.verify":
             items.append({**common, "kind": "verification", "tool_name": tool_name})
             continue
+        arguments = _json_object(receipt.get("arguments_json"))
+        display_target, display_target_kind = _tool_display_target(
+            arguments=arguments,
+            requested_payload=requested.get("payload") or {},
+            tool_name=tool_name,
+        )
         items.append(
             {
                 "id": common["id"],
@@ -133,6 +146,11 @@ def project_run_presentation(
                 "tool_call_id": tool_call_id,
                 "tool_name": tool_name,
                 "risk": str(receipt.get("risk") or "unknown"),
+                "display_target": display_target,
+                "display_target_kind": display_target_kind,
+                "failure_detail": (
+                    _tool_failure_detail(matching, receipt) if status == "failed" else None
+                ),
                 "created_at": common["created_at"],
                 "updated_at": common["updated_at"],
                 "completed_at": common["completed_at"],
@@ -155,17 +173,27 @@ def project_run_presentation(
             continue
         latest = matching[-1]
         payload = requested.get("payload") or {}
+        tool_name = str(payload.get("name") or payload.get("tool") or "tool")
+        status = legacy_status.get(str(latest.get("event_type")), "in_progress")
+        display_target, display_target_kind = _tool_display_target(
+            arguments=_json_object(payload.get("arguments")),
+            requested_payload=payload,
+            tool_name=tool_name,
+        )
         items.append(
             {
                 "id": f"tool-call:{tool_call_id}",
                 "kind": "tool",
-                "status": legacy_status.get(str(latest.get("event_type")), "in_progress"),
+                "status": status,
                 "order": {"event_seq": int(requested["seq"]), "slot": 0},
                 "revision": int(latest["seq"]),
                 "source": {"kind": "run_event", "id": str(requested["id"])},
                 "tool_call_id": tool_call_id,
-                "tool_name": str(payload.get("name") or payload.get("tool") or "tool"),
+                "tool_name": tool_name,
                 "risk": "unknown",
+                "display_target": display_target,
+                "display_target_kind": display_target_kind,
+                "failure_detail": _tool_failure_detail(matching) if status == "failed" else None,
                 "created_at": str(requested["created_at"]),
                 "updated_at": str(latest["created_at"]),
                 "completed_at": (
@@ -324,3 +352,71 @@ def _json_object(value: Any) -> dict[str, Any]:
             return {}
         return decoded if isinstance(decoded, dict) else {}
     return value if isinstance(value, dict) else {}
+
+
+def _tool_display_target(
+    *,
+    arguments: dict[str, Any],
+    requested_payload: dict[str, Any],
+    tool_name: str,
+) -> tuple[str | None, str | None]:
+    """Return only the short argument needed by the standard presentation."""
+    url = _first_string(arguments, "url") or _first_string(requested_payload, "url")
+    if url:
+        try:
+            host = urlsplit(url).hostname
+        except ValueError:
+            host = None
+        if host:
+            return host.removeprefix("www."), "host"
+        return None, None
+
+    path = _first_string(arguments, "path", "file_path")
+    if path:
+        basename = next((part for part in reversed(re.split(r"[\\/]", path)) if part), path)
+        if tool_name in {"ls", "fs.list", "workspace.open"}:
+            basename = f"{basename}/"
+        return _truncate(basename, _DISPLAY_TARGET_MAX), "text"
+
+    for key in ("todos", "checks"):
+        value = arguments.get(key)
+        if isinstance(value, list):
+            return str(len(value)), "count"
+    return None, None
+
+
+def _tool_failure_detail(
+    matching_events: list[dict[str, Any]],
+    receipt: dict[str, Any] | None = None,
+) -> str | None:
+    for event in reversed(matching_events):
+        if event.get("event_type") != "tool.failed":
+            continue
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        message = _first_string(payload, "message")
+        status_match = re.search(r"\b([1-5]\d{2})\b", message)
+        if status_match:
+            status_code = int(status_match.group(1))
+            try:
+                return f"{status_code} {HTTPStatus(status_code).phrase}"
+            except ValueError:
+                return str(status_code)
+    if receipt is not None:
+        error_type = _first_string(receipt, "error_type")
+        if _SAFE_ERROR_TYPE.fullmatch(error_type):
+            return error_type
+    return None
+
+
+def _first_string(values: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = values.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _truncate(value: str, maximum: int) -> str:
+    return value if len(value) <= maximum else f"{value[: maximum - 1]}…"

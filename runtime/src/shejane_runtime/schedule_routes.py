@@ -59,6 +59,12 @@ async def create_schedule(
         await _normalized_path(body.workspace_path) if body.workspace_path is not None else None
     )
     try:
+        frozen_settings = freeze_run_settings(
+            request.app.state.settings,
+            {**(body.settings or {}), "permission_mode": body.permission_mode},
+        )
+        if body.reasoning_mode is not None:
+            frozen_settings["reasoning_mode"] = body.reasoning_mode
         return await store.create_scheduled_run(
             principal_id=principal_id,
             goal=goal,
@@ -66,10 +72,7 @@ async def create_schedule(
             workspace_path=workspace_path,
             model=body.model.strip(),
             history=body.history or [],
-            settings=freeze_run_settings(
-                request.app.state.settings,
-                {**(body.settings or {}), "permission_mode": body.permission_mode},
-            ),
+            settings=frozen_settings,
             metadata=sanitize_run_metadata(body.metadata),
         )
     except WorkspaceAdmissionError as exc:

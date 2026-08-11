@@ -23,6 +23,33 @@ _IMAGE_TOOL_CAPABILITIES = {
 }
 
 
+def reasoning_mode_error(
+    model_binding: dict[str, Any],
+    reasoning_mode: str,
+) -> RunAdmissionError | None:
+    profile = model_binding.get("profile")
+    reasoning = profile.get("reasoning") if isinstance(profile, dict) else None
+    modes = reasoning.get("modes") if isinstance(reasoning, dict) else None
+    supported_modes = {
+        str(mode)
+        for mode in modes
+        if isinstance(mode, str) and mode in {"off", "high", "max"}
+    } if isinstance(modes, list) else {"off"}
+    if reasoning_mode not in supported_modes:
+        return RunAdmissionError(
+            "model_reasoning_mode_unsupported",
+            f"selected model does not support reasoning mode {reasoning_mode}",
+        )
+    return None
+
+
+def default_reasoning_mode(model_binding: dict[str, Any]) -> str:
+    profile = model_binding.get("profile")
+    reasoning = profile.get("reasoning") if isinstance(profile, dict) else None
+    default_mode = reasoning.get("default_mode") if isinstance(reasoning, dict) else None
+    return str(default_mode) if default_mode in {"off", "high", "max"} else "off"
+
+
 class RunModelBindings:
     def __init__(
         self,
@@ -54,6 +81,7 @@ class RunModelBindings:
                 "credential_ref": None,
                 "requested_model": requested_model,
                 "required_capabilities": ["streaming", "tool_calling"],
+                "reasoning_mode": "off",
             }, None
         if requested_model.startswith("local:"):
             parts = requested_model.split(":", 2)
@@ -198,7 +226,8 @@ class RunModelBindings:
         profile = apply_known_model_profile_defaults(
             profile,
             service_base_url=str(connection.get("base_url") or ""),
-            trusted_model_catalog=connection.get("preset_id") == "shejane-official",
+            trusted_model_catalog=connection.get("preset_id")
+            in {"shejane-official", "deepseek"},
         )
         profile["capabilities"] = normalized_model_capabilities(
             profile,
@@ -244,6 +273,8 @@ class RunModelBindings:
             "requested_model": requested_model,
             "model_id": model_id,
             "profile": profile,
+            "provider_family": str(profile.get("provider_family") or "unknown"),
+            "reasoning": dict(profile.get("reasoning") or {}),
             "required_capabilities": list(required_capabilities),
             "display_reasoning_summary": (
                 protocol == "openai_responses"
@@ -294,7 +325,8 @@ class RunModelBindings:
             profile = apply_known_model_profile_defaults(
                 profile,
                 service_base_url=str(connection.get("base_url") or ""),
-                trusted_model_catalog=connection.get("preset_id") == "shejane-official",
+                trusted_model_catalog=connection.get("preset_id")
+                in {"shejane-official", "deepseek"},
             )
             profile["capabilities"] = normalized_model_capabilities(
                 profile,

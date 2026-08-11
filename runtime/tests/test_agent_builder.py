@@ -26,6 +26,10 @@ def test_approval_reviewer_budget_handles_long_agent_runs() -> None:
 
 def test_runtime_prompt_is_built_from_invocation_context() -> None:
     from shejane_runtime.agent.builder import RuntimePromptMiddleware
+    from shejane_runtime.config import (
+        MAX_CONCURRENT_SUBAGENT_TASKS,
+        PREFERRED_SUBAGENT_CONCURRENCY,
+    )
     from shejane_runtime.agent.context_builder import RuntimeContext
 
     class Request:
@@ -68,6 +72,17 @@ def test_runtime_prompt_is_built_from_invocation_context() -> None:
     assert "Repair the persisted verification failure." in rendered
     assert "run_private" not in rendered
     assert "user_private" not in rendered
+
+    dispatch_section = rendered.split("## 多个独立任务用 subagent 并行", 1)[1].split(
+        "## 工具使用",
+        1,
+    )[0]
+    assert f"常规并行 {PREFERRED_SUBAGENT_CONCURRENCY} 个 `task`" in dispatch_section
+    assert f"最多并行 {MAX_CONCURRENT_SUBAGENT_TASKS} 个" in dispatch_section
+    assert (
+        dispatch_section.count('task(subagent_type="researcher"')
+        == PREFERRED_SUBAGENT_CONCURRENCY
+    )
 
 
 def test_runtime_model_is_selected_from_invocation_context() -> None:
@@ -669,7 +684,7 @@ def test_custom_middleware_keeps_tool_retry_but_no_unsafe_model_retry(tmp_path: 
     assert "ContextEditingMiddleware" not in names
 
 
-def test_custom_middleware_caps_research_and_subagent_dispatch(tmp_path: Path) -> None:
+def test_custom_middleware_leaves_subagent_dispatch_to_runtime_budget(tmp_path: Path) -> None:
     from langchain.agents.middleware import ToolCallLimitMiddleware
 
     from shejane_runtime.agent.builder import _custom_middleware
@@ -682,7 +697,7 @@ def test_custom_middleware_caps_research_and_subagent_dispatch(tmp_path: Path) -
     }
 
     assert limits["web.search"] == 10
-    assert limits["task"] == 2
+    assert "task" not in limits
 
 
 def test_run_uses_configured_hard_limit_and_task_aware_soft_limit() -> None:

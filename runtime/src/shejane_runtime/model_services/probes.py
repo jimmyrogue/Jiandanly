@@ -4,6 +4,7 @@ import asyncio
 import base64
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import HTTPException
@@ -15,7 +16,7 @@ from ..config import Settings
 from ..llm.tool_aliases import provider_tools as _provider_tools
 from ..llm.tool_aliases import rewrite_tool_names as _rewrite_tool_names
 from . import openai_compatible_endpoint
-from .profiles import default_model_protocol
+from .profiles import apply_known_model_profile_defaults, default_model_protocol
 
 
 async def _verify_model_service_compatibility(
@@ -26,6 +27,7 @@ async def _verify_model_service_compatibility(
     protocol: str | None = None,
     api_key: str,
     model_id: str,
+    provider_family: str | None = None,
 ) -> None:
     # ponytail: this probe needs one tool call and one short acknowledgement.
     probe_max_tokens = 512
@@ -36,6 +38,20 @@ async def _verify_model_service_compatibility(
         name="shejane.ping",
         description="Return a compatibility signal.",
     )
+    profile = apply_known_model_profile_defaults(
+        {
+            "model_id": model_id,
+            "provider_family": provider_family or "unknown",
+            "tool_calling": True,
+            "image_inputs": False,
+            "max_output_tokens": probe_max_tokens,
+        },
+        service_base_url=base_url,
+        trusted_model_catalog=(
+            provider_family == "deepseek"
+            or urlparse(base_url).hostname == "app.shejane.com"
+        ),
+    )
     try:
         async with asyncio.timeout(probe_timeout_seconds):
             model = _build_byok_chat_model(
@@ -45,11 +61,9 @@ async def _verify_model_service_compatibility(
                     "protocol": protocol or default_model_protocol(adapter_id, "agent_chat"),
                     "base_url": base_url,
                     "model_id": model_id,
-                    "profile": {
-                        "tool_calling": True,
-                        "image_inputs": False,
-                        "max_output_tokens": probe_max_tokens,
-                    },
+                    "provider_family": profile["provider_family"],
+                    "reasoning_mode": "off",
+                    "profile": profile,
                 },
                 model_api_key=api_key,
             ).bind(max_tokens=probe_max_tokens)
@@ -446,6 +460,7 @@ async def _verify_model_service_capability(
     protocol: str,
     api_key: str,
     model_id: str,
+    provider_family: str | None = None,
 ) -> None:
     if capability == "agent_chat":
         await _verify_model_service_compatibility(
@@ -455,6 +470,7 @@ async def _verify_model_service_capability(
             protocol=protocol,
             api_key=api_key,
             model_id=model_id,
+            provider_family=provider_family,
         )
         return
     if capability == "image_understanding":

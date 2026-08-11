@@ -133,11 +133,15 @@ def test_create_run_returns_run_record(client: TestClient) -> None:
     assert run["id"].startswith("run_")
     assert run["goal"] == "say hi"
     assert run["status"] == "queued"
+    assert run["reasoning_mode"] == "off"
+    assert run["model_phase"] == "waiting_provider"
     stored = asyncio.run(client.app.state.store.get_run(run["id"]))
     assert stored["principal_id"] == LOCAL_OWNER_PRINCIPAL_ID
     snapshot = json.loads(stored["settings_json"])
     assert snapshot["_snapshot_version"] == 1
     assert snapshot["permission_mode"] == "ask"
+    assert snapshot["reasoning_mode"] == "off"
+    assert snapshot["_model_binding"]["reasoning_mode"] == "off"
     assert snapshot["_model_binding"]["credential_ref"] == "tests:streaming_model"
     assert snapshot["_model_binding"]["required_capabilities"] == [
         "streaming",
@@ -151,6 +155,9 @@ def test_create_run_returns_run_record(client: TestClient) -> None:
         "max_model_calls": 100,
         "soft_model_call_limit": 12,
         "final_model_call_reserve": 2,
+        "subagent_budget_mode": "shared_model_budget",
+        "preferred_subagent_concurrency": 0,
+        "max_concurrent_subagent_tasks": 0,
     }
     assert "capabilities" not in snapshot["_model_binding"]
     assert "test-cloud-token" not in stored["settings_json"]
@@ -193,6 +200,9 @@ def test_complete_execution_policy_preserves_accepted_budget() -> None:
                 "max_model_calls": 60,
                 "soft_model_call_limit": 20,
                 "final_model_call_reserve": 2,
+                "subagent_budget_mode": "shared_model_budget",
+                "preferred_subagent_concurrency": 2,
+                "max_concurrent_subagent_tasks": 4,
             },
         },
     )
@@ -200,6 +210,9 @@ def test_complete_execution_policy_preserves_accepted_budget() -> None:
     assert policy["complexity"] == "complex"
     assert policy["max_model_calls"] == 60
     assert policy["soft_model_call_limit"] == 20
+    assert policy["subagent_budget_mode"] == "shared_model_budget"
+    assert policy["preferred_subagent_concurrency"] == 2
+    assert policy["max_concurrent_subagent_tasks"] == 4
 
 
 @pytest.mark.parametrize(
@@ -887,6 +900,60 @@ def test_run_admission_rejects_protocol_and_capability_mismatch(
     assert missing_capability.status_code == 409
     assert missing_capability.json()["detail"]["code"] == "capability_unavailable"
     assert client.get("/v1/runs", headers=headers).json() == {"runs": []}
+
+
+def test_run_admission_rejects_an_unsupported_reasoning_mode(client: TestClient) -> None:
+    response = client.post(
+        "/v1/runs",
+        headers={"Authorization": "Bearer tok"},
+        json=run_command("hello", reasoning_mode="high"),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "model_reasoning_mode_unsupported"
+
+
+def test_run_admission_uses_catalog_default_when_reasoning_mode_is_omitted(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinator = client.app.state.coordinator
+    original_model_admission = coordinator._model_admission
+
+    @asynccontextmanager
+    async def max_only_model_admission(*args, **kwargs):
+        async with original_model_admission(*args, **kwargs) as (binding, error):
+            yield (
+                {
+                    **binding,
+                    "profile": {
+                        **binding.get("profile", {}),
+                        "reasoning": {
+                            "supported": True,
+                            "modes": ["max"],
+                            "default_mode": "max",
+                            "display_policy": "activity_only",
+                        },
+                    },
+                },
+                error,
+            )
+
+    monkeypatch.setattr(coordinator, "_model_admission", max_only_model_admission)
+
+    response = client.post(
+        "/v1/runs",
+        headers={"Authorization": "Bearer tok"},
+        json=run_command("hello through max alias"),
+    )
+
+    assert response.status_code == 200
+    run = response.json()
+    assert run["reasoning_mode"] == "max"
+    stored = asyncio.run(client.app.state.store.get_run(run["id"]))
+    snapshot = json.loads(stored["settings_json"])
+    assert snapshot["reasoning_mode"] == "max"
+    assert snapshot["_model_binding"]["reasoning_mode"] == "max"
 
 
 def test_run_admission_requires_a_configured_model_service(tmp_path: Path) -> None:
@@ -2591,6 +2658,7 @@ def test_full_run_lifecycle_through_sse(client: TestClient) -> None:
         e[1].get("event_type") for e in events if isinstance(e[1], dict) and "event_type" in e[1]
     ]
     assert "run.started" in event_names
+    assert "llm.phase.changed" in event_names
     assert any(name in {"run.completed", "run.failed"} for name in event_names)
     # If completed, final text now lives at envelope.payload.final_text.
     for _name, envelope in events:
@@ -2640,13 +2708,22 @@ def test_run_diagnostics_include_handoff_summary(client: TestClient) -> None:
         "max_model_calls": 100,
         "soft_model_call_limit": 12,
         "final_model_call_reserve": 2,
-        "max_subagent_tasks": 0,
+        "subagent_budget_mode": "shared_model_budget",
+        "max_subagent_tasks": None,
+        "preferred_subagent_concurrency": 0,
+        "max_concurrent_subagent_tasks": 0,
         "max_subagent_model_calls": 0,
     }
     agent_call = next(call for call in body["model_calls"] if call["purpose"] == "agent")
     assert agent_call["logical_call_id"]
     assert agent_call["retry_attempt"] == 0
     assert agent_call["provider_request_id"] == "r"
+    assert agent_call["phase"] == "completed"
+    assert agent_call["request_started_at"]
+    assert agent_call["first_raw_chunk_at"]
+    assert agent_call["first_visible_output_at"]
+    assert agent_call["phase_started_at"]
+    assert agent_call["reasoning_tokens"] is None
     assert body["handoff"]["status"] == "completed"
     assert "completed" in body["handoff"]["headline"]
     assert body["handoff"]["ledger_state"] == "not_required"
@@ -2666,6 +2743,37 @@ def test_run_diagnostics_include_handoff_summary(client: TestClient) -> None:
     assert any(span["kind"] == "model" for span in spans.values())
     assert spans[f"span:checkpoint:{checkpoint['id']}"]["parent_id"] == trace["root_span_id"]
     assert spans[f"span:terminal:{run_id}"]["status"] == "completed"
+
+
+def test_complex_run_diagnostics_report_rolling_subagent_concurrency(
+    client: TestClient,
+) -> None:
+    run = client.post(
+        "/v1/runs",
+        headers={"Authorization": "Bearer tok"},
+        json=run_command("research and compare five independent current sources"),
+    ).json()
+
+    body = client.get(
+        f"/v1/runs/{run['id']}/diagnostics",
+        headers={"Authorization": "Bearer tok"},
+    ).json()
+
+    assert body["execution_policy"] == {
+        "complexity": "complex",
+        "plan_mode": "off",
+        "plan_required": False,
+        "subagent_allowed": True,
+        "reason": "complex_task",
+        "max_model_calls": 100,
+        "soft_model_call_limit": 24,
+        "final_model_call_reserve": 2,
+        "subagent_budget_mode": "shared_model_budget",
+        "max_subagent_tasks": None,
+        "preferred_subagent_concurrency": 3,
+        "max_concurrent_subagent_tasks": 5,
+        "max_subagent_model_calls": 12,
+    }
 
 
 def test_run_diagnostics_include_tool_receipt_namespace_and_parent_lineage(

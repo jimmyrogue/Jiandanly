@@ -271,6 +271,7 @@ describe('createLocalRun plugin selection', () => {
         clientMessageId: 'msg_plugin_run',
         goal: 'use plugin',
         mode: 'local:test:model',
+        reasoningMode: 'high',
         requiredTools: ['image.generate'],
         pluginRefs: [
           {
@@ -290,6 +291,7 @@ describe('createLocalRun plugin selection', () => {
     const request = fetcher.mock.calls[0][1] as RequestInit
     const body = JSON.parse(String(request.body))
     expect(body.goal).toBe('use plugin')
+    expect(body.reasoning_mode).toBe('high')
     expect(body.user_input).toBeUndefined()
     expect(body.required_capabilities).toContain('plugins')
     expect(body.required_tools).toEqual(['image.generate'])

@@ -1460,6 +1460,121 @@ def test_subagent_transient_model_failure_is_retried_and_contained(monkeypatch) 
     assert len({call["logical_call_id"] for call in retries}) == 1
 
 
+def test_failed_subagent_can_be_replaced_after_two_prior_task_attempts(monkeypatch) -> None:
+    from shejane_runtime.llm import ledger
+
+    original_retry_decision = ledger.build_retry_decision
+
+    def immediate_retry(*args, **kwargs):
+        return {**original_retry_decision(*args, **kwargs), "delay_s": 0.0}
+
+    monkeypatch.setattr(ledger, "build_retry_decision", immediate_retry)
+    unavailable = [
+        (
+            "llm.error",
+            {
+                "request_id": "replacement-provider-unavailable",
+                "message": "Service temporarily unavailable",
+                "code": "service_unavailable",
+                "recoverable": True,
+                "retryable": True,
+            },
+        )
+    ]
+    handler = RecordingHandler(
+        scripts=[
+            [
+                (
+                    "llm.tool_call",
+                    {
+                        "id": "call_first_task",
+                        "name": "task",
+                        "arguments": {
+                            "subagent_type": "researcher",
+                            "description": "Check the first source",
+                        },
+                    },
+                ),
+                ("llm.done", {"request_id": "parent-1", "finish_reason": "tool_calls"}),
+            ],
+            [
+                ("llm.delta", {"content_delta": "First source checked."}),
+                ("llm.done", {"request_id": "child-1", "finish_reason": "stop"}),
+            ],
+            [
+                (
+                    "llm.tool_call",
+                    {
+                        "id": "call_failed_task",
+                        "name": "task",
+                        "arguments": {
+                            "subagent_type": "researcher",
+                            "description": "Check the second source",
+                        },
+                    },
+                ),
+                ("llm.done", {"request_id": "parent-2", "finish_reason": "tool_calls"}),
+            ],
+            unavailable,
+            unavailable,
+            unavailable,
+            [
+                (
+                    "llm.tool_call",
+                    {
+                        "id": "call_replacement_task",
+                        "name": "task",
+                        "arguments": {
+                            "subagent_type": "researcher",
+                            "description": "Replace the failed second-source check",
+                        },
+                    },
+                ),
+                ("llm.done", {"request_id": "parent-3", "finish_reason": "tool_calls"}),
+            ],
+            [
+                ("llm.delta", {"content_delta": "Replacement source checked."}),
+                ("llm.done", {"request_id": "child-3", "finish_reason": "stop"}),
+            ],
+            [
+                ("llm.delta", {"content_delta": "Replacement completed the research."}),
+                ("llm.done", {"request_id": "parent-final", "finish_reason": "stop"}),
+            ],
+        ]
+    )
+
+    with _make_client(monkeypatch, handler) as client:
+        headers = {"Authorization": "Bearer tok"}
+        run = client.post(
+            "/v1/runs",
+            headers=headers,
+            json=run_command(
+                "Research independent sources and replace a transiently failed subagent"
+            ),
+        ).json()
+        with client.stream(
+            "GET",
+            f"/v1/runs/{run['id']}/stream",
+            headers=headers,
+        ) as response:
+            events = _parse_sse(response.read().decode("utf-8"))
+        diagnostics = client.get(
+            f"/v1/runs/{run['id']}/diagnostics",
+            headers=headers,
+        ).json()
+
+    task_receipts = [
+        receipt for receipt in diagnostics["tool_receipts"] if receipt["tool_name"] == "task"
+    ]
+    assert [receipt["status"] for receipt in task_receipts] == [
+        "completed",
+        "failed",
+        "completed",
+    ]
+    assert "run.completed" in {name for name, _payload in events}
+    assert "Tool call limit exceeded" not in json.dumps(events)
+
+
 def test_capability_2c_subagent_tools_share_review_and_receipt_boundary(
     monkeypatch,
     tmp_path,
@@ -2336,10 +2451,7 @@ def test_capability_7_todolist_middleware_exposes_write_todos_tool(monkeypatch, 
 
 def test_capability_2b_subagent_parallel_dispatch(monkeypatch) -> None:
     """Verify the LLM can dispatch **multiple** task() subagents in one
-    turn. Mock LLM emits two `task` tool_calls in the same response —
-    we should see two durable `subagent.spawned` events. ToolNode runs
-    concurrency-safe tools in parallel via asyncio.gather, so we don't
-    care about ordering; we only care both showed up."""
+    turn and merge their results without leaking private control state."""
     handler = RecordingHandler(
         scripts=[
             [
@@ -2379,6 +2491,10 @@ def test_capability_2b_subagent_parallel_dispatch(monkeypatch) -> None:
                 ("llm.delta", {"content_delta": "found B"}),
                 ("llm.done", {"request_id": "rb", "finish_reason": "stop"}),
             ],
+            [
+                ("llm.delta", {"content_delta": "Combined findings."}),
+                ("llm.done", {"request_id": "final", "finish_reason": "stop"}),
+            ],
         ]
     )
     with _make_client(monkeypatch, handler) as client:
@@ -2392,6 +2508,8 @@ def test_capability_2b_subagent_parallel_dispatch(monkeypatch) -> None:
     operation_ids = {e[1].get("operation_id") for e in spawn_events}
     assert len(operation_ids) == 2
     assert {e[1].get("tool_call_id") for e in spawn_events} == {"call_p1", "call_p2"}
+    assert "run.completed" in {name for name, _payload in events}
+    assert "run.failed" not in {name for name, _payload in events}
 
 
 def test_capability_9_memory_search_tool_in_agent(monkeypatch, tmp_path) -> None:

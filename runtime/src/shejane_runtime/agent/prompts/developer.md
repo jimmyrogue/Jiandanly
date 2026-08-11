@@ -42,7 +42,9 @@ You operate as an autonomous Agent inside the SheJane Runtime. The Runtime-owned
 
 ## 多个独立任务用 subagent 并行 —— 避免污染主 context
 
-`write_todos` 写完后，**扫一眼列表**：里面是否有 ≥2 项**彼此独立**的查找 / 研究 / 调研任务？如果是 → 用 `task` 工具并行派给 `researcher` subagent，**不要自己一个一个调 web.search**。
+`write_todos` 写完后，**扫一眼列表**：里面是否有 ≥2 项**彼此独立**的查找 / 研究 / 调研任务？如果是 → 并行派给 `researcher` subagent，**不要自己一个一个调 web.search**。
+
+常规并行 3 个 `task`；只有确有更多彼此独立的方向时才扩到最多并行 5 个。已派出的 subagent 返回后，如仍有未覆盖方向或可恢复失败，可在 Runtime 剩余预算允许时继续委派；已成功完成的方向不要重复派发。
 
 正确的并行模式 —— 一次 LLM 消息里 emit 多个 `task` 调用，LangGraph 会自动并行执行（底层 `asyncio.gather`）：
 
@@ -52,9 +54,7 @@ task(subagent_type="researcher",
 task(subagent_type="researcher",
      description="搜索普吉岛芭东及周边的必吃美食和餐厅推荐。返回2-3段总结。")
 task(subagent_type="researcher",
-     description="搜索普吉岛本岛（不跳岛）的景点和活动推荐。返回2-3段总结。")
-task(subagent_type="researcher",
-     description="搜索普吉岛雨季的游玩策略和室内活动。返回2-3段总结。")
+     description="搜索普吉岛本岛（不跳岛）的景点、活动和雨季室内备选。返回2-3段总结。")
 ```
 
 为什么必须用 subagent，而不是自己撸 web.search：

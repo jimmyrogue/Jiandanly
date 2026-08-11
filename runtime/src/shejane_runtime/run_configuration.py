@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from .config import Settings, clamp_run_budget
+from .config import (
+    MAX_CONCURRENT_SUBAGENT_TASKS,
+    PREFERRED_SUBAGENT_CONCURRENCY,
+    Settings,
+    clamp_run_budget,
+)
 from .middleware.tool_visibility import execution_policy_for_task
 
 SIMPLE_MODEL_CALL_LIMIT = 12
@@ -85,11 +90,37 @@ def _execution_policy_snapshot(
         if isinstance(stored_reserve, int) and stored_reserve > 0
         else _agent_model_call_final_reserve(hard_limit)
     )
+    subagent_allowed = bool(policy.get("subagent_allowed")) and settings_snapshot.get(
+        "subagents"
+    ) is not False
+    stored_max_concurrency = policy.get("max_concurrent_subagent_tasks")
+    max_concurrent_subagent_tasks = (
+        int(stored_max_concurrency)
+        if isinstance(stored_max_concurrency, int)
+        and not isinstance(stored_max_concurrency, bool)
+        and stored_max_concurrency >= 0
+        else MAX_CONCURRENT_SUBAGENT_TASKS
+    )
+    stored_preferred_concurrency = policy.get("preferred_subagent_concurrency")
+    preferred_subagent_concurrency = min(
+        int(stored_preferred_concurrency)
+        if isinstance(stored_preferred_concurrency, int)
+        and not isinstance(stored_preferred_concurrency, bool)
+        and stored_preferred_concurrency >= 0
+        else PREFERRED_SUBAGENT_CONCURRENCY,
+        max_concurrent_subagent_tasks,
+    )
+    if not subagent_allowed:
+        max_concurrent_subagent_tasks = 0
+        preferred_subagent_concurrency = 0
     return {
         **policy,
         "max_model_calls": hard_limit,
         "soft_model_call_limit": soft_limit,
         "final_model_call_reserve": final_reserve,
+        "subagent_budget_mode": "shared_model_budget",
+        "preferred_subagent_concurrency": preferred_subagent_concurrency,
+        "max_concurrent_subagent_tasks": max_concurrent_subagent_tasks,
     }
 
 

@@ -188,7 +188,10 @@ class DiagnosticsExecutionPolicy(BaseModel):
     max_model_calls: int = Field(ge=1)
     soft_model_call_limit: int = Field(ge=1)
     final_model_call_reserve: int = Field(ge=1)
-    max_subagent_tasks: int = Field(ge=0)
+    subagent_budget_mode: Literal["shared_model_budget"]
+    max_subagent_tasks: int | None = Field(default=None, ge=0)
+    preferred_subagent_concurrency: int = Field(ge=0)
+    max_concurrent_subagent_tasks: int = Field(ge=0)
     max_subagent_model_calls: int = Field(ge=0)
 
 
@@ -207,8 +210,22 @@ class DiagnosticsModelCall(BaseModel):
     provider_request_id: str | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    phase: Literal[
+        "waiting_provider",
+        "reasoning",
+        "answering",
+        "tool_calling",
+        "completed",
+    ]
     error_code: str | None = None
     created_at: str
+    request_started_at: str
+    response_headers_at: str | None = None
+    first_raw_chunk_at: str | None = None
+    reasoning_started_at: str | None = None
+    first_visible_output_at: str | None = None
+    phase_started_at: str
     first_output_at: str | None = None
     completed_at: str | None = None
 

@@ -114,6 +114,11 @@ class ScheduledRunDispatcher:
                 goal=str(schedule.get("goal") or ""),
                 workspace_path=schedule.get("workspace_path"),
                 mode=str(schedule.get("model") or "auto"),
+                reasoning_mode=(
+                    str(schedule_settings["reasoning_mode"])
+                    if schedule_settings.get("reasoning_mode")
+                    else None
+                ),
                 history=_json_list(schedule.get("history_json")),
                 settings=schedule_settings,
                 metadata=metadata,
