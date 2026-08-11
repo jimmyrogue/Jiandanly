@@ -59,28 +59,26 @@ Client 只展示连接流程和 Runtime 返回的状态，不复制厂商规则�
 
 Agent 对话能力可明确保存 `openai_chat_completions`、`openai_responses`、
 `anthropic_messages` 或 `google_generate_content` 协议。OpenAI 默认使用 Responses；
-DeepSeek V4 Flash 使用 Responses，V4 Pro 在官方声明支持前继续使用 Chat Completions。
+DeepSeek V4 Flash 和 V4 Pro 使用 Chat Completions，并通过模型目录声明明确的
+`off / high / max` 推理档位。
 OpenAI 官方 Responses 请求固定使用 `store: false`，并请求
 `reasoning.encrypted_content`，使 Runtime 可以在不依赖供应商会话存储的情况下重放推理
-item；DeepSeek 的 Responses 本身始终不存储，Runtime 不向其发送不支持的 `store` 或
-`include`。供应商返回 `response.incomplete` 时，P8 会把调用记为明确失败，而不是提交
+item。DeepSeek Chat Completions 在工具调用后的下一轮按官方要求回放上一轮
+`reasoning_content`；该内容只存在于 Runtime 内部消息，不进入公开 SSE 或展示快照。
+供应商返回 `response.incomplete` 时，P8 会把调用记为明确失败，而不是提交
 截断答案；该次调用已经返回的总 token、缓存 token 与 reasoning token 仍写入账本。
-官方 OpenAI/DeepSeek Responses 连接的内部 approval、clarification、completion reviewer
+官方 OpenAI Responses 连接的内部 approval、clarification、completion reviewer
 会自动使用严格 JSON Schema，其他协议保留现有 JSON 解析和确定性校验兜底。依据见
 [OpenAI Responses migration](https://developers.openai.com/api/docs/guides/migrate-to-responses)、
 [OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs) 和
-[DeepSeek Responses API](https://api-docs.deepseek.com/guides/responses_api)。
-在 OpenAI 官方已声明支持 Web Search 的 GPT-5、GPT-4.1、o3/o4、`chat-latest`
-和 DeepSeek V4 Flash 上，Runtime
+[DeepSeek Thinking Mode](https://api-docs.deepseek.com/guides/thinking_mode)。
+在 OpenAI 官方已声明支持 Web Search 的 GPT-5、GPT-4.1、o3/o4 和 `chat-latest` 上，Runtime
 会随 Responses 请求绑定托管的 `{"type":"web_search"}`；该工具由供应商在同一次模型
 调用内执行，不进入本地 P10 ToolNode。Responses 返回的 URL 注解会投影成可见、可点击
 的行内引用；OpenAI 官方连接还会请求 `web_search_call.action.sources`，把搜索实际查阅
-但未在正文引用的 URL 一并去重展示在回答末尾。DeepSeek 当前不支持 Responses 的
-`include`，因此只能展示其返回的行内引用来源，不能声称是完整检索列表。DeepSeek 的
-托管工具名是 `web_search`，不是 Runtime 本地的 `web.fetch`；
-后者仍保留 SSRF 防护与本地工具回执。规范依据见
-[OpenAI Web Search](https://developers.openai.com/api/docs/guides/tools-web-search) 和
-[DeepSeek Responses API](https://api-docs.deepseek.com/guides/responses_api)。
+但未在正文引用的 URL 一并去重展示在回答末尾。DeepSeek Chat Completions 不绑定该托管
+工具，仍使用 Runtime 的 `web.fetch`，并保留 SSRF 防护与本地工具回执。规范依据见
+[OpenAI Web Search](https://developers.openai.com/api/docs/guides/tools-web-search)。
 当前不做动态路由、本地模型、SheJane 自有额度、计费或模型网关。
 
 ## 核心模型

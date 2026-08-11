@@ -27,7 +27,7 @@
 1. Runtime 持久化的全局 `max_model_calls` 默认提高到 100，继续作为最终硬上限。
 2. 给每个子 Agent 显式挂载已安装的 `ModelCallLimitMiddleware(run_limit=50, exit_behavior="end")`，达到上限时返回明确的有界结果，不再抛到外层对账。
 3. 给 `researcher` 显式挂载 `ToolCallLimitMiddleware(tool_name="web.fetch", run_limit=10)`，把提示词限制变成代码约束。不要新增自定义计数 middleware。
-4. 主 Agent 每个 Run 最多派发五个 `task`，并为最终汇总和后续修复保留五次模型调用。并行子 Agent 共享剩余的全局预算，但每个子 Agent 仍受自己的 50 次上限约束。
+4. 主 Agent 不设置累计 `task` 次数。调度偏好并发 3 个，Runtime 强制单批最多 5 个；完成后可在共享预算允许时滚动补位。每个子 Agent 仍受自己的 12 次模型调用上限约束，父 Run 的持久模型账本保留最终汇总额度。
 5. `task` 自身不执行外部副作用；其子工具已有各自的持久化回执。因此 `ModelCallBudgetExceeded`、`ModelCallLimitExceededError` 等确定性子任务失败应把外层 `task` 回执结算为 `failed`，返回模型可见的失败结果，不得进入 `outcome_unknown` 对账。真实副作用工具是否需要对账仍由其自己的回执决定。
 
 建议从 `researcher` 的 5 次 `web.fetch` 与有界模型回合开始；不先做按 Token、美元或动态任务复杂度分配。这些能力只有在现有固定上限的评测证明不足时才需要。

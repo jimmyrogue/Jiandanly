@@ -132,13 +132,14 @@ MCP Server 只从 Runtime 自有配置读取，不会隐式启动 Claude Desktop
   │   │      │                                                                   │    │
   │   │      ▼                                                                   │    │
   │   │   event_translator.translate(kind, payload)                              │    │
-  │   │      │     → llm.round.started / llm.delta / llm.reasoning /            │    │
+  │   │      │     → llm.round.started / llm.delta /                              │    │
   │   │      │       llm.tool_call_chunk /                                       │    │
   │   │      │       tool.completed / tool.failed / agent.custom                 │    │
   │   │      │                                                                   │    │
   │   │      ├─ task Tool Receipt 同事务投影                                     │    │
   │   │      │       subagent.spawned / started / waiting /                      │    │
   │   │      │       completed / failed / canceled / outcome_unknown             │    │
+  │   │      LedgerChatModel → llm.phase.changed（SQLite + seq，可回放）          │    │
   │   │      ▼                                                                   │    │
   │   │   状态事件 → SQLite + seq       临时增量 → 有界订阅队列（无 seq）          │    │
   │   │      │                          │                                       │    │
@@ -182,6 +183,7 @@ MCP Server 只从 Runtime 自有配置读取，不会隐式启动 Claude Desktop
   │     │  • 模型自动重试已禁用；产生输出后不得从头重试               │     │
   │     │  • 本地 direct model fallback 已禁用；没有静默供应商切换             │     │
   │     │  • local_model_calls 原子预留持久调用预算；子调用关联当前 task operation  │     │
+  │     │  • task 无累计次数上限；调度偏好并发 3、单批硬上限 5，容量由持久模型账本决定 │     │
   │     │  • OutboundPolicy 只处理出站副本：强制过滤凭据，外部供应商按策略脱敏   │     │
   │     │  • 按模型 max_input_tokens 、工具结构和安全余量建立硬上下文边界     │     │
   │     │  • 插件已产生产物时注入交付指令，并隐藏定位产物的兜底工具与同一 Action │     │
@@ -189,9 +191,11 @@ MCP Server 只从 Runtime 自有配置读取，不会隐式启动 Claude Desktop
   │     │                                                                          │     │
   │     │ wrap_model_call (栈式 nested)                                             │     │
   │     │       ↓                                                                  │     │
-  │     │ LedgerChatModel 记录首次输出 → 已绑定的唯一供应商模型               │     │
+  │     │ LedgerChatModel 记录请求/响应头/首 chunk/推理/首个公开输出时间      │     │
   │     │       ↓                                                                  │     │
   │     │   OpenAI Responses 无状态重放加密 reasoning；官方 reviewer 用严格 schema │     │
+  │     │   DeepSeek Chat Completions 显式 off/high/max；工具回合内部回放 reasoning │     │
+  │     │   原始 reasoning 不进 SSE；Client 只见可恢复的模型阶段和耗时             │     │
   │     │   response.incomplete 明确失败；总量、cache、reasoning usage 写入账本    │     │
   │     │       ↓                                                                  │     │
   │     │   合格 Responses 模型额外绑定托管 web_search；收敛轮和审查调用禁用       │     │
@@ -241,6 +245,7 @@ MCP Server 只从 Runtime 自有配置读取，不会隐式启动 Claude Desktop
   │     │  ┌─ 工具分派 ─────────────────────────────────────────────────┐         │     │
   │     │  │  task(subagent_type=..., description=...) → 子 agent 隔离 context + LLM │     │     │
   │     │  │       │                       (researcher / writer)        │         │     │
+  │     │  │       ├─ 单批按稳定顺序接纳最多 5 个；完成后可按共享预算继续下一批 │     │     │
   │     │  │       ├─ operation_id 是一次调用身份；parent_operation_id 记录嵌套关系 │     │     │
   │     │  │       └─ 跑完 → task receipt 结算 + 生命周期事件；ToolMessage 仅是结果 │     │     │
   │     │  │                                                            │         │     │
@@ -392,7 +397,7 @@ MCP Server 只从 Runtime 自有配置读取，不会隐式启动 Claude Desktop
 | 步上限 | `before_model` 计数 | `test_middleware` |
 | 上下文压缩 | Runtime 把已接纳历史原样交给 Deep Agents 的令牌感知摘要；不再按消息数二次截断或生成关键词摘要。旧对话首次迁入 Runtime 时，client 只保留 256 条 / 750000 字符的传输安全边界 | `test_runs_http` / `conversationHistory.test` |
 | 工具结构可见性 | 完整工具集固定属于图定义；Runtime 在模型请求副本中确定性隐藏无关工具。普通事实查询隐藏 `task/team/child/mailbox`；复杂任务、明确联网调研、协作意图和 durable child 保留相应工具。明确 blocked 或策略隐藏的工具同时在 `wrap_tool_call` 拒绝，即使模型猜中名字也不能执行 | `test_tool_visibility` / `test_model_ledger` / `test_agent_builder` / `test_e2e_capabilities` |
-| 动态模型调用预算 | 用户设置的 `max_model_calls` 是持久模型账本的硬上限，不再因简单任务静默收紧到 12。简单任务和复杂任务分别使用 12/24 的软阈值；跨过软阈值后关闭 `task` / `team.run` 同步委派，并向模型请求注入剩余回合与收敛指导，普通 Tool 仍可继续。最近 12 次只读调用中同名同参数出现 2 次时提示改路，出现 3 次或进入最终 2 个逻辑回合的重试安全预留时隐藏全部工具并要求基于已有证据生成最终回答；小于 7 的硬上限仍为普通 Tool 工作至少保留首轮。收敛不能绕过 P9 的 required Tool、Todo 或验证门禁，模型猜测的隐藏 Tool 也不会执行。Diagnostics 同时导出硬上限、软阈值和最终回答预留；真正耗尽硬上限才产生 `model_call_budget_exhausted` | `test_budget_control` / `test_model_ledger` / `test_agent_builder` / `test_runs_http` |
+| 动态模型调用预算 | 用户设置的 `max_model_calls` 是持久模型账本的硬上限，不再因简单任务静默收紧到 12。简单任务和复杂任务分别使用 12/24 的软阈值；跨过软阈值后关闭 `task` / `team.run` 同步委派，并向模型请求注入剩余回合与收敛指导，普通 Tool 仍可继续。`task` 不再有固定累计次数：Agent 调度偏好每批并发 3，Runtime 按模型批次的稳定顺序执行并强制单批最多 5 个；已接纳任务完成或失败后，只要共享账本仍有委派容量即可滚动补位。失败已消耗的模型调用不退款，subagent 仍受单任务 12 次模型调用约束，最终回答的重试安全预留由 subagent 模型代理强制保留。最近 12 次只读调用中同名同参数出现 2 次时提示改路，出现 3 次或进入最终 2 个逻辑回合的重试安全预留时隐藏全部工具并要求基于已有证据生成最终回答。Diagnostics 导出 `shared_model_budget`、nullable 的累计上限、偏好/最大并发、单任务上限以及父 Run 的硬/软/最终预留；真正耗尽硬上限才产生 `model_call_budget_exhausted` | `test_budget_control` / `test_model_ledger` / `test_agent_builder` / `test_runs_http` / `test_e2e_capabilities` / Electron E2E |
 | 供应商上下文硬限制 | 每次真实模型调用前按声明窗口扣除工具结构并裁剪请求副本；剩余空间不足最小合法请求时在预留调用账本和联系供应商之前明确失败 | `test_model_ledger` |
 | 输出、时间与用量边界 | 模型资料限制最大输出，所有模型服务调用有硬超时；Runtime 记录 token，并用调用次数、输出和时间限制资源 | `test_model_ledger` / model-service tests |
 | research 收敛 | `before_model` per-tool 计数 | `test_middleware` |

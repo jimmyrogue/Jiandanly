@@ -161,11 +161,11 @@ Client 的“模型服务”设置调用 Runtime 的 `/v1/model-services` 接口
 
 若某个旧凭据因系统授权或开发版可执行身份变化而不可读，Runtime 仍返回其他模型服务，并把该连接标记为“需要 API Key”。用户可在原连接上重新填写 Key；新凭据验证并切换成功后，即使旧凭据暂时无法由 Runtime 删除，也不会回滚可用的新连接。旧条目仍留在操作系统凭据库中，可由用户之后通过系统凭据管理工具清理。
 
-入口包括 DeepSeek、Kimi、千问、GLM、MiniMax、硅基流动、OpenAI、Anthropic、Google Gemini 和“连接已有服务”。官方服务的地址与接口格式由 Runtime 固定，用户只选择区域并填写 API Key；DeepSeek V4 Flash 使用官方 `https://api.deepseek.com` Responses API，当前尚未获官方 Responses 支持的 V4 Pro 继续使用 Chat Completions。已有服务会先自动识别 OpenAI Chat 或 Anthropic Messages 格式，也可在高级设置中明确选择 Google GenerateContent。
+入口包括 DeepSeek、Kimi、千问、GLM、MiniMax、硅基流动、OpenAI、Anthropic、Google Gemini 和“连接已有服务”。官方服务的地址与接口格式由 Runtime 固定，用户只选择区域并填写 API Key；DeepSeek V4 Flash 与 V4 Pro 都使用官方 Chat Completions 协议。已有服务会先自动识别 OpenAI Chat 或 Anthropic Messages 格式，也可在高级设置中明确选择 Google GenerateContent。
 
-OpenAI 官方连接默认使用 Responses，也可按模型选择 Chat Completions；Anthropic 使用原生 Messages；Google Gemini 使用原生 GenerateContent。Runtime 在 Run 接纳时冻结具体协议，不会按品牌猜测或在失败后静默换协议。OpenAI 官方 Responses 固定发送 `store: false` 并回放返回的加密 reasoning item，不依赖供应商保存会话；DeepSeek Responses 按官方约束始终无状态，Runtime 不发送其不支持的 `store/include`。`response.incomplete` 会成为明确的模型调用失败，不会把截断内容当作成功答案；其总 token、缓存 token 和 reasoning token 仍保存在 `local_model_calls.usage_json`。官方 OpenAI/DeepSeek Responses 的内部 approval、clarification、completion reviewer 自动使用严格 JSON Schema，不新增用户设置。
+OpenAI 官方连接默认使用 Responses，也可按模型选择 Chat Completions；Anthropic 使用原生 Messages；Google Gemini 使用原生 GenerateContent。Runtime 在 Run 接纳时冻结具体协议，不会按品牌猜测或在失败后静默换协议。OpenAI 官方 Responses 固定发送 `store: false` 并回放返回的加密 reasoning item，不依赖供应商保存会话。DeepSeek 模型目录明确声明 `off / high / max`，Client 显示“快速 / 深度 / 最深”；每个 Run 和计划任务都冻结所选档位。`off` 明确发送禁用 thinking，`high / max` 明确发送启用 thinking 与对应 effort；不支持的组合在接纳阶段失败，不静默降档。DeepSeek 工具调用后的下一轮会回放上一轮 `reasoning_content`，但原始内容不进入公开 SSE、诊断或界面。`response.incomplete` 会成为明确的模型调用失败，不会把截断内容当作成功答案；总 token、缓存 token 和 reasoning token 写入模型调用账本。
 
-OpenAI 官方已支持 Web Search 的 GPT-5、GPT-4.1、o3/o4、`chat-latest` 与 DeepSeek V4 Flash 使用 Responses 时会自动获得供应商托管的 `web_search`，默认由模型决定是否搜索；Chat Completions、自定义中转、DeepSeek V4 Pro 和独立审查/标题调用不会获得该工具。托管搜索的 URL 注解在最终消息中保存为可点击行内引用；OpenAI 官方连接还请求完整的 `web_search_call.action.sources`，并在回答末尾展示所有去重后的已查阅 URL。DeepSeek 当前忽略 Responses 的 `include`，所以只能展示其实际返回的行内引用来源，不能保证是完整检索列表。Runtime 尚不设置域名过滤、位置或搜索上下文大小。本地 `web.fetch` 不受影响。这些普通函数工具调用路径共用同一套可逆 wire name：工具定义、`tool_choice`、历史 assistant 调用和 `ToolMessage.name` 一致编码，返回 Runtime 后恢复内部点号名称；改名不会改变 call ID、调用顺序、OpenAI reasoning item、Anthropic thinking/signature 或 Gemini thought signature。
+OpenAI 官方已支持 Web Search 的 GPT-5、GPT-4.1、o3/o4 与 `chat-latest` 会自动获得供应商托管的 `web_search`，默认由模型决定是否搜索；Chat Completions、自定义中转、DeepSeek 和独立审查/标题调用不会获得该托管工具，仍可使用 Runtime 的本地 `web.fetch`。托管搜索的 URL 注解在最终消息中保存为可点击行内引用；OpenAI 官方连接还请求完整的 `web_search_call.action.sources`，并在回答末尾展示所有去重后的已查阅 URL。Runtime 尚不设置域名过滤、位置或搜索上下文大小。这些普通函数工具调用路径共用同一套可逆 wire name：工具定义、`tool_choice`、历史 assistant 调用和 `ToolMessage.name` 一致编码，返回 Runtime 后恢复内部点号名称；改名不会改变 call ID、调用顺序、OpenAI reasoning item、DeepSeek `reasoning_content`、Anthropic thinking/signature 或 Gemini thought signature。
 
 Runtime 不在 Client 启动时访问外部服务。新增或更新连接只尝试读取远端模型目录并保存凭据，不自动调用目录中的每个模型，也不在连接成功后弹出兼容性测试；`/models` 失败时，预置服务会保留内置或最近缓存目录。凭据可读且声明或推断为 Agent 对话用途的目录模型会立即用于模型选择和 Agent Run，`verified` 不是可用性门禁。模型服务“更多”中的“测试连接”只选择该服务推荐的 Agent 对话模型，没有推荐项时选择第一个 Agent 对话模型；“高级兼容性测试”可明确选择其他模型、用途和协议。Runtime 此时才使用正式 Agent 共用的 Provider 适配器完成流式 `模型 → shejane.ping 工具 → 工具结果 → 最终回答`。探针故意使用内部点号名称以覆盖生产别名和第二轮历史重放，最多生成 512 tokens，并在 30 秒内完成整个闭环。测试只更新兼容性记录；失败不会禁用模型或连接，真实 Run 的 Provider 错误仍按原错误分类返回。
 
@@ -263,7 +263,7 @@ make eval
 
 默认报告写入 `.tmp/eval-report.json`。可用 `SHEJANE_EVAL_REPORT` 修改输出路径，用 `SHEJANE_EVAL_BASELINE` 指向上一份报告以计算通过率和 case 变化；报告包含 Runtime/模型版本、轨迹、工作区结果和 grader 结论，不保存 API Key。
 
-`GET /v1/runs/{run_id}/diagnostics` 返回 schema v2：除持久 Trace 外，还包含 Client/Runtime 构建身份、平台、架构、实际生效的 Plan/协作/模型预算、每次模型尝试的逻辑调用 ID、重试序号和 provider request ID，以及 Tool Receipt 的 namespace 与父操作。子 Agent 模型和工具 Span 按 Receipt 父子关系挂载，不再按时间猜测。导出不包含原始提示词、工具参数、附件正文、密钥或大结果；外部 Langfuse/LangSmith tracing 仍是可选出口，不是事实来源。
+`GET /v1/runs/{run_id}/diagnostics` 返回 schema v2：除持久 Trace 外，还包含 Client/Runtime 构建身份、平台、架构、实际生效的 Plan/协作/模型预算、每次模型尝试的逻辑调用 ID、重试序号、provider request ID、reasoning token，以及请求开始、响应头、首个原始 chunk、推理开始、首个公开输出和当前阶段时间。这样可以区分 Client/排队、供应商首包、隐藏推理和公开首字延迟。子 Agent 模型和工具 Span 按 Receipt 父子关系挂载，不再按时间猜测。导出不包含原始提示词、原始 reasoning、工具参数、附件正文、密钥或大结果；外部 Langfuse/LangSmith tracing 仍是可选出口，不是事实来源。
 
 ## 插件安装与信任
 

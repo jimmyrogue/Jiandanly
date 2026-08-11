@@ -38,7 +38,7 @@ P4 是主阶段，因为本设计改变的是“Runtime 如何向 Client 提供�
 2. `reasoning` 只有一个槽位，新回合会覆盖旧回合。
 3. Tool、审批、验证和 SubAgent 由 Client 从通用事件推断并分散保存。
 4. `AgentProgress` 在 Run 完成或正文开始出现时隐藏过程。
-5. `llm.delta`、`llm.reasoning` 和 `tool.progress` 是临时事件，历史恢复无法依赖它们。
+5. `llm.delta` 和 `tool.progress` 是临时事件；`llm.phase.changed` 已持久化并可从 SSE 游标回放，模型阶段还可由 Run 快照恢复，完整逐字历史仍不能依赖临时事件。
 
 因此目标不是公开原始 chain-of-thought，也不是增加一个更醒目的“思考中”动画，而是让用户可靠地看到：
 

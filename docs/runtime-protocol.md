@@ -1,6 +1,6 @@
 # Runtime HTTP 与 SSE 协议
 
-> 本文记录当前公开协议。线程快照返回每个 Run 的安全事件高水位，客户端通过 `?after=<seq>` 恢复持久状态；游标超出保留窗口时重新读取权威快照。逐字文本、推理、临时用量和未完成调用片段只通过有界实时通道发送，断线后不重放。P4 的阶段边界见 [`harness-runtime-stages.md`](harness-runtime-stages.md)。
+> 本文记录当前公开协议。线程快照返回每个 Run 的安全事件高水位，客户端通过 `?after=<seq>` 恢复持久状态；游标超出保留窗口时重新读取权威快照。逐字文本、临时用量和未完成调用片段只通过有界实时通道发送，断线后不重放；模型阶段是带游标的可恢复事件。P4 的阶段边界见 [`harness-runtime-stages.md`](harness-runtime-stages.md)。
 
 适用于 `GET /v1/runs/{run_id}/stream`（`Content-Type: text/event-stream`）。
 
@@ -81,13 +81,15 @@ run 失败/取消等状态变化才会触发 `missing` 或 `stale`。
 | event_type | 触发时机 | payload |
 |---|---|---|
 | `llm.delta` | 每个 streamed token（assistant content） | `content: string` |
-| `llm.reasoning` | DeepSeek-style thinking-mode chunk | `content: string` |
+| `llm.phase.changed` | 顶层 Agent 模型回合开始，或输出从等待切换到推理、回答、工具调用、完成 | `round_id`, `phase: waiting_provider | reasoning | answering | tool_calling | completed` |
 | `llm.tool_call_chunk` | 工具调用 args 的部分 JSON 流 | `id, name, args_delta, index` |
 | `llm.usage` | 供应商返回的临时用量，只用于实时显示 | `input_tokens`, `output_tokens` |
 | `llm.error` | 流中报错（非致命） | `message` |
 
-`llm.delta`、`llm.reasoning`、`llm.tool_call_chunk` 和 `llm.usage` 是临时事件，断线或慢客户端背压时可以丢失。`llm.usage` 不是结算事实来源；`run.completed` 中的用量由
+`llm.delta`、`llm.tool_call_chunk` 和 `llm.usage` 是临时事件，断线或慢客户端背压时可以丢失。`llm.phase.changed` 持久化并参与 SSE 游标回放，当前阶段也写入模型调用账本，并通过 `LocalRun.model_phase` / `model_phase_started_at` 返回；Client 可从事件游标或权威快照恢复。`llm.usage` 不是结算事实来源；`run.completed` 中的用量由
 Runtime 持久模型调用账本聚合；重复 SSE 事件不会改变该结果。
+
+`POST /v1/runs` 和计划任务接受明确的 `reasoning_mode: off | high | max`；省略时采用模型目录声明的 `reasoning.default_mode`，因此旧客户端仍能使用只支持 `max` 的兼容别名。模型目录的 `reasoning.modes` 声明可选档位；Runtime 在接纳时校验并冻结选择，不支持时返回 `model_reasoning_mode_unsupported`，不会静默降档或换模型。DeepSeek 的 `reasoning_content` 只在需要继续工具回合的 assistant 消息中保留，用于官方要求的第二轮回放；无工具的最终推理会在进入 checkpoint 前丢弃，也不会进入公开 SSE、展示快照或诊断导出。公开界面只显示阶段和耗时。
 
 ### 工具
 
@@ -211,8 +213,8 @@ while (true) {
         assistantText += String(payload.content ?? '')
         render(assistantText)
         break
-      case 'llm.reasoning':
-        appendReasoningPanel(String(payload.content ?? ''))
+      case 'llm.phase.changed':
+        renderModelPhase(String(payload.phase ?? ''))
         break
       case 'tool.completed':
       case 'tool.failed':
@@ -277,7 +279,8 @@ EventSource API 也能用，但不能传 Authorization 头；fetch + ReadableStr
 [user types] → POST /runs (id=R)
    GET /runs/R/stream
    → run.started
-   → llm.reasoning / llm.delta...
+   → llm.phase.changed {phase: "waiting_provider" | "reasoning" | ...}
+   → llm.delta...
    → permission.required {request_id: P, tool: "write_file", args: {...}}
    → run.waiting {handoff: {ledger_state, ledger_message, feature_ledger}}
    → [DONE]   ← stream 暂时关闭
