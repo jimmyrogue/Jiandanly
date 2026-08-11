@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -93,14 +93,15 @@ ModelProtocol = Literal[
 ]
 ModelVerification = Literal["verified", "unverified"]
 ProviderFamily = Literal["openai", "deepseek", "anthropic", "google", "unknown"]
-ReasoningMode = Literal["off", "high", "max"]
+ReasoningMode = Literal["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+REASONING_MODES = frozenset(get_args(ReasoningMode))
 
 
 class ModelReasoningProfile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     supported: bool = False
-    modes: list[ReasoningMode] = Field(default_factory=lambda: ["off"], min_length=1, max_length=3)
+    modes: list[ReasoningMode] = Field(default_factory=lambda: ["off"], min_length=1, max_length=7)
     default_mode: ReasoningMode = "off"
     stream_field: Literal["reasoning_content", "content_blocks"] | None = None
     tool_roundtrip_required: bool = False

@@ -58,7 +58,7 @@ _PRESETS: tuple[dict[str, Any], ...] = (
                 "reasoning": {
                     "supported": True,
                     "modes": ["off", "high", "max"],
-                    "default_mode": "off",
+                    "default_mode": "high",
                     "stream_field": "reasoning_content",
                     "tool_roundtrip_required": True,
                     "display_policy": "activity_only",
@@ -88,7 +88,7 @@ _PRESETS: tuple[dict[str, Any], ...] = (
                 "reasoning": {
                     "supported": True,
                     "modes": ["off", "high", "max"],
-                    "default_mode": "off",
+                    "default_mode": "high",
                     "stream_field": "reasoning_content",
                     "tool_roundtrip_required": True,
                     "display_policy": "activity_only",

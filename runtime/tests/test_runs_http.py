@@ -956,6 +956,49 @@ def test_run_admission_uses_catalog_default_when_reasoning_mode_is_omitted(
     assert snapshot["_model_binding"]["reasoning_mode"] == "max"
 
 
+def test_run_admission_freezes_a_model_specific_reasoning_mode(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinator = client.app.state.coordinator
+    original_model_admission = coordinator._model_admission
+
+    @asynccontextmanager
+    async def gpt56_model_admission(*args, **kwargs):
+        async with original_model_admission(*args, **kwargs) as (binding, error):
+            yield (
+                {
+                    **binding,
+                    "profile": {
+                        **binding.get("profile", {}),
+                        "reasoning": {
+                            "supported": True,
+                            "modes": ["off", "low", "medium", "high", "xhigh", "max"],
+                            "default_mode": "medium",
+                            "display_policy": "activity_only",
+                        },
+                    },
+                },
+                error,
+            )
+
+    monkeypatch.setattr(coordinator, "_model_admission", gpt56_model_admission)
+
+    response = client.post(
+        "/v1/runs",
+        headers={"Authorization": "Bearer tok"},
+        json=run_command("use extra-high reasoning", reasoning_mode="xhigh"),
+    )
+
+    assert response.status_code == 200
+    run = response.json()
+    assert run["reasoning_mode"] == "xhigh"
+    stored = asyncio.run(client.app.state.store.get_run(run["id"]))
+    snapshot = json.loads(stored["settings_json"])
+    assert snapshot["reasoning_mode"] == "xhigh"
+    assert snapshot["_model_binding"]["reasoning_mode"] == "xhigh"
+
+
 def test_run_admission_requires_a_configured_model_service(tmp_path: Path) -> None:
     settings = reset_settings_for_tests(
         SHEJANE_RUNTIME_TOKEN="tok",

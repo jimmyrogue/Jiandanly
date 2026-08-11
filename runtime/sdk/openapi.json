@@ -473,7 +473,11 @@
               {
                 "enum": [
                   "off",
+                  "minimal",
+                  "low",
+                  "medium",
                   "high",
+                  "xhigh",
                   "max"
                 ],
                 "type": "string"
@@ -673,7 +677,11 @@
               {
                 "enum": [
                   "off",
+                  "minimal",
+                  "low",
+                  "medium",
                   "high",
+                  "xhigh",
                   "max"
                 ],
                 "type": "string"
@@ -3993,7 +4001,11 @@
               {
                 "enum": [
                   "off",
+                  "minimal",
+                  "low",
+                  "medium",
                   "high",
+                  "xhigh",
                   "max"
                 ],
                 "type": "string"
@@ -5456,7 +5468,11 @@
             "default": "off",
             "enum": [
               "off",
+              "minimal",
+              "low",
+              "medium",
               "high",
+              "xhigh",
               "max"
             ],
             "title": "Default Mode",
@@ -5475,12 +5491,16 @@
             "items": {
               "enum": [
                 "off",
+                "minimal",
+                "low",
+                "medium",
                 "high",
+                "xhigh",
                 "max"
               ],
               "type": "string"
             },
-            "maxItems": 3,
+            "maxItems": 7,
             "minItems": 1,
             "title": "Modes",
             "type": "array"

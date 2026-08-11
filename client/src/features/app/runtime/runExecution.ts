@@ -268,7 +268,7 @@ export async function executeLocalHarnessMessage({
     settings: effectiveSettings,
     metadata: runOptions?.metadata,
     mode: selectedMode,
-    reasoningMode: readReasoningMode(),
+    reasoningMode: readReasoningMode(selectedMode),
     permissionMode,
     pluginRefs: selectedPlugins.map((plugin) => ({
       pluginId: plugin.pluginId,

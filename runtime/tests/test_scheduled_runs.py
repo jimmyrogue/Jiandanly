@@ -268,7 +268,20 @@ async def test_legacy_schedules_migrate_to_the_local_owner(tmp_path: Path) -> No
         await store.close()
 
 
-async def test_dispatcher_starts_due_schedule_and_marks_completed(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("schedule_settings", "expected_reasoning_mode", "settings_are_frozen"),
+    [
+        ({"skills": "on", "reasoning_mode": "xhigh"}, "xhigh", False),
+        ({"_snapshot_version": 1, "skills": "on"}, "off", True),
+        ({}, "off", False),
+    ],
+)
+async def test_dispatcher_starts_due_schedule_and_marks_completed(
+    tmp_path: Path,
+    schedule_settings: dict[str, Any],
+    expected_reasoning_mode: str,
+    settings_are_frozen: bool,
+) -> None:
     store = await LocalStore.open(tmp_path / "runtime.db")
     try:
         now = datetime.now(UTC)
@@ -283,7 +296,7 @@ async def test_dispatcher_starts_due_schedule_and_marks_completed(tmp_path: Path
             run_at=(now - timedelta(seconds=1)).isoformat(),
             workspace_path=str(tmp_path),
             model="auto",
-            settings={"skills": "on"},
+            settings=schedule_settings,
             metadata={"kind": "nightly"},
         )
         coordinator = FakeCoordinator(store)
@@ -305,10 +318,10 @@ async def test_dispatcher_starts_due_schedule_and_marks_completed(tmp_path: Path
                 "goal": "跑一次本地检查",
                 "workspace_path": str(tmp_path),
                 "mode": "auto",
-                "reasoning_mode": None,
+                "reasoning_mode": expected_reasoning_mode,
                 "history": [],
-                "settings": {"skills": "on"},
-                "settings_are_frozen": False,
+                "settings": schedule_settings,
+                "settings_are_frozen": settings_are_frozen,
                 "metadata_is_trusted": True,
                 "metadata": {
                     "intent": "scheduled_run",
@@ -363,6 +376,7 @@ def test_schedule_http_create_list_cancel_and_mark_notified(client: TestClient) 
             "run_at": future,
             "workspace_path": str(workspace),
             "model": "local:test:model",
+            "reasoning_mode": "xhigh",
             "permission_mode": "auto",
             "history": [{"role": "user", "content": "项目背景"}],
             "settings": {"memory": "on", "api_key": "must-not-persist"},
@@ -378,7 +392,7 @@ def test_schedule_http_create_list_cancel_and_mark_notified(client: TestClient) 
     assert schedule_settings["_snapshot_version"] == 1
     assert schedule_settings["memory"] == "on"
     assert schedule_settings["permission_mode"] == "auto"
-    assert "reasoning_mode" not in schedule_settings
+    assert schedule_settings["reasoning_mode"] == "xhigh"
     assert "must-not-persist" not in schedule["settings_json"]
     assert json.loads(schedule["metadata_json"]) == {}
 
@@ -414,11 +428,13 @@ def test_schedule_http_create_list_cancel_and_mark_notified(client: TestClient) 
         "schedules": []
     }
 
-    other = client.post(
+    other_response = client.post(
         "/v1/schedules",
         headers=HEADERS,
         json={"goal": "取消这个", "run_at": future, "model": "local:test:model"},
-    ).json()
+    )
+    other = other_response.json()
+    assert json.loads(other["settings_json"])["reasoning_mode"] == "off"
     canceled = client.delete(f"/v1/schedules/{other['id']}", headers=HEADERS)
     assert canceled.status_code == 200
     assert canceled.json()["status"] == "canceled"

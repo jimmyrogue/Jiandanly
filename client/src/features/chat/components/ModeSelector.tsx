@@ -19,7 +19,7 @@ import { readReasoningMode, writeReasoningMode } from '@/features/app/appStorage
 import type { ReasoningMode, RuntimeModelSpec } from '@shejane/runtime-sdk'
 
 const OFF_REASONING_MODES: ReasoningMode[] = ['off']
-const REASONING_MODES: ReasoningMode[] = ['off', 'high', 'max']
+const REASONING_MODES: ReasoningMode[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 
 /** One selectable Runtime model. */
 export interface ModelOption {
@@ -60,11 +60,17 @@ export function ModeSelector({
 }) {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
-  const [reasoningMode, setReasoningMode] = useState<ReasoningMode>(readReasoningMode)
   const confirmedServiceChange = useRef(false)
   const selectedModel = models.find((model) => model.id === mode)
   const supportedReasoningModes = selectedModel?.reasoningModes ?? OFF_REASONING_MODES
   const defaultReasoningMode = selectedModel?.defaultReasoningMode ?? 'off'
+  const storedReasoningMode = readReasoningMode(mode)
+  const storedReasoningModeIsSupported = storedReasoningMode !== undefined
+    && supportedReasoningModes.includes(storedReasoningMode)
+  const preferredReasoningMode = storedReasoningModeIsSupported
+    ? storedReasoningMode
+    : supportedReasoningModes.includes(defaultReasoningMode) ? defaultReasoningMode : 'off'
+  const [reasoningMode, setReasoningMode] = useState<ReasoningMode>(preferredReasoningMode)
   const groupedModels = useMemo(() => groupModelsByVendor(models), [models])
   const groupedImageModels = useMemo(() => groupModelsByVendor(imageModels), [imageModels])
   const recommendedGroups = groupedModels
@@ -82,18 +88,16 @@ export function ModeSelector({
   const reasoningLabel = t(`composer.reasoning.${reasoningMode}`)
 
   useEffect(() => {
-    if (supportedReasoningModes.includes(reasoningMode)) return
-    const fallback = supportedReasoningModes.includes(defaultReasoningMode)
-      ? defaultReasoningMode
-      : 'off'
-    setReasoningMode(fallback)
-    writeReasoningMode(fallback)
-  }, [defaultReasoningMode, reasoningMode, supportedReasoningModes])
+    setReasoningMode(preferredReasoningMode)
+    if (storedReasoningMode !== preferredReasoningMode) {
+      writeReasoningMode(preferredReasoningMode, mode)
+    }
+  }, [mode, preferredReasoningMode, storedReasoningMode, storedReasoningModeIsSupported])
 
   const selectReasoningMode = (next: ReasoningMode) => {
     if (!supportedReasoningModes.includes(next)) return
     setReasoningMode(next)
-    writeReasoningMode(next)
+    writeReasoningMode(next, mode)
   }
 
   const handleOpenChange = (nextOpen: boolean) => {
@@ -114,12 +118,16 @@ export function ModeSelector({
       confirmedServiceChange.current = true
     }
     const nextModes = model.reasoningModes ?? OFF_REASONING_MODES
-    if (!nextModes.includes(reasoningMode)) {
-      const fallback = nextModes.includes(model.defaultReasoningMode ?? 'off')
-        ? model.defaultReasoningMode ?? 'off'
-        : 'off'
-      setReasoningMode(fallback)
-      writeReasoningMode(fallback)
+    const storedNextMode = readReasoningMode(model.id)
+    const fallback = nextModes.includes(model.defaultReasoningMode ?? 'off')
+      ? model.defaultReasoningMode ?? 'off'
+      : 'off'
+    const nextMode = storedNextMode && nextModes.includes(storedNextMode)
+      ? storedNextMode
+      : fallback
+    setReasoningMode(nextMode)
+    if (storedNextMode !== undefined && storedNextMode !== nextMode) {
+      writeReasoningMode(nextMode, model.id)
     }
     onChange(model.id)
   }
@@ -261,11 +269,10 @@ export function ModeSelector({
           sideOffset={8}
           className="composer-mode-menu composer-reasoning-menu"
         >
-          {REASONING_MODES.map((item) => (
+          {REASONING_MODES.filter((item) => supportedReasoningModes.includes(item)).map((item) => (
             <DropdownMenuItem
               key={item}
               className={`composer-mode-item composer-mode-model-item composer-reasoning-item${reasoningMode === item ? ' is-active' : ''}`}
-              disabled={!supportedReasoningModes.includes(item)}
               onSelect={() => selectReasoningMode(item)}
             >
               <span>{t(`composer.reasoning.${item}`)}</span>

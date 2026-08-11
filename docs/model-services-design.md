@@ -59,8 +59,11 @@ Client 只展示连接流程和 Runtime 返回的状态，不复制厂商规则�
 
 Agent 对话能力可明确保存 `openai_chat_completions`、`openai_responses`、
 `anthropic_messages` 或 `google_generate_content` 协议。OpenAI 默认使用 Responses；
-DeepSeek V4 Flash 使用 Responses，V4 Pro 使用 Chat Completions，并通过模型目录声明明确的
-`off / high / max` 推理档位。
+推理强度完全由逐模型目录声明，Client 不维护一套全局档位。GPT-5.6 Luna、Sol、Terra
+声明 `off / low / medium / high / xhigh / max`，默认 `medium`；Runtime 在 OpenAI
+Responses 请求中把 `off` 翻译成 `none`，其余档位原样发送。DeepSeek V4 Flash 使用
+Responses，V4 Pro 使用 Chat Completions，声明 `off / high / max`，默认 `high`。
+目录未声明或声明不受信时只暴露 `off`，不按模型名称为自定义中转猜测能力。
 SheJane 官方目录会读取 Cloud 返回的逐模型 `supported_endpoint_types`：仅支持
 `openai-response` 的 Agent 模型冻结为 Responses；GPT / Codex 模型即使同时广告
 `openai` 转换端点，也只有在目录同时声明已验证的 Responses-only 能力时才优先使用
@@ -227,6 +230,8 @@ SheJane 官方服务不能通过普通 `/v1/model-services` API Key 接口创建
 - 模型不存在或 Connection 被删除时，不选择列表第一项，也不静默替换。
 - 跨模型服务切换时提示一次：后续上下文会发送给新的模型服务。
 - 同一服务内切换模型不额外提示。
+- 思考强度按具体模型保存；模型首次使用时采用目录默认值，切换模型不会把另一模型的档位
+  强行套用过来。
 - 删除 Connection 不删除旧对话；旧对话显示“未连接”，继续发送时要求重新连接或
   明确选择其他模型。
 

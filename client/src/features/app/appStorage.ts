@@ -5,7 +5,8 @@ const runtimeThreadIDsStorageKey = 'shejane.runtime-thread-ids.v1'
 const agentSettingsStorageKey = 'shejane.agentSettings.v9'
 const legacyAgentSettingsStorageKey = 'shejane-agent-settings'
 const chatModeStorageKey = 'shejane.chatMode.v2'
-const reasoningModeStorageKey = 'shejane.reasoningMode.v1'
+const reasoningModeStorageKey = 'shejane.reasoningModes.v2'
+const legacyReasoningModeStorageKey = 'shejane.reasoningMode.v1'
 
 const defaultAgentSettings: Required<AgentSettings> = {
   memory: 'on',
@@ -93,23 +94,47 @@ export function writeChatMode(mode: ChatMode) {
   }
 }
 
-export function readReasoningMode(): ReasoningMode {
-  if (typeof window === 'undefined') return 'off'
+export function readReasoningMode(model: ChatMode): ReasoningMode | undefined {
+  if (typeof window === 'undefined' || !model) return undefined
   try {
-    const mode = window.localStorage.getItem(reasoningModeStorageKey)
-    if (mode === 'high' || mode === 'max') return mode
+    const stored = JSON.parse(window.localStorage.getItem(reasoningModeStorageKey) ?? '{}')
+    const mode = stored && typeof stored === 'object'
+      ? reasoningMode((stored as Record<string, unknown>)[model])
+      : undefined
+    if (mode) return mode
+    const legacyMode = reasoningMode(window.localStorage.getItem(legacyReasoningModeStorageKey))
+    if (!legacyMode) return undefined
+    writeReasoningMode(legacyMode, model)
+    return legacyMode
   } catch {
     // Local storage can be unavailable in restricted browser contexts.
   }
-  return 'off'
+  return undefined
 }
 
-export function writeReasoningMode(mode: ReasoningMode) {
+export function writeReasoningMode(mode: ReasoningMode, model: ChatMode) {
+  if (!model) return
   try {
-    window.localStorage.setItem(reasoningModeStorageKey, mode)
+    const stored = JSON.parse(window.localStorage.getItem(reasoningModeStorageKey) ?? '{}')
+    const modes = stored && typeof stored === 'object' ? stored : {}
+    window.localStorage.setItem(reasoningModeStorageKey, JSON.stringify({ ...modes, [model]: mode }))
+    window.localStorage.removeItem(legacyReasoningModeStorageKey)
   } catch {
     // Local storage can be unavailable in restricted browser contexts.
   }
+}
+
+function reasoningMode(value: unknown): ReasoningMode | undefined {
+  if (
+    value === 'off'
+    || value === 'minimal'
+    || value === 'low'
+    || value === 'medium'
+    || value === 'high'
+    || value === 'xhigh'
+    || value === 'max'
+  ) return value
+  return undefined
 }
 
 export function loadRuntimeThreadIDs(): Set<string> {

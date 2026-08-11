@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from ..agent.builder import skill_catalog_fingerprint
+from ..api_models.runtime import REASONING_MODES
 from ..config import Settings
 from ..model_services.catalog import _model_connection_models
 from ..model_services.credentials import CredentialStoreError
@@ -32,7 +33,7 @@ def reasoning_mode_error(
     reasoning = profile.get("reasoning") if isinstance(profile, dict) else None
     modes = reasoning.get("modes") if isinstance(reasoning, dict) else None
     supported_modes = (
-        {str(mode) for mode in modes if isinstance(mode, str) and mode in {"off", "high", "max"}}
+        {str(mode) for mode in modes if isinstance(mode, str) and mode in REASONING_MODES}
         if isinstance(modes, list)
         else {"off"}
     )
@@ -48,7 +49,7 @@ def default_reasoning_mode(model_binding: dict[str, Any]) -> str:
     profile = model_binding.get("profile")
     reasoning = profile.get("reasoning") if isinstance(profile, dict) else None
     default_mode = reasoning.get("default_mode") if isinstance(reasoning, dict) else None
-    return str(default_mode) if default_mode in {"off", "high", "max"} else "off"
+    return str(default_mode) if default_mode in REASONING_MODES else "off"
 
 
 class RunModelBindings:

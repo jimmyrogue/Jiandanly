@@ -6,6 +6,8 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
+from ..api_models.runtime import REASONING_MODES
+
 _DEEPSEEK_V4_LIMITS = {
     "deepseek-v4-flash": (1_000_000, 384_000),
     "deepseek-v4-pro": (1_000_000, 384_000),
@@ -23,13 +25,26 @@ _DEFAULT_REASONING_PROFILE = {
 _DEEPSEEK_REASONING_PROFILE = {
     "supported": True,
     "modes": ["off", "high", "max"],
-    "default_mode": "off",
+    "default_mode": "high",
     "stream_field": "reasoning_content",
     "tool_roundtrip_required": True,
     "display_policy": "activity_only",
 }
 
-_REASONING_MODES = {"off", "high", "max"}
+_OPENAI_GPT56_REASONING_PROFILE = {
+    "supported": True,
+    "modes": ["off", "low", "medium", "high", "xhigh", "max"],
+    "default_mode": "medium",
+    "stream_field": "content_blocks",
+    "tool_roundtrip_required": True,
+    "display_policy": "activity_only",
+}
+_OPENAI_GPT56_MODELS = {
+    "gpt-5.6",
+    "gpt-5.6-luna",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+}
 _OPENAI_WEB_SEARCH_MODELS = {
     "gpt-4.1",
     "gpt-4.1-mini",
@@ -137,13 +152,20 @@ def _bounded_integer(value: Any, *, minimum: int, maximum: int) -> int | None:
 def _normalized_reasoning_profile(
     value: Any,
     *,
+    model_id: str,
     provider_family: str,
     trusted: bool,
 ) -> dict[str, Any]:
-    fallback = (
-        _DEEPSEEK_REASONING_PROFILE if provider_family == "deepseek" else _DEFAULT_REASONING_PROFILE
-    )
-    if provider_family != "deepseek" or not trusted or not isinstance(value, dict):
+    if provider_family == "deepseek":
+        fallback = _DEEPSEEK_REASONING_PROFILE
+    elif (
+        provider_family == "openai"
+        and _OPENAI_SNAPSHOT_SUFFIX.sub("", model_id) in _OPENAI_GPT56_MODELS
+    ):
+        fallback = _OPENAI_GPT56_REASONING_PROFILE
+    else:
+        fallback = _DEFAULT_REASONING_PROFILE
+    if provider_family not in {"deepseek", "openai"} or not trusted or not isinstance(value, dict):
         return dict(fallback)
     supported = value.get("supported")
     modes = value.get("modes")
@@ -154,8 +176,8 @@ def _normalized_reasoning_profile(
     if (
         not isinstance(supported, bool)
         or not isinstance(modes, list)
-        or not 1 <= len(modes) <= 3
-        or any(not isinstance(mode, str) or mode not in _REASONING_MODES for mode in modes)
+        or not 1 <= len(modes) <= 7
+        or any(not isinstance(mode, str) or mode not in REASONING_MODES for mode in modes)
         or len(modes) != len(set(modes))
         or default_mode not in modes
         or stream_field not in {None, "reasoning_content", "content_blocks"}
@@ -207,6 +229,7 @@ def apply_known_model_profile_defaults(
     service_base_url: str,
     trusted_model_catalog: bool = False,
     trusted_hosted_web_search: bool = False,
+    trusted_legacy_openai_reasoning: bool = False,
 ) -> dict[str, Any]:
     """Fill published limits and repair stale trusted-catalog agent flags."""
     normalized = dict(profile)
@@ -223,11 +246,19 @@ def apply_known_model_profile_defaults(
         trusted_model_catalog and str(normalized.get("model_id") or "").startswith("deepseek-")
     ):
         provider_family = "deepseek"
+    elif hostname == "api.openai.com":
+        provider_family = "openai"
+    elif (
+        trusted_legacy_openai_reasoning
+        and _OPENAI_SNAPSHOT_SUFFIX.sub("", model_id) in _OPENAI_GPT56_MODELS
+    ):
+        provider_family = "openai"
     normalized["provider_family"] = provider_family
     normalized["reasoning"] = _normalized_reasoning_profile(
         normalized.get("reasoning"),
+        model_id=model_id,
         provider_family=provider_family,
-        trusted=trusted_model_catalog or hostname == "api.deepseek.com",
+        trusted=trusted_model_catalog or hostname in {"api.deepseek.com", "api.openai.com"},
     )
     normalized["hosted_web_search"] = _normalized_hosted_web_search(
         normalized.get("hosted_web_search"),

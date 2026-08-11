@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import HTTPException
 from langchain_core.messages import ToolMessage
 
+from .api_models.runtime import REASONING_MODES
 from .middleware.tool_execution import serialize_tool_result
 from .store.sqlite import LocalStore, WaitDecisionConflictError
 
@@ -108,7 +109,7 @@ def _run_reasoning_mode(run: dict[str, Any]) -> str:
     except (json.JSONDecodeError, TypeError):
         return "off"
     mode = settings.get("reasoning_mode") if isinstance(settings, dict) else None
-    return str(mode) if mode in {"off", "high", "max"} else "off"
+    return str(mode) if mode in REASONING_MODES else "off"
 
 
 def _run_model_phase(

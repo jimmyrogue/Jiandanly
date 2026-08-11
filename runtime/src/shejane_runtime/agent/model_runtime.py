@@ -197,7 +197,17 @@ def _build_byok_chat_model(
     else:
         from langchain_openai import ChatOpenAI
 
+        reasoning_profile = model_binding.get("profile", {}).get("reasoning")
         request_options = {}
+        if (
+            provider_family == "openai"
+            and isinstance(reasoning_profile, dict)
+            and reasoning_profile.get("supported") is True
+        ):
+            effort = "none" if reasoning_mode == "off" else reasoning_mode
+            request_options["reasoning" if responses else "reasoning_effort"] = (
+                {"effort": effort} if responses else effort
+            )
         chat_model_type = ChatOpenAI
     extra_body = request_options.pop("extra_body", None)
     if urlparse(base_url).hostname in {"open.bigmodel.cn", "api.z.ai"}:

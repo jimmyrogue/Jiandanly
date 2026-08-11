@@ -345,7 +345,7 @@ async def test_official_catalog_keeps_known_agent_capabilities_and_limits(monkey
             "reasoning": {
                 "supported": True,
                 "modes": ["off", "high", "max"],
-                "default_mode": "off",
+                "default_mode": "high",
                 "stream_field": "reasoning_content",
                 "tool_roundtrip_required": True,
                 "display_policy": "activity_only",
@@ -641,6 +641,44 @@ def test_official_deepseek_agent_capabilities_created_before_the_fix_are_restore
     assert models[0]["capabilities"][0]["protocol"] == "openai_chat_completions"
     assert models[0]["max_input_tokens"] == 1_000_000
     assert models[0]["max_output_tokens"] == 384_000
+
+
+def test_official_gpt56_reasoning_created_before_the_fix_is_restored() -> None:
+    models = model_routes._model_connection_models(
+        {
+            "preset_id": "shejane-official",
+            "adapter_id": "openai_chat",
+            "base_url": "https://cloud.example.test/v1",
+            "models_json": json.dumps(
+                [
+                    {
+                        "model_id": "gpt-5.6-luna",
+                        "display_name": "GPT-5.6 Luna",
+                        "source": "discovered",
+                        "verification": "verified",
+                        "capabilities": [
+                            {
+                                "capability": "agent_chat",
+                                "protocol": "openai_responses",
+                                "verification": "verified",
+                            }
+                        ],
+                    }
+                ]
+            ),
+        }
+    )
+
+    assert models[0]["provider_family"] == "openai"
+    assert models[0]["reasoning"]["modes"] == [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    ]
+    assert models[0]["reasoning"]["default_mode"] == "medium"
 
 
 def test_bundled_models_are_recommendations_not_preverified_connections() -> None:
@@ -959,7 +997,7 @@ def test_model_service_connection_makes_catalog_models_available_without_probe(
     assert connected["models"][0]["reasoning"] == {
         "supported": True,
         "modes": ["off", "high", "max"],
-        "default_mode": "off",
+        "default_mode": "high",
         "stream_field": "reasoning_content",
         "tool_roundtrip_required": True,
         "display_policy": "activity_only",
@@ -1858,8 +1896,14 @@ def test_deepseek_chat_uses_the_reasoning_aware_adapter(monkeypatch) -> None:
     assert captured[2]["reasoning_effort"] == "max"
 
 
+@pytest.mark.parametrize(
+    ("reasoning_mode", "upstream_effort"),
+    [("off", "none"), ("xhigh", "xhigh"), ("max", "max")],
+)
 def test_openai_responses_protocol_uses_responses_api_without_provider_session_state(
     monkeypatch,
+    reasoning_mode: str,
+    upstream_effort: str,
 ) -> None:
     import langchain_openai
 
@@ -1877,13 +1921,23 @@ def test_openai_responses_protocol_uses_responses_api_without_provider_session_s
             "adapter_id": "openai_chat",
             "preset_id": "openai",
             "protocol": "openai_responses",
+            "provider_family": "openai",
+            "reasoning_mode": reasoning_mode,
             "base_url": "https://api.openai.com/v1",
             "model_id": "gpt-5.6",
             "profile": {
+                "reasoning": {
+                    "supported": True,
+                    "modes": ["off", "low", "medium", "high", "xhigh", "max"],
+                    "default_mode": "medium",
+                    "stream_field": "content_blocks",
+                    "tool_roundtrip_required": True,
+                    "display_policy": "activity_only",
+                },
                 "hosted_web_search": {
                     "verification": "verified",
                     "full_sources": True,
-                }
+                },
             },
         },
         model_api_key="secret",
@@ -1897,6 +1951,7 @@ def test_openai_responses_protocol_uses_responses_api_without_provider_session_s
         "reasoning.encrypted_content",
         "web_search_call.action.sources",
     ]
+    assert captured["reasoning"] == {"effort": upstream_effort}
 
 
 def test_deepseek_responses_does_not_send_unsupported_include(monkeypatch) -> None:
@@ -2047,7 +2102,18 @@ def test_hosted_web_search_profile_is_exact_and_fail_closed() -> None:
         service_base_url="https://api.openai.com/v1",
     )
     forged_gateway = discovered_model_profile(
-        {"hosted_web_search": {"verification": "verified", "full_sources": True}},
+        {
+            "provider_family": "openai",
+            "reasoning": {
+                "supported": True,
+                "modes": ["off", "low", "medium", "high", "xhigh", "max"],
+                "default_mode": "medium",
+                "stream_field": "content_blocks",
+                "tool_roundtrip_required": True,
+                "display_policy": "activity_only",
+            },
+            "hosted_web_search": {"verification": "verified", "full_sources": True},
+        },
         model_id="gpt-5.6-luna",
         display_name="Forged Luna",
         service_base_url="https://gateway.example/v1",
@@ -2063,9 +2129,20 @@ def test_hosted_web_search_profile_is_exact_and_fail_closed() -> None:
         "verification": "verified",
         "full_sources": True,
     }
+    assert direct_openai["provider_family"] == "openai"
+    assert direct_openai["reasoning"] == {
+        "supported": True,
+        "modes": ["off", "low", "medium", "high", "xhigh", "max"],
+        "default_mode": "medium",
+        "stream_field": "content_blocks",
+        "tool_roundtrip_required": True,
+        "display_policy": "activity_only",
+    }
     assert unsupported_openai["hosted_web_search"] is None
     assert unsupported_responses_openai["hosted_web_search"] is None
     assert forged_gateway["hosted_web_search"] is None
+    assert forged_gateway["provider_family"] == "unknown"
+    assert forged_gateway["reasoning"]["modes"] == ["off"]
     assert direct_deepseek["hosted_web_search"] == {
         "verification": "verified",
         "full_sources": False,
@@ -2085,6 +2162,15 @@ async def test_trusted_official_catalog_exposes_verified_hosted_web_search(
                         "id": "gpt-5.6-luna",
                         "supported_endpoint_types": ["openai-response"],
                         "capabilities": ["agent_chat"],
+                        "provider_family": "openai",
+                        "reasoning": {
+                            "supported": True,
+                            "modes": ["off", "low", "medium", "high", "xhigh", "max"],
+                            "default_mode": "medium",
+                            "stream_field": "content_blocks",
+                            "tool_roundtrip_required": True,
+                            "display_policy": "activity_only",
+                        },
                         "hosted_web_search": {
                             "verification": "verified",
                             "full_sources": True,
@@ -2114,6 +2200,15 @@ async def test_trusted_official_catalog_exposes_verified_hosted_web_search(
         "verification": "verified",
         "full_sources": True,
     }
+    assert models[0]["reasoning"]["modes"] == [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    ]
+    assert models[0]["reasoning"]["default_mode"] == "medium"
 
 
 def test_google_generate_content_protocol_uses_native_google_adapter(monkeypatch) -> None:

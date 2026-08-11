@@ -1318,7 +1318,7 @@ export interface components {
             /** Protocol Version */
             protocol_version: number;
             /** Reasoning Mode */
-            reasoning_mode?: ("off" | "high" | "max") | null;
+            reasoning_mode?: ("off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") | null;
             /** Replace From Client Id */
             replace_from_client_id?: string | null;
             /** Required Capabilities */
@@ -1367,7 +1367,7 @@ export interface components {
              */
             permission_mode: "ask" | "auto" | "full_access";
             /** Reasoning Mode */
-            reasoning_mode?: ("off" | "high" | "max") | null;
+            reasoning_mode?: ("off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") | null;
             /** Run At */
             run_at: string;
             /** Settings */
@@ -2548,7 +2548,7 @@ export interface components {
             /** Parent Run Id */
             parent_run_id?: string | null;
             /** Reasoning Mode */
-            reasoning_mode?: ("off" | "high" | "max") | null;
+            reasoning_mode?: ("off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") | null;
             /** Root Run Id */
             root_run_id: string;
             /**
@@ -3119,7 +3119,7 @@ export interface components {
              * @default off
              * @enum {string}
              */
-            default_mode: "off" | "high" | "max";
+            default_mode: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
             /**
              * Display Policy
              * @default activity_only
@@ -3127,7 +3127,7 @@ export interface components {
              */
             display_policy: "activity_only" | "summary_only";
             /** Modes */
-            modes?: ("off" | "high" | "max")[];
+            modes?: ("off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max")[];
             /** Stream Field */
             stream_field?: ("reasoning_content" | "content_blocks") | null;
             /**

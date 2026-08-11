@@ -63,8 +63,7 @@ async def create_schedule(
             request.app.state.settings,
             {**(body.settings or {}), "permission_mode": body.permission_mode},
         )
-        if body.reasoning_mode is not None:
-            frozen_settings["reasoning_mode"] = body.reasoning_mode
+        frozen_settings["reasoning_mode"] = body.reasoning_mode or "off"
         return await store.create_scheduled_run(
             principal_id=principal_id,
             goal=goal,

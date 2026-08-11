@@ -361,3 +361,4 @@ def test_reasoning_capabilities_require_a_trusted_deepseek_identity() -> None:
         service_base_url="https://api.deepseek.com",
     )
     assert direct["reasoning"]["modes"] == ["off", "high", "max"]
+    assert direct["reasoning"]["default_mode"] == "high"

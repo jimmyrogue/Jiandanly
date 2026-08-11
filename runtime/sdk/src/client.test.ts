@@ -307,6 +307,23 @@ describe('createLocalRun plugin selection', () => {
       plugin_id: 'dev.shejane.fixture.archive',
       command_id: 'archive.extract',
     })
+
+    fetcher.mockResolvedValueOnce(new Response(JSON.stringify({ id: 'run_default_reasoning' }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    await createLocalRun(
+      {
+        commandId: 'cmd_default_reasoning',
+        clientMessageId: 'msg_default_reasoning',
+        goal: 'use model default',
+        mode: 'local:test:gpt-5.6-luna',
+      },
+      { baseURL: 'http://127.0.0.1:17371', token: 'runtime-token' },
+      fetcher,
+    )
+    const defaultBody = JSON.parse(String((fetcher.mock.calls[1][1] as RequestInit).body))
+    expect(defaultBody.reasoning_mode).toBeUndefined()
   })
 })
 

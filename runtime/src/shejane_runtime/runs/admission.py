@@ -9,6 +9,7 @@ from typing import Any
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from ..agent.builder import skill_catalog_fingerprint
+from ..api_models.runtime import REASONING_MODES
 from ..build_info import runtime_build_identity
 from ..config import Settings
 from ..run_configuration import (
@@ -169,7 +170,7 @@ async def admit_run(
             if requested_reasoning_mode
             else default_reasoning_mode(model_binding)
         )
-        if frozen_reasoning_mode not in {"off", "high", "max"}:
+        if frozen_reasoning_mode not in REASONING_MODES:
             frozen_reasoning_mode = default_reasoning_mode(model_binding)
         settings_snapshot["reasoning_mode"] = frozen_reasoning_mode
         if admission_error is None:

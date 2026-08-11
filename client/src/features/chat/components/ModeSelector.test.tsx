@@ -166,11 +166,11 @@ describe('ModeSelector (Runtime catalog)', () => {
     fireEvent.click(await screen.findByRole('menuitem', { name: '高' }))
 
     expect(screen.getByRole('button', { name: '思考强度：高' })).toHaveTextContent('高')
-    expect(readReasoningMode()).toBe('high')
+    expect(readReasoningMode('local:deepseek:deepseek-v4-flash')).toBe('high')
   })
 
   it('uses the model default when a fixed reasoning alias is selected', async () => {
-    writeReasoningMode('off')
+    writeReasoningMode('off', 'local:official:deepseek-v4-flash-max')
     render(withProviders(
       <ModeSelector
         mode="local:official:deepseek-v4-flash-max"
@@ -186,7 +186,48 @@ describe('ModeSelector (Runtime catalog)', () => {
       />,
     ))
 
-    await waitFor(() => expect(readReasoningMode()).toBe('max'))
+    await waitFor(() => expect(readReasoningMode('local:official:deepseek-v4-flash-max')).toBe('max'))
+    expect(screen.getByRole('button', { name: '思考强度：最高' })).toHaveTextContent('最高')
+    const reasoningTrigger = screen.getByRole('button', { name: '思考强度：最高' })
+    reasoningTrigger.focus()
+    fireEvent.keyDown(reasoningTrigger, { key: 'Enter', code: 'Enter' })
+    expect(await screen.findByRole('menuitem', { name: '最高' })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: '快速' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: '高' })).not.toBeInTheDocument()
+  })
+
+  it('shows the exact reasoning efforts supported by the selected model', async () => {
+    writeReasoningMode('high', 'local:deepseek:deepseek-v4-flash')
+    render(withProviders(
+      <ModeSelector
+        mode="local:official:gpt-5.6-luna"
+        models={[{
+          id: 'local:official:gpt-5.6-luna',
+          label: 'GPT-5.6 Luna',
+          vendor: 'OpenAI',
+          imageInputs: false,
+          reasoningModes: ['off', 'low', 'medium', 'high', 'xhigh', 'max'],
+          defaultReasoningMode: 'medium',
+        }]}
+        onChange={vi.fn()}
+      />,
+    ))
+
+    await waitFor(() => expect(readReasoningMode('local:official:gpt-5.6-luna')).toBe('medium'))
+    const reasoningTrigger = screen.getByRole('button', { name: '思考强度：中' })
+    reasoningTrigger.focus()
+    fireEvent.keyDown(reasoningTrigger, { key: 'Enter', code: 'Enter' })
+
+    expect(await screen.findByRole('menuitem', { name: '低' })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: '最低' })).not.toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: '中' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: '高' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: '极高' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: '最高' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('menuitem', { name: '极高' }))
+    expect(readReasoningMode('local:official:gpt-5.6-luna')).toBe('xhigh')
+    expect(readReasoningMode('local:deepseek:deepseek-v4-flash')).toBe('high')
     expect(screen.getByRole('button', { name: '思考强度：极高' })).toHaveTextContent('极高')
   })
 

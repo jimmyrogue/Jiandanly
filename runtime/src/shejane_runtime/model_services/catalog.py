@@ -52,6 +52,7 @@ def _model_connection_models(row: dict[str, Any]) -> list[dict[str, Any]]:
             service_base_url=str(row.get("base_url") or ""),
             trusted_model_catalog=row.get("preset_id") in {"shejane-official", "deepseek"},
             trusted_hosted_web_search=row.get("preset_id") == "shejane-official",
+            trusted_legacy_openai_reasoning=row.get("preset_id") == "shejane-official",
         )
         normalized["capabilities"] = normalized_model_capabilities(
             normalized,

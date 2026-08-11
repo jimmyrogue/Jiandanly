@@ -279,7 +279,7 @@ class RunCoordinator(
         workspace_path: str | None = None,
         attachment_paths: list[str] | None = None,
         mode: str = "fast",
-        reasoning_mode: str = "off",
+        reasoning_mode: str | None = None,
         permission_mode: str = "ask",
         history: list[dict[str, str]] | None = None,
         parent_run_id: str | None = None,
