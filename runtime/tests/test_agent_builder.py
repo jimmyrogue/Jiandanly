@@ -26,11 +26,11 @@ def test_approval_reviewer_budget_handles_long_agent_runs() -> None:
 
 def test_runtime_prompt_is_built_from_invocation_context() -> None:
     from shejane_runtime.agent.builder import RuntimePromptMiddleware
+    from shejane_runtime.agent.context_builder import RuntimeContext
     from shejane_runtime.config import (
         MAX_CONCURRENT_SUBAGENT_TASKS,
         PREFERRED_SUBAGENT_CONCURRENCY,
     )
-    from shejane_runtime.agent.context_builder import RuntimeContext
 
     class Request:
         runtime = SimpleNamespace(
