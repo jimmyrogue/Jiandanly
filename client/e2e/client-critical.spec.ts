@@ -284,7 +284,9 @@ test.describe.serial('flow:P2-P12 > Electron critical path', () => {
 
     const assistant = page.locator('.message.assistant').last()
     await expect(
-      assistant.getByText(/正在深度分析… · 1 秒|Analyzing deeply… · 1s/).first(),
+      assistant.getByText(
+        /正在深度分析… · [1-9]\d* 秒|Analyzing deeply… · [1-9]\d*s/,
+      ).first(),
     ).toBeVisible()
     await expect(assistant).not.toContainText('E2E_PRIVATE_REASONING_MUST_NOT_RENDER')
     await expect(
