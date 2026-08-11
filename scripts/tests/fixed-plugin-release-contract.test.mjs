@@ -164,6 +164,10 @@ test('release upgrade smoke isolates credentials and pins downloaded installers'
     'SheJane-0.1.38-arm64.zip': 'sha256:dbfba9e283eb22b446808f488d6ebbc6b844f1b3f68736a9dbae8b9cd84a0eac',
     'SheJane-0.1.38-x64.exe': 'sha256:ea2db236f0f0f3547935619ba1de2a6b178751389ef8c1250f02eb8c4ac465f6',
   })
+  assert.deepEqual(assetLock['client-v0.1.39'], {
+    'SheJane-0.1.39-arm64.zip': 'sha256:fb93c22c37adaf3c5fa1a19ff5a972c19192e96cd7dbdcb77b3cb5a5609d8349',
+    'SheJane-0.1.39-x64.exe': 'sha256:607467b5e6c2eec084b5786bfe8f53524e832a37203582231d1a0d18bd5390bd',
+  })
 })
 
 test('Client release entry points reject prerelease suffixes from the stable lane', () => {
