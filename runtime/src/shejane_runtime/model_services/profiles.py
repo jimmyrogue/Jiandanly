@@ -131,9 +131,7 @@ def _normalized_reasoning_profile(
     trusted: bool,
 ) -> dict[str, Any]:
     fallback = (
-        _DEEPSEEK_REASONING_PROFILE
-        if provider_family == "deepseek"
-        else _DEFAULT_REASONING_PROFILE
+        _DEEPSEEK_REASONING_PROFILE if provider_family == "deepseek" else _DEFAULT_REASONING_PROFILE
     )
     if provider_family != "deepseek" or not trusted or not isinstance(value, dict):
         return dict(fallback)
@@ -183,8 +181,7 @@ def apply_known_model_profile_defaults(
         else "unknown"
     )
     if hostname == "api.deepseek.com" or (
-        trusted_model_catalog
-        and str(normalized.get("model_id") or "").startswith("deepseek-")
+        trusted_model_catalog and str(normalized.get("model_id") or "").startswith("deepseek-")
     ):
         provider_family = "deepseek"
     normalized["provider_family"] = provider_family
@@ -237,9 +234,7 @@ def discovered_model_profile(
         "max_output_tokens": None,
         "provider_family": str(candidate.get("provider_family") or "unknown"),
         "reasoning": (
-            dict(candidate["reasoning"])
-            if isinstance(candidate.get("reasoning"), dict)
-            else None
+            dict(candidate["reasoning"]) if isinstance(candidate.get("reasoning"), dict) else None
         ),
     }
     if catalog_model:

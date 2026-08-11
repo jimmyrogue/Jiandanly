@@ -122,7 +122,8 @@ def _run_model_phase(
                 "model_phase": phase,
                 "model_phase_started_at": str(
                     model_call.get("phase_started_at") or model_call.get("created_at") or ""
-                ) or None,
+                )
+                or None,
             }
     if run.get("status") in {"queued", "running"}:
         return {

@@ -90,9 +90,9 @@ def _execution_policy_snapshot(
         if isinstance(stored_reserve, int) and stored_reserve > 0
         else _agent_model_call_final_reserve(hard_limit)
     )
-    subagent_allowed = bool(policy.get("subagent_allowed")) and settings_snapshot.get(
-        "subagents"
-    ) is not False
+    subagent_allowed = (
+        bool(policy.get("subagent_allowed")) and settings_snapshot.get("subagents") is not False
+    )
     stored_max_concurrency = policy.get("max_concurrent_subagent_tasks")
     max_concurrent_subagent_tasks = (
         int(stored_max_concurrency)

@@ -471,9 +471,7 @@ class FakeBackendChatModel(BaseChatModel):
                     {
                         "id": "call_e2e_presentation_web",
                         "name": "web.fetch",
-                        "args": {
-                            "url": "http://127.0.0.1/private?token=must-not-appear"
-                        },
+                        "args": {"url": "http://127.0.0.1/private?token=must-not-appear"},
                     },
                 ],
             )

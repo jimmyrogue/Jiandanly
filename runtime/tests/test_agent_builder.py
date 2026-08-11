@@ -80,8 +80,7 @@ def test_runtime_prompt_is_built_from_invocation_context() -> None:
     assert f"常规并行 {PREFERRED_SUBAGENT_CONCURRENCY} 个 `task`" in dispatch_section
     assert f"最多并行 {MAX_CONCURRENT_SUBAGENT_TASKS} 个" in dispatch_section
     assert (
-        dispatch_section.count('task(subagent_type="researcher"')
-        == PREFERRED_SUBAGENT_CONCURRENCY
+        dispatch_section.count('task(subagent_type="researcher"') == PREFERRED_SUBAGENT_CONCURRENCY
     )
 
 

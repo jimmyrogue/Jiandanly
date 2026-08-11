@@ -147,13 +147,16 @@ class LocalRun(BaseModel):
     settings_json: str = "{}"
     metadata_json: str = "{}"
     reasoning_mode: ReasoningMode | None = None
-    model_phase: Literal[
-        "waiting_provider",
-        "reasoning",
-        "answering",
-        "tool_calling",
-        "completed",
-    ] | None = None
+    model_phase: (
+        Literal[
+            "waiting_provider",
+            "reasoning",
+            "answering",
+            "tool_calling",
+            "completed",
+        ]
+        | None
+    ) = None
     model_phase_started_at: str | None = None
     events_count: int | None = None
     command_id: str | None = None

@@ -48,8 +48,7 @@ async def _verify_model_service_compatibility(
         },
         service_base_url=base_url,
         trusted_model_catalog=(
-            provider_family == "deepseek"
-            or urlparse(base_url).hostname == "app.shejane.com"
+            provider_family == "deepseek" or urlparse(base_url).hostname == "app.shejane.com"
         ),
     )
     try:

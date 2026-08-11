@@ -474,9 +474,7 @@ def _without_response_headers(message: BaseMessage) -> BaseMessage:
         return message
     return message.model_copy(
         update={
-            "response_metadata": {
-                key: value for key, value in metadata.items() if key != "headers"
-            }
+            "response_metadata": {key: value for key, value in metadata.items() if key != "headers"}
         }
     )
 
@@ -522,9 +520,7 @@ def _incomplete_response_error(message: BaseMessage) -> ModelResponseIncomplete 
         return None
     details = metadata.get("incomplete_details")
     reason = (
-        str(details.get("reason") or "unspecified")
-        if isinstance(details, dict)
-        else "unspecified"
+        str(details.get("reason") or "unspecified") if isinstance(details, dict) else "unspecified"
     )
     return ModelResponseIncomplete(reason, request_id=_request_id_from_message(message))
 

@@ -144,7 +144,9 @@ class DeepSeekChatOpenAI(ChatOpenAI):
         generation_info: dict[str, Any] | None = None,
     ) -> Any:
         result = super()._create_chat_result(response, generation_info)
-        response_dict = response if isinstance(response, dict) else response.model_dump(warnings=False)
+        response_dict = (
+            response if isinstance(response, dict) else response.model_dump(warnings=False)
+        )
         choices = response_dict.get("choices") if isinstance(response_dict, dict) else None
         if not isinstance(choices, list):
             return result
@@ -154,9 +156,7 @@ class DeepSeekChatOpenAI(ChatOpenAI):
                 continue
             raw_message = choice.get("message")
             reasoning = (
-                raw_message.get("reasoning_content")
-                if isinstance(raw_message, dict)
-                else None
+                raw_message.get("reasoning_content") if isinstance(raw_message, dict) else None
             )
             message = generations[index].message
             if (
@@ -206,9 +206,7 @@ def _checkpoint_safe_generation(
         buffered_reasoning.clear()
 
     additional_kwargs = {
-        key: value
-        for key, value in message.additional_kwargs.items()
-        if key != "reasoning_content"
+        key: value for key, value in message.additional_kwargs.items() if key != "reasoning_content"
     }
     if isinstance(reasoning, str) and reasoning:
         additional_kwargs[_REASONING_MARKER] = True
@@ -217,9 +215,7 @@ def _checkpoint_safe_generation(
     return (
         generation.model_copy(
             update={
-                "message": message.model_copy(
-                    update={"additional_kwargs": additional_kwargs}
-                ),
+                "message": message.model_copy(update={"additional_kwargs": additional_kwargs}),
                 "generation_info": info or None,
             }
         ),

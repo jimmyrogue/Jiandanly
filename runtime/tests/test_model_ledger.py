@@ -369,9 +369,7 @@ async def test_stream_settles_usage_without_reading_sse(tmp_path: Path) -> None:
         assert assembled.additional_kwargs["runtime_model_call_id"] == model_call["id"]
         assert "headers" not in assembled.response_metadata
         assert model_call["response_headers_at"] is not None
-        assert json.loads(model_call["usage_json"])["output_token_details"] == {
-            "reasoning": 1
-        }
+        assert json.loads(model_call["usage_json"])["output_token_details"] == {"reasoning": 1}
         assert await store.model_usage_summary(str(run["id"])) == {
             "input_tokens": 7,
             "output_tokens": 3,
@@ -479,9 +477,7 @@ async def test_incomplete_stream_fails_with_usage_instead_of_settling(tmp_path: 
         assert model_call["error_code"] == "model_response_incomplete"
         assert model_call["provider_request_id"] == "provider-1"
         assert model_call["output_tokens"] == 3
-        assert json.loads(model_call["usage_json"])["input_token_details"] == {
-            "cache_read": 2
-        }
+        assert json.loads(model_call["usage_json"])["input_token_details"] == {"cache_read": 2}
     finally:
         await store.close()
 

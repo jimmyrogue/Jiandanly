@@ -241,9 +241,7 @@ def _blocked_tool_result(request: Any) -> ToolMessage | None:
         used = max(0, int(control.get("used") or 0))
         delegation_limit = max(0, int(control.get("delegation_model_call_limit") or 0))
         available = max(0, delegation_limit - used - 1)
-        _, member_end = _synchronous_member_span(
-            cast(Mapping[str, Any], state), request.tool_call
-        )
+        _, member_end = _synchronous_member_span(cast(Mapping[str, Any], state), request.tool_call)
         capacity_exhausted = member_end > available
         max_concurrent = control.get("max_concurrent_subagent_tasks")
         parallel_capacity_exhausted = (
@@ -289,9 +287,7 @@ def _request_tool_name(tool: Any) -> str:
     return str(getattr(tool, "name", "") or "")
 
 
-def _synchronous_member_span(
-    state: Mapping[str, Any], current_call: Any
-) -> tuple[int, int]:
+def _synchronous_member_span(state: Mapping[str, Any], current_call: Any) -> tuple[int, int]:
     calls: Sequence[Any] = ()
     messages = state.get("messages")
     if isinstance(messages, Sequence) and messages:

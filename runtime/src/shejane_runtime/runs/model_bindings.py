@@ -30,11 +30,11 @@ def reasoning_mode_error(
     profile = model_binding.get("profile")
     reasoning = profile.get("reasoning") if isinstance(profile, dict) else None
     modes = reasoning.get("modes") if isinstance(reasoning, dict) else None
-    supported_modes = {
-        str(mode)
-        for mode in modes
-        if isinstance(mode, str) and mode in {"off", "high", "max"}
-    } if isinstance(modes, list) else {"off"}
+    supported_modes = (
+        {str(mode) for mode in modes if isinstance(mode, str) and mode in {"off", "high", "max"}}
+        if isinstance(modes, list)
+        else {"off"}
+    )
     if reasoning_mode not in supported_modes:
         return RunAdmissionError(
             "model_reasoning_mode_unsupported",
@@ -226,8 +226,7 @@ class RunModelBindings:
         profile = apply_known_model_profile_defaults(
             profile,
             service_base_url=str(connection.get("base_url") or ""),
-            trusted_model_catalog=connection.get("preset_id")
-            in {"shejane-official", "deepseek"},
+            trusted_model_catalog=connection.get("preset_id") in {"shejane-official", "deepseek"},
         )
         profile["capabilities"] = normalized_model_capabilities(
             profile,

@@ -589,9 +589,7 @@ def test_bundled_models_are_recommendations_not_preverified_connections() -> Non
         "unverified",
         "unverified",
     ]
-    assert [
-        model["capabilities"][0]["protocol"] for model in deepseek["models"]
-    ] == [
+    assert [model["capabilities"][0]["protocol"] for model in deepseek["models"]] == [
         "openai_responses",
         "openai_chat_completions",
     ]

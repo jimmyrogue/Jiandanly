@@ -96,9 +96,7 @@ def test_deepseek_stream_preserves_reasoning_without_exposing_it_as_content() ->
         type(generation)(
             message=AIMessageChunk(
                 content="",
-                tool_call_chunks=[
-                    {"id": "call-1", "name": "lookup", "args": "{}", "index": 0}
-                ],
+                tool_call_chunks=[{"id": "call-1", "name": "lookup", "args": "{}", "index": 0}],
             )
         ),
         buffered_reasoning,
@@ -169,19 +167,28 @@ def test_deepseek_nonstream_response_discards_reasoning_without_tool_replay() ->
 
 
 def test_model_output_phase_prefers_public_action_for_assembled_messages() -> None:
-    assert model_output_phase(
-        AIMessageChunk(content="", additional_kwargs={"reasoning_content": "thinking"})
-    ) == "reasoning"
-    assert model_output_phase(
-        AIMessage(
-            content="I will use a tool.",
-            additional_kwargs={"reasoning_content": "thinking"},
-            tool_calls=[{"id": "call-1", "name": "lookup", "args": {}}],
+    assert (
+        model_output_phase(
+            AIMessageChunk(content="", additional_kwargs={"reasoning_content": "thinking"})
         )
-    ) == "tool_calling"
-    assert model_output_phase(
-        AIMessage(content="answer", additional_kwargs={"reasoning_content": "thinking"})
-    ) == "answering"
+        == "reasoning"
+    )
+    assert (
+        model_output_phase(
+            AIMessage(
+                content="I will use a tool.",
+                additional_kwargs={"reasoning_content": "thinking"},
+                tool_calls=[{"id": "call-1", "name": "lookup", "args": {}}],
+            )
+        )
+        == "tool_calling"
+    )
+    assert (
+        model_output_phase(
+            AIMessage(content="answer", additional_kwargs={"reasoning_content": "thinking"})
+        )
+        == "answering"
+    )
 
 
 def test_reasoning_capabilities_require_a_trusted_deepseek_identity() -> None:

@@ -40,7 +40,6 @@ def _message_text(content: Any) -> str:
         return content
     if isinstance(content, list):
         return "".join(
-            str(item.get("text") or "") if isinstance(item, dict) else str(item)
-            for item in content
+            str(item.get("text") or "") if isinstance(item, dict) else str(item) for item in content
         )
     return str(content)
