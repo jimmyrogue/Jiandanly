@@ -656,6 +656,15 @@ def test_official_gpt56_reasoning_created_before_the_fix_is_restored() -> None:
                         "display_name": "GPT-5.6 Luna",
                         "source": "discovered",
                         "verification": "verified",
+                        "provider_family": "openai",
+                        "reasoning": {
+                            "supported": False,
+                            "modes": ["off"],
+                            "default_mode": "off",
+                            "stream_field": None,
+                            "tool_roundtrip_required": False,
+                            "display_policy": "activity_only",
+                        },
                         "capabilities": [
                             {
                                 "capability": "agent_chat",

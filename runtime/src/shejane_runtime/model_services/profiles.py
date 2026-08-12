@@ -156,16 +156,19 @@ def _normalized_reasoning_profile(
     provider_family: str,
     trusted: bool,
 ) -> dict[str, Any]:
-    if provider_family == "deepseek":
-        fallback = _DEEPSEEK_REASONING_PROFILE
-    elif (
+    known_openai_reasoning = (
         provider_family == "openai"
         and _OPENAI_SNAPSHOT_SUFFIX.sub("", model_id) in _OPENAI_GPT56_MODELS
-    ):
+    )
+    if provider_family == "deepseek":
+        fallback = _DEEPSEEK_REASONING_PROFILE
+    elif known_openai_reasoning:
         fallback = _OPENAI_GPT56_REASONING_PROFILE
     else:
         fallback = _DEFAULT_REASONING_PROFILE
     if provider_family not in {"deepseek", "openai"} or not trusted or not isinstance(value, dict):
+        return dict(fallback)
+    if known_openai_reasoning:
         return dict(fallback)
     supported = value.get("supported")
     modes = value.get("modes")
