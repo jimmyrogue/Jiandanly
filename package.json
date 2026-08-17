@@ -4,7 +4,7 @@
   "packageManager": "pnpm@11.7.0",
   "devDependencies": {
     "@modelcontextprotocol/conformance": "0.1.16",
-    "esbuild": "0.28.1"
+    "esbuild": "0.28.2"
   },
   "scripts": {
     "doctor": "npx react-doctor@latest"
